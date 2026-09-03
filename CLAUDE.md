@@ -734,13 +734,24 @@ ex. `chore<untracked>: estruturação inicial do repositório`. Trocar para o id
 | `test` | testes |
 | `chore` | tarefa administrativa/configuração (ex.: `.gitignore`, Docker, CI) |
 
-### 10.3. Estado atual (2026-09-02)
+### 10.3. Estado atual (2026-09-02) — **[remotes no ar]**
 - Os dois repositórios foram **squashados para 1 commit cada** em `main`
   (`chore<untracked>: estruturação inicial do repositório`), removendo o histórico
   granular das sessões de desenvolvimento — guardado localmente em cada repo na branch
   `backup-historico-claude` (não sobe pro remote; apagável quando não precisar mais).
-- **`sprint-1` criada** a partir da `main` nos dois repos (idêntica à `main` por
-  enquanto). **A partir de agora, todo trabalho novo nasce em `feat/*` a partir de
-  `sprint-1`, nunca direto em `sprint-1` ou `main`.**
-- Falta: `git push` de `main` e `sprint-1` para os remotes (bloqueado até a chave SSH
-  do WSL ser cadastrada no GitHub — ver §9.1).
+- **Remotes conectados e sincronizados:**
+  - `datagis-backend` → `git@github.com:LizardsDBA/datagis-backend.git`
+  - `datagis-frontend` → `git@github.com:LizardsDBA/datagis-frontend.git`
+  - O GitHub criava cada repo com um "Initial commit" só de `LICENSE` (GPLv3, auto
+    selecionada na criação); esse arquivo foi preservado dentro do commit squashado
+    (não simplesmente sobrescrito) antes do `push --force` de `main`/`sprint-1`. Se a
+    equipe não quiser GPLv3, é só trocar/apagar `LICENSE` num commit
+    `chore<id_tarefa>: ...` depois.
+- **`sprint-1` criada** a partir da `main` nos dois repos e **empurrada pro remote**.
+  **A partir de agora, todo trabalho novo nasce em `feat/*`/`bugfix/*`/`hotfix/*`/
+  `refactor/*` a partir de `sprint-1`, nunca direto em `sprint-1` ou `main`.**
+- **Primeira branch de desenvolvimento criada: `feat/spike-compatibilidade`**
+  (backend, a partir de `sprint-1`, já no remote) — é onde entra o spike do §5.5. Ainda
+  sem branch de dev no frontend (nada de concreto pra fazer lá até o spike do backend
+  destravar a 1ª fatia). PR de cada `feat/*` para `sprint-1` é aberto manualmente pelo
+  time no GitHub.
