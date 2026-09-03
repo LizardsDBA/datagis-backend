@@ -1,0 +1,25 @@
+# Normaliza fim de linha: repo sempre em LF, checkout em LF em todo SO.
+# Evita que script/Dockerfile criado no Windows (CRLF) quebre dentro de container Linux.
+* text=auto eol=lf
+
+# Scripts e arquivos de container: sempre LF, sem excecao.
+*.sh        text eol=lf
+*.bash      text eol=lf
+mvnw        text eol=lf
+Dockerfile  text eol=lf
+*.Dockerfile text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+
+# Arquivos que PRECISAM de CRLF no Windows.
+*.cmd       text eol=crlf
+*.bat       text eol=crlf
+
+# Binarios: nunca converter.
+*.jar       binary
+*.png       binary
+*.jpg       binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+*.zip       binary

@@ -1,0 +1,14 @@
+# Imagem de DESENVOLVIMENTO — roda o wrapper Maven com o codigo montado do host
+# (bind mount via docker-compose). Nao empacota nada; e so o JDK + o mvnw do
+# proprio projeto (ele baixa seu Maven nativo dentro do container).
+# Dockerfile de build/producao (empacotado, multi-stage) fica para quando
+# hospedagem entrar — ver CLAUDE.md §3.4/§4.6.
+FROM eclipse-temurin:21-jdk-jammy
+
+WORKDIR /app
+
+# ~/.m2 fica em volume nomeado (docker-compose) para nao rebaixar dependencia
+# a cada subida do container.
+EXPOSE 8080
+
+CMD ["./mvnw", "spring-boot:run"]

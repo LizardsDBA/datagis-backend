@@ -1,0 +1,53 @@
+HELP.md
+
+### Frontend = repositorio separado ###
+# 'frontend/' e um repositorio git proprio (git init dentro da pasta).
+# Fica TOTALMENTE fora do repo do backend, de proposito. Nao remover esta linha.
+frontend/
+
+### Build Maven ###
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Ambiente / segredos ###
+.env
+.env.*
+!.env.example
+
+### Docker / dados locais ###
+/data/
+docker-compose.override.yml
+
+### Logs ###
+*.log
+*-debug.log*
