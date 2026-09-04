@@ -357,11 +357,17 @@ de terceiros — ver seção 4.4.
 - **Quartz Scheduler** (`spring-boot-starter-quartz`) — necessário assim que a fatia de
   agendamento automático de fontes for construída (ver seção 3.2)
 
-### 4.4. Dependências a adicionar manualmente no `pom.xml` (não existem no Initializr)
+### 4.4. Dependências adicionadas manualmente no `pom.xml` — **[FEITO E VALIDADO em 2026-09-04]**
+Todas resolvidas com sucesso via `./mvnw dependency:tree` (sem conflito reportado):
 
 ```xml
+<properties>
+    <geotools.version>35.1</geotools.version>  <!-- checar por versao mais nova periodicamente -->
+    <jts.version>1.20.0</jts.version>
+</properties>
+
 <!-- Suporte a SDO_GEOMETRY no JPA/Hibernate -->
-<!-- Não declarar <version> — o BOM do Spring Boot 4.1.1 já resolve para Hibernate 7.4.x -->
+<!-- Sem <version> — o BOM do Spring Boot 4.1.1 resolveu para hibernate-spatial 7.4.5.Final -->
 <dependency>
     <groupId>org.hibernate.orm</groupId>
     <artifactId>hibernate-spatial</artifactId>
@@ -371,21 +377,21 @@ de terceiros — ver seção 4.4.
 <dependency>
     <groupId>org.locationtech.jts</groupId>
     <artifactId>jts-core</artifactId>
+    <version>${jts.version}</version>
 </dependency>
 
-<!-- Leitura de Shapefile e GeoJSON no upload -->
-<!-- RISCO: compatibilidade do GeoTools com Jakarta EE 11 / Jackson 3 (Boot 4) ainda
-     não validada — testar isoladamente (mvn dependency:tree + teste simples de leitura
-     de Shapefile) antes de construir qualquer entidade em cima. Se houver conflito de
-     classpath, considerar isolar o parsing num módulo separado ou trocar por JTS puro
-     + parser GeoJSON via Jackson. -->
+<!-- Leitura de Shapefile/GeoJSON de fontes futuras (não a 1ª, CAR é GeoJSON puro via
+     Jackson — ver §5.6). Resolveu limpo na árvore de dependências; falta ainda o teste
+     funcional de ler um .shp de verdade (spike, §5.5). -->
 <dependency>
     <groupId>org.geotools</groupId>
     <artifactId>gt-shapefile</artifactId>
+    <version>${geotools.version}</version>
 </dependency>
 <dependency>
     <groupId>org.geotools</groupId>
     <artifactId>gt-geojson</artifactId>
+    <version>${geotools.version}</version>
 </dependency>
 
 <!-- Swagger/OpenAPI — precisa ser a linha 3.x, a 2.x NÃO suporta Spring Boot 4 -->
@@ -395,16 +401,12 @@ de terceiros — ver seção 4.4.
     <version>3.0.3</version>
 </dependency>
 
-<!-- Módulo Oracle do Testcontainers (para testes de integração com geometria real) -->
+<!-- Agendamento dinâmico (§3.2) -->
 <dependency>
-    <groupId>org.testcontainers</groupId>
-    <artifactId>oracle-free</artifactId>
-    <scope>test</scope>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-quartz</artifactId>
 </dependency>
-```
 
-Adicionar também (decidido depois do Initializr):
-```xml
 <!-- Orquestração reprocessável do pipeline (§3.3) -->
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -412,7 +414,7 @@ Adicionar também (decidido depois do Initializr):
 </dependency>
 ```
 
-O GeoTools também exige um repositório Maven adicional:
+Repositório Maven adicional exigido pelo GeoTools (não está no Central):
 ```xml
 <repositories>
     <repository>
@@ -423,20 +425,23 @@ O GeoTools também exige um repositório Maven adicional:
 </repositories>
 ```
 
+**Versões reais resolvidas** (`mvn dependency:tree`): `hibernate-spatial 7.4.5.Final`,
+`spring-boot-quartz 4.1.1` → `quartz 2.5.2`, `spring-boot-batch 4.1.1` →
+`spring-batch-core 6.0.5`, `geotools 35.1`, `jts-core 1.20.0`,
+`springdoc-openapi 3.0.3`. **`BUILD SUCCESS`, zero conflito de versão reportado** — é um
+bom sinal pro spike, mas só a *resolução* de dependência foi validada aqui; falta ainda o
+teste funcional (Hibernate salvando `SDO_GEOMETRY` de verdade, GeoTools lendo um `.shp`,
+Spring Batch rodando um job trivial) — isso é o próprio spike, §5.5, ainda não feito.
+
 ### 4.5. Estado atual do `pom.xml`
 Commitado. Presentes: `webmvc`, `data-jpa`, `flyway` + `flyway-database-oracle`,
 `security`, `validation`, `actuator`, `lombok`, `ojdbc17` (runtime), Testcontainers
 (`testcontainers-oracle-free`, `spring-boot-testcontainers`, `junit-jupiter`) +
-starters `-test` granulares do Boot 4.
+starters `-test` granulares do Boot 4, mais tudo do §4.4 acima.
 
 - **`websocket` — [REMOVIDO]** (commit `bc9eae6`). Veio no Initializr por engano. Se
   precisar de progresso de pipeline em tempo real, usar **SSE** (`SseEmitter`, sem
   starter). WebSocket só se surgir necessidade de bidirecional.
-
-**Ainda faltam** (§4.4): `hibernate-spatial`, `jts-core`, `gt-geojson` (e/ou parser
-GeoJSON via Jackson — ver §5.6), `springdoc-openapi-starter-webmvc-ui` 3.x,
-`spring-boot-starter-quartz`, `spring-boot-starter-batch`. `gt-shapefile` só quando
-entrar fonte em Shapefile (a 1ª fonte, CAR, é GeoJSON via WFS).
 
 ### 4.6. Ambiente de desenvolvimento em containers — **[DECIDIDO, implementado e testado end-to-end]**
 Dev roda **3 containers via `docker compose`**: `oracle` + `backend` + `frontend`.
@@ -644,17 +649,23 @@ genéricos de banco de dados por camada, o que sustenta essa leitura. A interfac
 `.zip`/`.geojson` como baixado, se um dia precisar guardá-lo à parte do payload
 estruturado) — não é o mecanismo de armazenamento da zona Bronze em si.
 
-### 5.5. Spike de compatibilidade — **[A FAZER antes da primeira entidade]**
+### 5.5. Spike de compatibilidade — **[PARCIALMENTE FEITO]**
 ½–1 dia, uma pessoa, branch descartável. Objetivo: provar que a stack bleeding-edge
 (Boot 4.1.1 / Framework 7 / Jakarta 11 / Hibernate 7.4 / Jackson 3) funciona ANTES de
 construir em cima:
-1. `mvn dependency:tree` — conflito de versão / classe duplicada.
-2. 1 teste: Testcontainer `gvenzl/oracle-free` + Hibernate salva/lê um `SDO_GEOMETRY`
+1. ✅ `mvn dependency:tree` — feito em 2026-09-04 (§4.4): **sem conflito de versão
+   reportado**, todas as libs (hibernate-spatial, GeoTools 35.1, jts-core 1.20.0,
+   springdoc 3.0.3, Quartz, Spring Batch) resolveram limpo.
+2. ⬜ 1 teste: Testcontainer `gvenzl/oracle-free` + Hibernate salva/lê um `SDO_GEOMETRY`
    (JTS `Polygon`) round-trip.
-3. 1 teste: GeoTools abre um `.shp` pequeno e lê a primeira feição.
-4. Subir app, abrir `/swagger-ui.html` (springdoc 3.x).
-5. Spring Batch: job trivial roda no Boot 4.1.1 (Spring Batch 6 / Framework 7).
-6. Anotar o que quebrou / versões pinadas. Se GeoTools conflitar → plano B já em §4.4.
+3. ⬜ 1 teste: GeoTools abre um `.shp` pequeno e lê a primeira feição.
+4. ⬜ Subir app, abrir `/swagger-ui.html` (springdoc 3.x).
+5. ⬜ Spring Batch: job trivial roda no Boot 4.1.1 (Spring Batch 6 / Framework 7).
+6. ⬜ Anotar o que quebrou / versões pinadas. Se GeoTools conflitar → plano B já em §4.4.
+
+**Resolver dependência sem conflito não prova que funciona em runtime** — os passos
+2-5 (o que realmente importa) ainda não foram feitos. Não tratar o item 1 como spike
+concluído.
 
 ---
 
@@ -731,6 +742,10 @@ do Claude Code não tratem uma hipótese como se fosse definitiva.
   Oracle 7 schemas + usuário `CONTROLE` com privilégios `ANY`, backend conecta e migra
   Flyway, `/actuator/health` → 200, Vite serve e o proxy `/api` alcança o backend.
 - §9.1 — `CLAUDE.md` rastreado; `.gitattributes` com normalização de fim de linha.
+- §4.4 — **dependências pendentes adicionadas ao `pom.xml`** (hibernate-spatial,
+  jts-core, gt-shapefile, gt-geojson, springdoc, Quartz, Spring Batch) e validadas com
+  `mvn dependency:tree` — resolveram sem conflito (2026-09-04). Spike funcional (§5.5)
+  ainda não feito.
 
 ### 9.4. Decidido em 2026-09-04 (chegada do desafio oficial da Visiona)
 - **Recorte territorial: Paraná**, não São Paulo — §1, §5.2, §5.6 atualizados.
