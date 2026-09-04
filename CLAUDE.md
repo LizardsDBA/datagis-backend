@@ -35,6 +35,16 @@ com rastreabilidade total (qual fonte, qual versão, qual regra gerou qual resul
   ("brainstorm"), não uma especificação final vinculante** — algumas de suas premissas
   (ex: uso obrigatório do Apache Airflow) foram **conscientemente descartadas** pela equipe
   (ver seção 3). O ER de exemplo dele também não precisa ser seguido à risca.
+- `Desafio_API_4BD_2026-2_GeoRural_DataHub_Apresentacao_v1.pdf` (recebido 2026-09-04) —
+  **desafio oficial da Visiona, é a fonte mais autoritativa que existe** (mais que o DRN).
+  Define: recorte territorial = **Paraná** (399 municípios, ~199 mil km², bioma Mata
+  Atlântica — RL mínima 20%), 7 indicadores a calcular (ICV, IRL, IAPP, ISAP, IAE,
+  IDesmat, IFC — fórmulas na pág. 6), fluxo mínimo de 8 etapas, RNFs (Oracle com PL/SQL,
+  GeoDataLake em "armazenamento de objetos" nas 4 zonas, nuvem preferencialmente GCP),
+  telas de referência (painel, catálogo, detalhe do conjunto, execuções). **Também repete
+  a exigência de Airflow** (pipelines/DAGs) — decisão da equipe de não usá-lo (§3.1) segue
+  valendo; o próprio slide dá a brecha "ou container equivalente". Catálogo de fontes de
+  dados do slide 7 (pág. do PDF) testado e documentado em `docs/fontes-de-dados.md`.
 
 ---
 
@@ -503,10 +513,31 @@ isso.** Login, RBAC completo e tela de cadastro de fontes ficam para depois.
 **Fonte única desta fase: CAR (SICAR), obtida por requisição WFS** — ver §5.6. Nada de
 upload de arquivo por ora; a primeira fonte é uma API.
 
+**Recorte territorial oficial: Paraná (PR)** — corrigido em 2026-09-04 a partir do
+desafio formal da Visiona (`Desafio_API_4BD_2026-2_GeoRural_DataHub_Apresentacao_v1.pdf`).
+399 municípios, ~199 mil km², bioma Mata Atlântica predominante (RL mínima 20%, não a
+regra da Amazônia Legal). **SP foi a hipótese usada antes do desafio chegar — descartada.**
+
+**"Circuito" menor de municípios, expansível — [DECIDIDO]:** para a fatia 1 e para a
+massa de homologação inicial, ingerir só um subconjunto pequeno do PR (o slide 2 do
+desafio autoriza explicitamente: "a massa de homologação pode cobrir apenas alguns
+municípios, desde que o fluxo completo seja demonstrado de ponta a ponta"). Proposta
+inicial de circuito (números reais, verificados em 2026-09-04):
+
+| Município | Código IBGE | Imóveis CAR |
+|---|---|---|
+| Curitiba | 4106902 | 111 |
+| Maringá | 4115200 | 1.831 |
+| Ponta Grossa | 4119905 | 2.648 |
+
+Mecanismo: `CQL_FILTER=cod_municipio_ibge IN (4106902,4115200,4119905)` (testado,
+funciona). **A lista de códigos é configuração** (mesmo princípio de nomes de schema
+parametrizados, §2.1) — expandir o circuito depois é editar a lista, não o código.
+
 Escopo mínimo combinado:
-- `POST /api/ingestao/car/sp` (ou `POST /api/ingestao/executar?fonte=CAR_SP`) — dispara a
-  ingestão: faz `GetFeature` no WFS do SICAR para imóveis de SP, com `count` pequeno
-  nesta fatia (ex.: 10.000, **sem paginação ainda**).
+- `POST /api/ingestao/car/pr` (ou `POST /api/ingestao/executar?fonte=CAR_PR`) — dispara a
+  ingestão: faz `GetFeature` no WFS do SICAR para os municípios do circuito, com `count`
+  pequeno nesta fatia (**sem paginação ainda** — o circuito inteiro cabe numa página só).
 - Cria um `lote_ingestao` (fonte = CAR, com o hash do corpo recebido).
 - Percorre as `features` do GeoJSON e grava cada uma como `registro_bruto`:
   `payload` = objeto `properties` da feature; `geometria_wkt` = geometria da feature
@@ -515,7 +546,7 @@ Escopo mínimo combinado:
 - **Sem** validação de geometria, **sem** quarentena, **sem** reprojeção, **sem**
   cálculo de indicador, **sem** paginação, **sem** agendamento Quartz — só ingestão
   bruta pura de uma página.
-- **Frontend da fatia:** tela Vue mínima com um botão "Ingerir CAR/SP" que chama o
+- **Frontend da fatia:** tela Vue mínima com um botão "Ingerir CAR/PR" que chama o
   endpoint (via proxy do Vite) e mostra `lote_ingestao_id` + contagem. Sem login.
 - **Testes:** não bater no servidor real — usar um GeoJSON de amostra (fixture estática
   ou WireMock) gravado a partir de uma chamada real com `count` baixo.
@@ -526,8 +557,8 @@ Flyway (sem endpoint de CRUD):
 ```sql
 -- db/migration/controle/V0NN__seed_fonte_dado_car.sql
 INSERT INTO fonte_dado (nome, orgao, tipo_aquisicao, url_origem, formato_esperado, ativo)
-VALUES ('CAR - Imóveis (SP)', 'SFB/SICAR', 'API_REST',
-        'https://geoserver.car.gov.br/geoserver/sicar/wfs?service=WFS&version=2.0.0&request=GetFeature&typeNames=sicar:sicar_imoveis_sp&outputFormat=application/json',
+VALUES ('CAR - Imóveis (PR)', 'SFB/SICAR', 'API_REST',
+        'https://geoserver.car.gov.br/geoserver/sicar/wfs?service=WFS&version=2.0.0&request=GetFeature&typeNames=sicar:sicar_imoveis_pr&outputFormat=application/json',
         'GEOJSON', 1);
 ```
 
@@ -537,34 +568,46 @@ estrutura não muda.
 ### 5.6. Fonte CAR / SICAR via WFS — **[DECIDIDO como 1ª e única fonte da fase]**
 Endpoint de teste (funciona no navegador / `curl`):
 ```
-https://geoserver.car.gov.br/geoserver/sicar/wfs?service=WFS&version=2.0.0&request=GetFeature&typeNames=sicar:sicar_imoveis_sp&outputFormat=application/json&count=10000
+https://geoserver.car.gov.br/geoserver/sicar/wfs?service=WFS&version=2.0.0&request=GetFeature&typeNames=sicar:sicar_imoveis_pr&outputFormat=application/json&count=10000
 ```
-- **WFS 2.0.0**, GeoServer do SICAR. `typeNames=sicar:sicar_imoveis_sp` = imóveis rurais
-  de SP. Saída `application/json` = **GeoJSON `FeatureCollection`**.
-- **Verificado em 2026-09-02** (`resultType=hits` + amostra `count=2`):
-  - **`numberMatched = 470 729`** feições para SP.
+- **WFS 2.0.0**, GeoServer do SICAR. `typeNames=sicar:sicar_imoveis_pr` = imóveis rurais
+  do **Paraná**. Saída `application/json` = **GeoJSON `FeatureCollection`**.
+- **Verificado em 2026-09-04** (`resultType=hits` + amostra):
+  - **`numberMatched = 556.563`** feições para o PR (todo o estado).
   - **CRS = `urn:ogc:def:crs:EPSG::4674`** (SIRGAS 2000) → **já é o SRID-alvo da RN013,
     esta fonte não precisa de reprojeção.**
   - Geometria: **`MultiPolygon`**. Não há campo WKT — a geometria vem como objeto
     GeoJSON; Bronze converte para WKT texto em `geometria_wkt`.
-  - `properties` (enxuto): `cod_imovel` (chave natural, ex.
-    `SP-3500402-0023CF65...`; embute UF + código IBGE do município — boa base de
+  - `properties` (enxuto, idêntico entre UFs): `cod_imovel` (chave natural, ex.
+    `PR-4106902-00B2EA81...`; embute UF + código IBGE do município — boa base de
     dedup/hash), `status_imovel` (`AT`), `dat_criacao` (ISO), `area` (ha, número),
     `condicao` (texto), `uf`, `municipio`, `cod_municipio_ibge` (número), `m_fiscal`
     (módulos fiscais), `tipo_imovel` (`IRU`).
-  - `feature.id` ex. `sicar_imoveis_sp.15377556`.
-- **Paginação** (fatia futura): WFS 2.0 aceita `count` + `startIndex`; iterar
-  `startIndex` até `numberReturned < count`.
-- **Recorte do entregável — [PARCIALMENTE DECIDIDO]:** estado = **SP**. SP inteiro
-  (~470 k polígonos) provavelmente cabe em ~8 GB mas fica apertado — provável filtro
-  por município(s) via `&CQL_FILTER=cod_municipio_ibge IN (...)` ou `&bbox=`. Dev
-  começa com `count=10000`.
-- **Parsing — [decidir no spike, §5.5]:** ler com **Jackson 3** (já no projeto) + um
-  mapper GeoJSON→JTS pequeno, **evitando GeoTools** para esta fonte. `gt-geojson` é
-  plano B.
+  - **27 layers no workspace `sicar:`, uma por UF** (`sicar_imoveis_ac` até `_to`) — **só
+    o perímetro do imóvel**, não há layer pública de APP/RL/vegetação nativa nesse WFS
+    (ver gap documentado em `docs/fontes-de-dados.md`).
+- **Filtro por município**: `&CQL_FILTER=cod_municipio_ibge IN (...)` — testado e
+  funcionando (ver tabela do circuito em §5.2).
+- **Paginação** (fatia futura, se o circuito crescer muito): WFS 2.0 aceita `count` +
+  `startIndex`; iterar até `numberReturned < count`.
+- **Parsing:** ler com **Jackson 3** (já no projeto) + um mapper GeoJSON→JTS pequeno para
+  esta fonte (é GeoJSON puro, não precisa de GeoTools). `gt-shapefile`/`gt-geojson`
+  seguem no `pom.xml` (§4.4) para as futuras fontes que vierem em Shapefile (IBGE,
+  ICMBio, FUNAI, IBAMA — ver `docs/fontes-de-dados.md`).
 - `tipo_aquisicao = API_REST`; `cron_expressao` só quando a fatia de agendamento
   (Quartz) entrar. O hash do corpo recebido alimenta a detecção de "mudou desde a
   última execução" (§2.8 / RN018).
+
+### 5.7. Catálogo de fontes de dados do desafio — **[NOVO, ver `docs/fontes-de-dados.md`]**
+Documento dedicado (não neste arquivo, pelo tamanho) com o levantamento e teste real, em
+2026-09-04, de **todos os endpoints/serviços citados na página "Dados necessários, fontes
+e formatos" do desafio oficial da Visiona** — CAR, IBGE (malha e biomas), ICMBio/MMA
+(UCs), FUNAI (Terras Indígenas), INCRA, IBAMA (embargos), INPE PRODES (desmatamento) e
+INPE Queimadas (focos de calor). Cada fonte tem: endpoint testado, resultado real
+(contagem, CRS, atributos), e observações de acesso (ex.: FUNAI exige WFS 1.1.0 + User-
+Agent de navegador; embargos do IBAMA têm o link publicado quebrado agora; INCRA não tem
+WFS estável encontrado). **8 das 10 fontes têm caminho técnico confirmado**; os 2
+pendentes (INCRA e APP/RL/vegetação do CAR) não travam a fatia 1.
 
 ### 5.3. Spring Security — bypass temporário
 A dependência `spring-boot-starter-security` fica no projeto (para não reconfigurar
@@ -595,6 +638,16 @@ interface ArmazenamentoArquivoBruto {
 **Agora: só a implementação local-FS** (`@Profile` selecionando). Implementação de bucket
 (OCI Object Storage / GCS) só vira fatia se e quando deploy exigir — se a nuvem gravar
 numa pasta de Block Volume, local e nuvem ficam idênticos e o bucket nem entra.
+
+**Zona Bronze continua em tabela Oracle (não em Object Storage) — [DECIDIDO 2026-09-04]**
+O desafio oficial (slide de RNFs) fala em "armazenamento de objetos nas quatro zonas" do
+GeoDataLake, o que sugere arquivo em bucket em vez de tabela. A equipe decidiu **manter
+como já estava**: `bronze.registro_bruto` é tabela Oracle com coluna `JSON` (§2.2), não
+arquivo em bucket — o diagrama de arquitetura já aprovado pela Visiona usa ícones
+genéricos de banco de dados por camada, o que sustenta essa leitura. A interface acima
+(`ArmazenamentoArquivoBruto`) continua existindo só para o arquivo bruto ORIGINAL (o
+`.zip`/`.geojson` como baixado, se um dia precisar guardá-lo à parte do payload
+estruturado) — não é o mecanismo de armazenamento da zona Bronze em si.
 
 ### 5.5. Spike de compatibilidade — **[PARCIALMENTE FEITO]**
 ½–1 dia, uma pessoa, branch descartável. Objetivo: provar que a stack bleeding-edge
@@ -680,7 +733,8 @@ do Claude Code não tratem uma hipótese como se fosse definitiva.
   empacotar; Dockerfile de build adiado.
 - §5.1 — fatia vertical inclui a tela Vue quando houver algo demonstrável.
 - §5.2 / §5.6 — **1ª e única fonte da fase: CAR (SICAR) via WFS**, camada
-  `sicar_imoveis_sp` (estado de SP). Ingestão por API, sem upload de arquivo.
+  `sicar_imoveis_pr` (estado do **Paraná**, corrigido de SP). Ingestão por API, sem
+  upload de arquivo.
 - §5.4 — interface `ArmazenamentoArquivoBruto`, só impl local-FS agora.
 - §4.5 — `spring-boot-starter-websocket` **removido**.
 - §2.1 — tabelas do **Spring Batch em schema `batch` dedicado** (confirmado).
@@ -693,15 +747,32 @@ do Claude Code não tratem uma hipótese como se fosse definitiva.
   `mvn dependency:tree` — resolveram sem conflito (2026-09-04). Spike funcional (§5.5)
   ainda não feito.
 
+### 9.4. Decidido em 2026-09-04 (chegada do desafio oficial da Visiona)
+- **Recorte territorial: Paraná**, não São Paulo — §1, §5.2, §5.6 atualizados.
+- **Circuito menor de municípios, expansível**: Curitiba + Maringá + Ponta Grossa
+  (lista configurável) — §5.2.
+- **Zona Bronze continua em tabela Oracle** (não migra para Object Storage) apesar do
+  desafio falar em "armazenamento de objetos" — §5.4.
+- **`gt-shapefile` mantido no plano de dependências** (§4.4) — não removido apesar de
+  CAR (a única fonte da fase) não precisar dele; outras fontes do catálogo (IBGE, ICMBio,
+  FUNAI, IBAMA) são Shapefile-primário.
+- **Catálogo de fontes de dados testado e documentado**: `docs/fontes-de-dados.md` — 8 de
+  10 fontes do slide oficial com caminho técnico confirmado (CAR, IBGE malha, IBGE
+  biomas, ICMBio UCs, FUNAI TIs, ICMBio embargos, INPE PRODES incl. Mata Atlântica, INPE
+  Queimadas); 2 pendentes de mais investigação (INCRA sem WFS estável; APP/RL/vegetação
+  nativa do CAR só via download em lote em `consultapublica.car.gov.br`, não via WFS).
+
 ### 9.3. Ainda em aberto (decidir antes de codar as partes afetadas)
-- **Recorte fino de SP** (§5.6): rodar SP inteiro ou filtrar por município(s) /
-  `bbox` para caber em ~8 GB. Dev começa com `count=10000`.
 - **Parsing GeoJSON** (§5.6): Jackson 3 + mapper JTS (recomendado, evita GeoTools) vs
   `gt-geojson` — confirmar no spike.
 - **Reprojeção de SRID** (§2.5): Oracle `SDO_CS.TRANSFORM` vs GeoTools — decidir na Silver.
 - **Spike de compatibilidade** (§5.5) — executar antes da 1ª entidade. Infra (§4.6) já
   validada; falta validar a stack Java (hibernate-spatial, GeoTools, Spring Batch) rodando
   sobre o Boot 4.1.1 dentro deste mesmo ambiente.
+- **Gap do CAR (APP/RL/vegetação nativa)** (`docs/fontes-de-dados.md`): investigar a API
+  interna de `consultapublica.car.gov.br` antes de precisar calcular IAPP/IRL/ICV.
+- **INCRA sem WFS estável** (`docs/fontes-de-dados.md`): achar os parâmetros certos do
+  broker i3geo, ou aceitar como fonte manual, antes de fechar o escopo completo de ISAP.
 
 ---
 
