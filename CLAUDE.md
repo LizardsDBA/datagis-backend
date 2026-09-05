@@ -847,6 +847,25 @@ amostra:**
 - **Ambiente resetado** (`docker compose down` + volume do Oracle recriado) pro
   primeiro teste local ficar limpo (`loteIngestaoId=1`).
 
+**Detecção de "nada mudou" (RN018/§2.8) — implementada em 2026-09-05:**
+- Decisão: **sempre criar um `lote_ingestao`** (mesmo sem mudança — vira `status =
+  'SEM_MUDANCA'`, `quantidade_registros = 0`), nunca ficar em silêncio. É o que permite
+  diferenciar depois "o job não rodou" de "rodou e não tinha nada novo" — importante pra
+  auditoria (RNF do desafio: "logs, execuções... visíveis"). Vale igual pra disparo
+  manual e futuro Quartz — "mudou ou não" é propriedade do dado, não de quem perguntou.
+- `LoteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc` — compara o hash do
+  lote mais recente da fonte com o hash do que acabou de chegar.
+- **⚠️ Pegadinha real, achada testando**: o `hash_conteudo` **não pode ser da resposta
+  bruta inteira** — o WFS carimba um campo `timeStamp` que muda a cada chamada, mesmo
+  com dado idêntico (confirmado comparando duas respostas reais: mesmas 111 features,
+  só o `timeStamp` diferente — por isso o SHA-256 nunca batia). Corrigido: o hash agora
+  é só de `featureCollection.path("features")` reserializado, não do corpo bruto
+  (`IngestaoCarService`). **Se outra fonte no futuro tiver campo parecido (timestamp de
+  geração, nonce, etc.), aplicar o mesmo cuidado** — hashear o conteúdo relevante, nunca
+  o envelope da resposta.
+- Testado contra o CAR de verdade: 1ª chamada grava 4.590 (~13s); 2ª chamada idêntica →
+  `SEM_MUDANCA`, 0 registros, ~2s (só busca e compara, não grava).
+
 ---
 
 ## 10. Git — branches, commits e fluxo de PR — **[DECIDIDO, padrão da equipe LizardsDBA]**
