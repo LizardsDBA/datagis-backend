@@ -10,13 +10,11 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Converte a geometria de uma feature GeoJSON para WKT (texto), sem validar (Bronze
- * não trata nada — CLAUDE.md §2.2/§5.6). Implementação própria com JTS puro
- * (GeometryFactory + WKTWriter), evitando GeoTools/jts-io-common só pra isso — a 1ª
- * fonte (CAR) só usa MultiPolygon, confirmado em §5.6.
+ * Converte a geometria de uma feature GeoJSON pra WKT (texto), sem validar nada.
+ * Feito com JTS puro, sem precisar do GeoTools so pra isso.
  *
- * Suporta Polygon e MultiPolygon. Outro tipo de geometria falha explicitamente — é
- * melhor quebrar alto do que gravar um WKT errado silenciosamente.
+ * So trata Polygon e MultiPolygon, que e o que o CAR manda. Qualquer outro tipo
+ * da erro na hora, de proposito, pra nao gravar um WKT errado sem perceber.
  */
 @Component
 public class GeoJsonWktMapper {

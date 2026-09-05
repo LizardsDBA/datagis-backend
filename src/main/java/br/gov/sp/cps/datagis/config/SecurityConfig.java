@@ -6,14 +6,12 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
- * Configuração provisória de segurança — libera todos os endpoints.
+ * Configuração provisória: libera todos os endpoints, sem login.
  *
- * A dependência spring-boot-starter-security fica no projeto (ver CLAUDE.md §5.3) para
- * não precisar reconfigurar o Maven quando o RBAC de verdade entrar. Sem este bean,
- * o Spring Security bloqueia (401) qualquer requisição, mesmo em rotas públicas.
+ * Sem esse bean o Spring Security bloqueia tudo com 401. Mantém a dependência de
+ * security no projeto pra não ter que adicionar de novo quando o login for feito.
  *
- * TODO: RN008 - remover/substituir quando o RBAC (Administrador/Operador/Analista/
- * Auditor) for implementado.
+ * TODO: trocar por login/perfis de verdade mais pra frente.
  */
 @Configuration
 public class SecurityConfig {

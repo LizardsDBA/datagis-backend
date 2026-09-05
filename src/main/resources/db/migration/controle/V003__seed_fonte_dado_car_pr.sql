@@ -1,6 +1,4 @@
--- Seed manual até o cadastro de fontes ter tela/endpoint próprio (CLAUDE.md §5.2).
--- Quando existir CRUD de fonte_dado, este seed é substituído por dado real da tela —
--- a estrutura da tabela não muda.
+-- Cadastra o CAR na mao, ate a tela de cadastro de fontes existir.
 INSERT INTO ${controleSchema}.fonte_dado (nome, orgao, tipo_aquisicao, url_origem, formato_esperado, ativo)
 VALUES (
     'CAR - Imóveis (PR)',

@@ -1,4 +1,4 @@
--- Catálogo de fontes de dados (CLAUDE.md §2.7/§2.8).
+-- Cadastro das fontes de dados que o sistema conhece (CAR, IBAMA, etc).
 CREATE TABLE ${controleSchema}.fonte_dado (
     id                  NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     nome                VARCHAR2(200) NOT NULL,
@@ -13,9 +13,6 @@ CREATE TABLE ${controleSchema}.fonte_dado (
     data_add            TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
 );
 
--- CREATE ANY TABLE nao concede REFERENCES automaticamente pra quem vai criar FK
--- pra esta tabela a partir de outro schema (ex.: bronze.registro_bruto). Como
--- CONTROLE e o dono, pode conceder aqui, logo depois de criar. Adicionar mais um
--- GRANT REFERENCES por schema conforme outras camadas passem a referenciar esta
--- tabela.
+-- Sem isso, criar uma FK de outro schema (ex.: bronze) pra esta tabela da
+-- erro de privilegio. Quem concede e o dono da tabela, o CONTROLE.
 GRANT REFERENCES ON ${controleSchema}.fonte_dado TO bronze;

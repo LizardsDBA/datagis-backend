@@ -792,6 +792,12 @@ do Claude Code não tratem uma hipótese como se fosse definitiva.
   interna de `consultapublica.car.gov.br` antes de precisar calcular IAPP/IRL/ICV.
 - **INCRA sem WFS estável** (`docs/fontes-de-dados.md`): achar os parâmetros certos do
   broker i3geo, ou aceitar como fonte manual, antes de fechar o escopo completo de ISAP.
+- **`DatagisApplicationTests` (Testcontainers) falha dentro do container do backend**:
+  não tem acesso ao Docker do host de dentro do `datagis-backend` (sem Docker-in-Docker
+  configurado). `./mvnw test` roda; teste específico (`-Dtest=...`) funciona; o teste
+  padrão do Initializr que sobe um Oracle via Testcontainers, não. Resolver quando o
+  spike (§5.5) for feito de verdade — provavelmente monta o socket do Docker no
+  container ou roda esse teste fora dele.
 
 ### 9.5. Fatia 1 (ingestão CAR/PR) — **[COMPLETA e validada de ponta a ponta, 2026-09-05]**
 Branch `feat/ingestao-car-pr`, a partir da `sprint-1`. **Rodado de ponta a ponta contra
@@ -865,6 +871,25 @@ amostra:**
   o envelope da resposta.
 - Testado contra o CAR de verdade: 1ª chamada grava 4.590 (~13s); 2ª chamada idêntica →
   `SEM_MUDANCA`, 0 registros, ~2s (só busca e compara, não grava).
+
+### 9.6. Cadastro de fontes — **[FEITO e testado, 2026-09-05]**
+CRUD simples de `fonte_dado`, branch `feat/cadastro-fontes`:
+- Backend: `FonteDadoRequest`/`FonteDadoResponse` (DTOs), `FonteDadoService`
+  (valida `tipoAquisicao` contra os 3 valores aceitos), `FonteDadoController`
+  (`POST /api/fontes`, `GET /api/fontes`). `TratadorDeErro` (`@RestControllerAdvice`)
+  transforma `IllegalArgumentException` em 400 com mensagem, em vez de 500 cru.
+- Frontend: `App.vue` ganhou abas (Ingestão CAR / Fontes de dados), sem router —
+  só um `ref` trocando qual `<section>` aparece. Formulário + lista em
+  `components/CadastroFontes.vue`.
+- **Pegadinha achada**: editar o texto de uma migration SQL já aplicada muda o checksum
+  que o Flyway guarda, e ele recusa subir com `FlywayValidateException`. Resolvido
+  resetando o volume do Oracle (banco de dev, sem problema); em produção seria
+  `flyway repair`. **Lição**: se editar uma migration que já rodou, ou reseta o banco de
+  dev, ou roda repair — nunca edita e ignora.
+- Testado via `curl` direto e através do proxy do Vite: cadastra, lista, e recusa
+  `tipoAquisicao` inválido com 400.
+- Testes: `FonteDadoServiceTest` (cadastra válido, recusa tipo inválido, lista delega
+  pro repositório).
 
 ---
 
