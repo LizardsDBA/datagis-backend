@@ -28,9 +28,7 @@
 	</scm>
 	<properties>
 		<java.version>21</java.version>
-		<!-- Nao gerenciadas pelo BOM do Spring Boot - versao unica aqui, achada em
-		     2026-09-04. CONFIRMAR no spike de compatibilidade (CLAUDE.md #5.5) que
-		     jts-core nao colide com a versao que o hibernate-spatial traz transitiva. -->
+		<!-- O Spring Boot nao gerencia essas versoes, entao fica fixo aqui. -->
 		<geotools.version>35.1</geotools.version>
 		<jts.version>1.20.0</jts.version>
 	</properties>
@@ -72,8 +70,7 @@
 			<artifactId>spring-boot-starter-batch</artifactId>
 		</dependency>
 
-		<!-- Suporte a SDO_GEOMETRY no JPA/Hibernate (CLAUDE.md #4.4).
-		     Sem <version> - o BOM do Spring Boot 4.1.1 resolve para Hibernate 7.4.x. -->
+		<!-- Suporte a SDO_GEOMETRY no JPA/Hibernate. Sem versao, o Spring Boot resolve. -->
 		<dependency>
 			<groupId>org.hibernate.orm</groupId>
 			<artifactId>hibernate-spatial</artifactId>
@@ -85,10 +82,9 @@
 			<version>${jts.version}</version>
 		</dependency>
 
-		<!-- Leitura de Shapefile/GeoJSON de fontes futuras (IBGE, ICMBio, FUNAI, IBAMA -
-		     ver docs/fontes-de-dados.md). CAR (1a fonte) e GeoJSON puro via Jackson,
-		     nao depende destas. RISCO DE COMPAT com Boot 4 ainda nao validado - ver
-		     spike (CLAUDE.md #5.5). -->
+		<!-- Leitura de Shapefile/GeoJSON pras proximas fontes (IBGE, ICMBio, FUNAI,
+		     IBAMA). O CAR (1a fonte) e GeoJSON puro via Jackson, nao usa isso ainda.
+		     Ainda falta testar se essas libs funcionam direito no Boot 4. -->
 		<dependency>
 			<groupId>org.geotools</groupId>
 			<artifactId>gt-shapefile</artifactId>

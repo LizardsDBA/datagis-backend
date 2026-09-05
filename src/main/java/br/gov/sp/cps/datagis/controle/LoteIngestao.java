@@ -17,8 +17,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * Histórico de execuções de ingestão (CLAUDE.md §2.7). Para fontes via API (como o CAR
- * nesta fatia), "origemReferencia" é a URL/consulta que gerou o lote, não um arquivo.
+ * Cada linha e uma execucao de ingestao. Pra fonte via API (como o CAR),
+ * "origemReferencia" guarda a URL usada, nao um nome de arquivo.
  */
 @Entity
 @Table(name = "lote_ingestao")
@@ -37,18 +37,18 @@ public class LoteIngestao {
     @JoinColumn(name = "fonte_dado_id", nullable = false)
     private FonteDado fonteDado;
 
-    /** URL/consulta (API) ou nome do arquivo (upload) que originou o lote. */
+    /** URL (API) ou nome do arquivo (upload) que gerou o lote. */
     @Column(name = "origem_referencia", length = 1000)
     private String origemReferencia;
 
-    /** Hash do corpo recebido — dedupe / detectar se a fonte mudou (§2.8, RN018). */
+    /** Hash do conteudo recebido, usado pra saber se mudou desde o ultimo lote. */
     @Column(name = "hash_conteudo", length = 64)
     private String hashConteudo;
 
     @Column(name = "quantidade_registros")
     private Integer quantidadeRegistros;
 
-    /** CONCLUIDO | FALHA | EM_PROCESSAMENTO — nesta fatia só CONCLUIDO/FALHA (síncrono). */
+    /** CONCLUIDO | SEM_MUDANCA | EM_PROCESSAMENTO | FALHA. */
     @Builder.Default
     private String status = "CONCLUIDO";
 

@@ -17,9 +17,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Orquestra a fatia 1 (CLAUDE.md §5.2): busca o WFS do CAR, cria o lote_ingestao e
- * grava cada feature como registro_bruto. Sem validação de geometria, sem quarentena,
- * sem reprojeção, sem paginação — ingestão bruta pura de uma página.
+ * Busca o WFS do CAR, cria o lote_ingestao e grava cada feature como registro_bruto.
+ * Sem validar geometria, sem quarentena, sem paginacao ainda — so ingestao bruta.
  */
 @Service
 public class IngestaoCarService {
@@ -61,15 +60,14 @@ public class IngestaoCarService {
         String corpoBruto = wfsClient.buscarCorpoBruto();
         JsonNode featureCollection = lerJson(corpoBruto);
 
-        // Hash só das features, não do corpo bruto inteiro: o WFS carimba um
-        // "timeStamp" na resposta que muda a cada chamada mesmo com dado idêntico —
-        // confirmado comparando duas respostas reais (mesmas 111 features, timeStamp
-        // diferente). Hashear o corpo bruto nunca bateria de uma chamada pra outra.
+        // O hash e so das features, nao da resposta inteira. Testamos e vimos que o
+        // WFS sempre manda um timeStamp diferente a cada chamada, mesmo quando os
+        // dados sao os mesmos - se hasheasse tudo, nunca ia bater de uma vez pra outra.
         String hash = sha256Hex(escreverJson(featureCollection.path("features")));
 
-        // RN018/§2.8: se o conteúdo é idêntico ao do último lote desta fonte, registra
-        // a execução (auditoria — "checamos, não mudou") mas não reprocessa/duplica os
-        // registro_bruto. Vale tanto pra disparo manual quanto (no futuro) pelo Quartz.
+        // Se o hash bater com o ultimo lote dessa fonte, o conteudo nao mudou.
+        // Mesmo assim cria um lote novo (so pra registrar que rodou), mas nao grava
+        // os registros de novo.
         boolean semMudanca = loteIngestaoRepository
                 .findFirstByFonteDadoIdOrderByIdDesc(fonte.getId())
                 .map(anterior -> hash.equals(anterior.getHashConteudo()))

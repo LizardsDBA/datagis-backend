@@ -6,24 +6,16 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.util.UriComponentsBuilder;
 
 /**
- * Cliente do WFS do SICAR (CLAUDE.md §5.6). Devolve o corpo bruto como texto — a
- * conversão pra JSON acontece no service, pra manter aqui só a responsabilidade de
- * "buscar", e permitir hash fiel do que veio da rede (RN018/§2.8).
+ * Busca os dados do CAR no WFS do SICAR. Devolve o corpo como texto puro; quem
+ * transforma em JSON e o service.
  *
- * <p><b>Por que via {@code curl} em vez de {@code RestClient}/JDK HttpClient:</b>
- * {@code geoserver.car.gov.br} está atrás de um WAF que bloqueia o handshake TLS do
- * {@code java.net.http.HttpClient} (fingerprint JA3/JA4 do JSSE), mesmo restringindo a
- * TLS 1.2 e mandando os mesmos cipher suites que o OpenSSL manda — confirmado com
- * {@code javax.net.debug=ssl:handshake}, sempre {@code handshake_failure} do lado do
- * Java, sempre HTTP 200 com {@code curl} (mesmo simulando o User-Agent do Java). Não é
- * rate-limit nem filtro de User-Agent — é bloqueio na camada TLS, antes até de qualquer
- * cabeçalho HTTP existir. Padrão de WAF anti-bot em infra pública brasileira que já
- * apareceu antes com o WFS do FUNAI (bloqueio por User-Agent, ver docs/fontes-de-dados.md).
- * Shell-out pro {@code curl} (presente na imagem de runtime) contorna isso porque usa
- * OpenSSL, não o JSSE do Java. Se um dia trocar de imagem base, confirmar que o `curl`
- * continua presente.
+ * Usamos curl em vez do HttpClient do Java porque o servidor do CAR bloqueia a
+ * conexao TLS feita pelo Java (testamos bastante e sempre da erro de handshake),
+ * mas com curl sempre funciona. Parece um bloqueio de firewall meio bobo que so
+ * deixa passar clientes "conhecidos". Se um dia trocar a imagem do container,
+ * confirmar que o curl continua instalado nela.
  *
- * Sem paginação nesta fatia: o circuito de municípios (§5.2) cabe numa página só.
+ * Ainda sem paginacao: o tanto de municipio que ingerimos cabe numa pagina so.
  */
 @Component
 public class CarWfsClient {

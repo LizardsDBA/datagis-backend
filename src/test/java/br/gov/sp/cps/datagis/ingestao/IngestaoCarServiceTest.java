@@ -25,10 +25,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.io.ClassPathResource;
 import tools.jackson.databind.ObjectMapper;
 
-/**
- * Testa a orquestração da fatia 1 (CLAUDE.md §5.2) contra um GeoJSON de amostra —
- * não bate no WFS real (só o {@link CarWfsClient} é mockado).
- */
+/** Testa o service com um GeoJSON de amostra. Não bate no WFS real. */
 @ExtendWith(MockitoExtension.class)
 class IngestaoCarServiceTest {
 
@@ -103,8 +100,8 @@ class IngestaoCarServiceTest {
                 .nome("CAR - Imóveis (PR)")
                 .urlOrigem("https://geoserver.car.gov.br/geoserver/sicar/wfs")
                 .build();
-        // O service hasheia só as "features" (não a resposta bruta inteira — ela tem
-        // um "timeStamp" que muda a cada chamada, ver comentário em IngestaoCarService).
+        // O service so hasheia as "features", entao o teste precisa calcular o
+        // hash do mesmo jeito.
         ObjectMapper mapper = new ObjectMapper();
         String featuresJson = mapper.writeValueAsString(mapper.readTree(corpoAmostra).path("features"));
         String hashDoCorpo = sha256HexParaTeste(featuresJson);

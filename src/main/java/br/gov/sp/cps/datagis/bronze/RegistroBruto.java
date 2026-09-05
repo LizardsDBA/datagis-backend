@@ -17,14 +17,12 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 /**
- * Registro bruto, schema-on-read (CLAUDE.md §2.2). Guarda o payload original inteiro
- * como JSON, sem tipagem — nenhuma interpretação acontece nesta camada.
+ * Guarda o registro bruto exatamente como veio da fonte, sem tratar nada.
  *
- * A tabela vive no schema BRONZE, diferente do datasource de conexão (CONTROLE) — por
- * isso o {@code schema} explícito no @Table. As referências a fonte_dado/lote_ingestao
- * (schema CONTROLE) ficam como Long simples, não @ManyToOne: Bronze é armazenamento
- * burro, não precisa navegar o grafo de objetos, e evita ao Hibernate ter que resolver
- * join cross-schema para uma tabela que já é só "gravar e esquecer".
+ * A tabela fica no schema BRONZE, diferente do usuario de conexao (CONTROLE), por
+ * isso o {@code schema} explicito no @Table. As referencias pra fonte_dado e
+ * lote_ingestao (que ficam no CONTROLE) sao so um Long, nao @ManyToOne — nao precisa
+ * carregar o objeto inteiro so pra gravar um registro bruto.
  */
 @Entity
 @Table(name = "registro_bruto", schema = "BRONZE")
@@ -45,16 +43,16 @@ public class RegistroBruto {
     @Column(name = "fonte_dado_id", nullable = false)
     private Long fonteDadoId;
 
-    /** Posição da feature/linha no arquivo/resposta original (rastreabilidade). */
+    /** Posicao da linha/feature no arquivo ou resposta original. */
     @Column(name = "numero_linha")
     private Integer numeroLinha;
 
-    /** JSON cru, chaves = nomes de colunas/propriedades originais. Sem validação. */
+    /** JSON cru, com os nomes de campo originais da fonte. Sem validar nada. */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false)
     private String payload;
 
-    /** WKT bruto como texto, sem validar — reprojeção/tipagem só na Silver. */
+    /** Geometria em WKT, sem validar. Tratar a geometria e coisa da proxima camada. */
     @Lob
     @Column(name = "geometria_wkt")
     private String geometriaWkt;

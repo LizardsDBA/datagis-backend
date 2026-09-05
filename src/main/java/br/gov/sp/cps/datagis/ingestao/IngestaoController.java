@@ -5,7 +5,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Fatia 1 (CLAUDE.md §5.2) — só ingestão bruta, sem validação/quarentena/cálculo. */
+/** So dispara a ingestao bruta do CAR, sem validar ou calcular nada ainda. */
 @RestController
 @RequestMapping("/api/ingestao")
 public class IngestaoController {

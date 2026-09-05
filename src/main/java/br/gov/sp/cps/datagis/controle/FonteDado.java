@@ -15,12 +15,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.type.NumericBooleanConverter;
 
-/**
- * Catálogo de fontes de dados (CLAUDE.md §2.7/§2.8).
- *
- * Nesta fatia, populada só por seed do Flyway (V003__seed_fonte_dado_car_pr.sql) — o
- * cadastro via tela/endpoint fica para uma fatia futura.
- */
+/** Cadastro das fontes de dados (CAR, IBAMA, etc). */
 @Entity
 @Table(name = "fonte_dado")
 @Getter
@@ -40,7 +35,7 @@ public class FonteDado {
     @Column(length = 200)
     private String orgao;
 
-    /** UPLOAD_MANUAL | API_REST | DOWNLOAD_URL (ver §2.8). */
+    /** UPLOAD_MANUAL | API_REST | DOWNLOAD_URL. */
     @Column(name = "tipo_aquisicao", nullable = false, length = 20)
     private String tipoAquisicao;
 
@@ -54,9 +49,8 @@ public class FonteDado {
     @Column(name = "formato_esperado", length = 30)
     private String formatoEsperado;
 
-    // DDL declara NUMBER(1) (convenção Oracle tradicional, CLAUDE.md §2.8), não o
-    // BOOLEAN nativo do Oracle 23ai — o conversor evita que o Hibernate espere o tipo
-    // nativo por padrão.
+    // A coluna no banco e NUMBER(1), nao BOOLEAN. Esse conversor faz o Hibernate
+    // ler/gravar 0 e 1 em vez de esperar um tipo booleano nativo.
     @Convert(converter = NumericBooleanConverter.class)
     @Builder.Default
     private Boolean ativo = true;
