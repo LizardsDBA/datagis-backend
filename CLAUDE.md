@@ -108,10 +108,27 @@ conecta (o backend), os outros schemas só "possuem" tabelas:
   `infra/oracle-init/01-criar-schemas.sh` (script custom rodado pelo entrypoint, uma vez,
   como SYS) — usuários sem uso de login direto, só donos de tabela.
 - `CONTROLE` recebe privilégios `CREATE/ALTER/DROP ANY TABLE`, `SELECT/INSERT/UPDATE/DELETE
-  ANY TABLE`, `CREATE ANY INDEX/SEQUENCE/TRIGGER/VIEW` — permite criar e manipular objetos
-  **qualificados** (`bronze.registro_bruto`) em qualquer schema do PDB.
+  ANY TABLE`, `CREATE ANY INDEX/SEQUENCE/TRIGGER/VIEW`, **`SELECT ANY SEQUENCE`** —
+  permite criar e manipular objetos **qualificados** (`bronze.registro_bruto`) em
+  qualquer schema do PDB.
 - Adequado para **dev/acadêmico**; em ambiente real isso seria restrito por schema com
   roles dedicados em vez de privilégios `ANY`. Ver §4.6 para o compose completo.
+
+**Duas pegadinhas de privilégio do Oracle, descobertas na prática (2026-09-04) —
+guardar para não perder tempo de novo:**
+1. **FK de um schema para outro** (ex.: `bronze.registro_bruto` → `controle.lote_ingestao`)
+   **não** é coberta por `CREATE ANY TABLE`. Não existe `REFERENCES ANY TABLE` no Oracle
+   (`ORA-00990` se tentar). O certo é `GRANT REFERENCES ON <tabela> TO <schema-filho>`,
+   feito pelo **dono** da tabela referenciada — por isso esse grant vive dentro da
+   **migration Flyway** que cria a tabela-pai (ex. `V001__criar_fonte_dado.sql`,
+   `V002__criar_lote_ingestao.sql`), não no script de init (que roda antes de qualquer
+   tabela existir). Cada nova FK cross-schema precisa do grant equivalente.
+2. **`GENERATED ALWAYS AS IDENTITY` numa tabela criada via `CREATE ANY TABLE` falha**
+   com `ORA-41900: missing READ privilege` mesmo com `CREATE ANY SEQUENCE` concedido —
+   identity column cria uma sequence oculta (`ISEQ$$_...`) no schema dono, e o Oracle
+   também exige **`SELECT ANY SEQUENCE`** pra sessão que está criando a tabela poder
+   "ler" essa sequence. Sem isso, toda tabela com PK `IDENTITY` fora do schema `CONTROLE`
+   quebra. Esse grant já está no `infra/oracle-init/01-criar-schemas.sh`.
 
 ### 2.1.1. Estratégia de migrations (Flyway) — **[DECIDIDO]**
 - **Uma única instância de Flyway** (autoconfig do Spring Boot), com
@@ -773,6 +790,31 @@ do Claude Code não tratem uma hipótese como se fosse definitiva.
   interna de `consultapublica.car.gov.br` antes de precisar calcular IAPP/IRL/ICV.
 - **INCRA sem WFS estável** (`docs/fontes-de-dados.md`): achar os parâmetros certos do
   broker i3geo, ou aceitar como fonte manual, antes de fechar o escopo completo de ISAP.
+
+### 9.5. Fatia 1 (ingestão CAR/PR) — itens 1-3 feitos e validados (2026-09-04)
+Branch `feat/ingestao-car-pr`, a partir da `sprint-1`. **Rodado de ponta a ponta contra
+o Oracle real do compose**, não só compilado:
+- `SecurityConfig` (§5.3) — bean provisório liberando tudo.
+- Entidades JPA: `FonteDado`/`LoteIngestao` (pacote `controle`), `RegistroBruto`
+  (pacote `bronze`, `@Table(schema = "BRONZE")` explícito — é a única tabela fora do
+  schema padrão da conexão). Referências cross-schema de `RegistroBruto` para
+  `controle.*` são `Long` simples, não `@ManyToOne` — Bronze é armazenamento burro, não
+  precisa navegar objeto.
+- `payload` mapeado com `@JdbcTypeCode(SqlTypes.JSON)` sobre `String` — funcionou de
+  primeira contra o tipo `JSON` nativo do Oracle 23ai.
+- `ativo` (`fonte_dado`) precisou de `@Convert(converter = NumericBooleanConverter.class)`
+  — sem isso, o Hibernate 7 espera `BOOLEAN` nativo (disponível no Oracle 23ai), mas a
+  DDL usa `NUMBER(1)` (convenção Oracle tradicional, já documentada no §2.8). Usar o
+  mesmo padrão em qualquer outro campo booleano futuro.
+- Migrations `V001`-`V004` (`controle`: fonte_dado, lote_ingestao, seed CAR/PR;
+  `bronze`: registro_bruto) — **incluindo os `GRANT REFERENCES` por tabela** (ver
+  pegadinhas de privilégio acima).
+- **Descoberta de spike, de graça**: esse ciclo já validou Hibernate+Oracle real (JSON
+  nativo, conversor de tipo, FK cross-schema, IDENTITY cross-schema) — não é o teste de
+  `SDO_GEOMETRY` do §5.5 (isso seguirá pendente pra Silver), mas reduz a incerteza geral
+  sobre Hibernate 7.4 + Oracle 23ai.
+- Faltam os itens 4-6 do plano (cliente WFS + parser GeoJSON→WKT, service/controller
+  `POST /api/ingestao/car/pr`, tela Vue) — ainda não iniciados.
 
 ---
 
