@@ -32,6 +32,17 @@ CREATE USER batch      IDENTIFIED BY "${SCHEMA_PASSWORD}" DEFAULT TABLESPACE USE
 GRANT CREATE ANY TABLE, ALTER ANY TABLE, DROP ANY TABLE                      TO ${APP_USER};
 GRANT SELECT ANY TABLE, INSERT ANY TABLE, UPDATE ANY TABLE, DELETE ANY TABLE TO ${APP_USER};
 GRANT CREATE ANY INDEX, CREATE ANY SEQUENCE, CREATE ANY TRIGGER, CREATE ANY VIEW TO ${APP_USER};
+-- GENERATED ALWAYS AS IDENTITY cria uma sequence oculta (ISEQ$$_...) no schema DONO
+-- da tabela. CREATE ANY SEQUENCE so permite CRIAR essa sequence; sem SELECT ANY
+-- SEQUENCE tambem, a propria CREATE TABLE com IDENTITY falha com ORA-41900/ORA-1031
+-- quando a tabela e criada em schema diferente do da sessao (confirmado testando).
+GRANT SELECT ANY SEQUENCE TO ${APP_USER};
+-- Nao existe "REFERENCES ANY TABLE" no Oracle (ORA-00990 se tentar). FK de um
+-- schema pra outro (ex.: bronze.registro_bruto -> controle.lote_ingestao) exige
+-- GRANT REFERENCES por tabela, feito pelo DONO da tabela referenciada (CONTROLE)
+-- DEPOIS que ela existir — isso fica nas proprias migrations Flyway (ver
+-- db/migration/controle/V001__.../V002__...), nao aqui no init (que roda antes
+-- de qualquer tabela existir).
 
 EXIT;
 EOSQL

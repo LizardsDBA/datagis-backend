@@ -28,6 +28,20 @@ Convenção de status:
 | Filtro por município | `&CQL_FILTER=cod_municipio_ibge=4106902` — funciona, testado com vários municípios do PR |
 | Paginação | WFS2 `count` + `startIndex` |
 
+**⚠️ Bloqueio de TLS contra cliente Java — descoberto em 2026-09-05, ao construir a
+fatia 1.** `java.net.http.HttpClient` (usado por `RestClient`/`WebClient`) recebe
+`SSLHandshakeException: handshake_failure` **sempre**, mesmo restringindo a TLS 1.2 e
+oferecendo os mesmos cipher suites que o `curl`. `curl`/OpenSSL **sempre** funciona
+(inclusive simulando o User-Agent do Java). Confirmado com `javax.net.debug=ssl:handshake`
+que a rejeição acontece na camada TLS, antes de qualquer cabeçalho HTTP — não é
+rate-limit nem filtro de User-Agent, é bloqueio por *fingerprint* de TLS (JA3/JA4) de
+algum WAF na frente do `geoserver.car.gov.br`. Mesma categoria de bloqueio "anti-bot"
+do FUNAI (item 5), só que numa camada mais baixa.
+
+**Workaround adotado**: `CarWfsClient` chama `curl` via `ProcessBuilder` em vez de usar
+o cliente HTTP nativo do Java. Funciona de forma consistente (testado repetidas vezes).
+Se algum dia trocar a imagem base do container, confirmar que `curl` continua presente.
+
 ## ⚠️ GAP encontrado — APP, Reserva Legal e Vegetação Nativa do CAR **não estão nesse WFS**
 
 O slide pede do CAR não só o perímetro do imóvel, mas também **APP declarada**, **Reserva

@@ -1,0 +1,48 @@
+{
+  "type": "FeatureCollection",
+  "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::4674"}},
+  "features": [
+    {
+      "type": "Feature",
+      "id": "sicar_imoveis_pr.1",
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [[[[-49.27, -25.42], [-49.26, -25.42], [-49.26, -25.41], [-49.27, -25.41], [-49.27, -25.42]]]]
+      },
+      "properties": {
+        "cod_imovel": "PR-4106902-00B2EA81503E46B8BD95A7E35BBB8472",
+        "status_imovel": "AT",
+        "dat_criacao": "2016-01-27T13:10:50.493Z",
+        "area": 8.8856,
+        "condicao": "Aguardando análise",
+        "uf": "PR",
+        "municipio": "Curitiba",
+        "cod_municipio_ibge": 4106902,
+        "m_fiscal": 1.7771,
+        "tipo_imovel": "IRU"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sicar_imoveis_pr.2",
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [[[[-52.02, -23.42], [-52.01, -23.42], [-52.01, -23.41], [-52.02, -23.41], [-52.02, -23.42]]]]
+      },
+      "properties": {
+        "cod_imovel": "PR-4115200-11C3FB92614F57C9CE06B8F46CCC9583",
+        "status_imovel": "AT",
+        "dat_criacao": "2018-05-14T09:22:10.000Z",
+        "area": 15.3,
+        "condicao": "Ativo",
+        "uf": "PR",
+        "municipio": "Maringá",
+        "cod_municipio_ibge": 4115200,
+        "m_fiscal": 3.06,
+        "tipo_imovel": "IRU"
+      }
+    }
+  ],
+  "totalFeatures": 2,
+  "numberReturned": 2
+}
