@@ -791,7 +791,7 @@ do Claude Code não tratem uma hipótese como se fosse definitiva.
 - **INCRA sem WFS estável** (`docs/fontes-de-dados.md`): achar os parâmetros certos do
   broker i3geo, ou aceitar como fonte manual, antes de fechar o escopo completo de ISAP.
 
-### 9.5. Fatia 1 (ingestão CAR/PR) — itens 1-3 feitos e validados (2026-09-04)
+### 9.5. Fatia 1 (ingestão CAR/PR) — **[COMPLETA e validada de ponta a ponta, 2026-09-05]**
 Branch `feat/ingestao-car-pr`, a partir da `sprint-1`. **Rodado de ponta a ponta contra
 o Oracle real do compose**, não só compilado:
 - `SecurityConfig` (§5.3) — bean provisório liberando tudo.
@@ -813,8 +813,37 @@ o Oracle real do compose**, não só compilado:
   nativo, conversor de tipo, FK cross-schema, IDENTITY cross-schema) — não é o teste de
   `SDO_GEOMETRY` do §5.5 (isso seguirá pendente pra Silver), mas reduz a incerteza geral
   sobre Hibernate 7.4 + Oracle 23ai.
-- Faltam os itens 4-6 do plano (cliente WFS + parser GeoJSON→WKT, service/controller
-  `POST /api/ingestao/car/pr`, tela Vue) — ainda não iniciados.
+
+**Itens 4-6 (2026-09-05) — feitos e testados contra o CAR/PR de verdade, não só a
+amostra:**
+- `CarProperties` (`app.car.*`) — URL do WFS, layer, e o **circuito de municípios como
+  config** (`app.car.municipios-ibge`), nunca hard-coded (§5.2/§9.4).
+- `GeoJsonWktMapper` — GeoJSON→WKT com **JTS puro** (`GeometryFactory` + `WKTWriter`),
+  sem GeoTools nem `jts-io-common` (que nem tem `GeoJsonReader` dentro do `jts-core` —
+  conferido no jar antes de assumir). Suporta `Polygon`/`MultiPolygon`; outro tipo
+  falha explícito.
+- **`Jackson 3` tem pacote novo**: `tools.jackson.databind.*`, não
+  `com.fasterxml.jackson.databind.*` — os dois convivem no classpath (o antigo vem
+  transitivo de outra lib), então importar o errado **compila** mas o Spring não acha
+  bean de `ObjectMapper` daquele tipo. Métodos também mudaram: `asText()`→`asString()`,
+  `asDouble()` foi removido (usar `doubleValue()`).
+- **`IngestaoCarService`** — orquestra tudo: busca, hash SHA-256 do corpo bruto (RN018),
+  cria `lote_ingestao`, grava 1 `registro_bruto` por feature, fecha o lote. Sem batch
+  insert (grava 1 a 1) — aceitável pro volume da fatia (milhares, não milhões).
+- **`IngestaoController`** — `POST /api/ingestao/car/pr`.
+- **⚠️ Bloqueio de TLS por WAF contra `java.net.http.HttpClient`** — ver
+  `docs/fontes-de-dados.md` item 1. `CarWfsClient` chama `curl` via `ProcessBuilder`
+  como workaround (funciona de forma consistente); `RestClient`/`WebClient` do Spring
+  **não funcionam** contra esse endpoint específico.
+- Teste (`IngestaoCarServiceTest`) com fixture estática (`fixtures/car-pr-amostra.json`)
+  — mocka só o `CarWfsClient`, resto é lógica real.
+- **Testado contra o CAR de verdade**: `POST /api/ingestao/car/pr` → **4.590 registros**
+  gravados (111 Curitiba + 1.831 Maringá + 2.648 Ponta Grossa, bate exato), ~13s.
+- Tela Vue (`App.vue`) — botão "Ingerir CAR/PR", mostra `loteIngestaoId` +
+  `quantidadeRegistros` ou erro. Testado através do proxy do Vite (`localhost:5173`),
+  não só direto no backend.
+- **Ambiente resetado** (`docker compose down` + volume do Oracle recriado) pro
+  primeiro teste local ficar limpo (`loteIngestaoId=1`).
 
 ---
 
