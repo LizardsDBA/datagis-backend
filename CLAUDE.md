@@ -1,4 +1,4 @@
-# GeoRural DataHub — Contexto do Projeto
+# DataGis — Contexto do Projeto
 
 > Este arquivo é lido automaticamente pelo Claude Code ao abrir este diretório.
 > Ele resume as decisões de arquitetura tomadas até o momento em discussões fora
@@ -9,7 +9,9 @@
 
 ## 1. Visão Geral do Projeto
 
-**Nome:** GeoRural DataHub (também referido como "Geo Data Lake")
+**Nome:** DataGis (produto da equipe; o desafio proposto pela Visiona se chama
+"GeoRural DataHub" — ver documento oficial em §1; internamente também já foi referido
+como "Geo Data Lake")
 **Tipo:** Projeto acadêmico em equipe — FATEC, disciplina de API/Métodos Ágeis
 **Parceiro/Cliente do desafio:** Visiona Tecnologia Espacial
 **Semestre/contexto:** Desafio proposto em kickoff com a Visiona; Prof. Garcia como orientador acadêmico
