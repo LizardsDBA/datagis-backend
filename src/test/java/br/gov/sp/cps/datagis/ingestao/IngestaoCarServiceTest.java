@@ -95,4 +95,49 @@ class IngestaoCarServiceTest {
         assertThat(segundo.getNumeroLinha()).isEqualTo(1);
         assertThat(segundo.getPayload()).contains("Maringá");
     }
+
+    @Test
+    void naoDeveGravarRegistrosQuandoHashJaFoiIngeridoNoUltimoLote() {
+        FonteDado fonte = FonteDado.builder()
+                .id(1L)
+                .nome("CAR - Imóveis (PR)")
+                .urlOrigem("https://geoserver.car.gov.br/geoserver/sicar/wfs")
+                .build();
+        // O service hasheia só as "features" (não a resposta bruta inteira — ela tem
+        // um "timeStamp" que muda a cada chamada, ver comentário em IngestaoCarService).
+        ObjectMapper mapper = new ObjectMapper();
+        String featuresJson = mapper.writeValueAsString(mapper.readTree(corpoAmostra).path("features"));
+        String hashDoCorpo = sha256HexParaTeste(featuresJson);
+        LoteIngestao loteAnterior = LoteIngestao.builder()
+                .id(5L)
+                .hashConteudo(hashDoCorpo)
+                .status("CONCLUIDO")
+                .build();
+
+        when(fonteDadoRepository.findByNome("CAR - Imóveis (PR)")).thenReturn(Optional.of(fonte));
+        when(wfsClient.buscarCorpoBruto()).thenReturn(corpoAmostra);
+        when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L))
+                .thenReturn(Optional.of(loteAnterior));
+        when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
+            LoteIngestao lote = chamada.getArgument(0);
+            lote.setId(11L);
+            return lote;
+        });
+
+        LoteIngestao resultado = service.ingerir();
+
+        assertThat(resultado.getStatus()).isEqualTo("SEM_MUDANCA");
+        assertThat(resultado.getQuantidadeRegistros()).isEqualTo(0);
+        verify(registroBrutoRepository, times(0)).save(any(RegistroBruto.class));
+    }
+
+    private static String sha256HexParaTeste(String texto) {
+        try {
+            var digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(texto.getBytes(StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(hash);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
 }

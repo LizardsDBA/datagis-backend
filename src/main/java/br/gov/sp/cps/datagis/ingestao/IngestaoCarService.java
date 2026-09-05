@@ -27,6 +27,9 @@ public class IngestaoCarService {
     /** Precisa bater com o nome inserido em V003__seed_fonte_dado_car_pr.sql. */
     private static final String NOME_FONTE_CAR_PR = "CAR - Imóveis (PR)";
 
+    private static final String STATUS_CONCLUIDO = "CONCLUIDO";
+    private static final String STATUS_SEM_MUDANCA = "SEM_MUDANCA";
+
     private final CarWfsClient wfsClient;
     private final GeoJsonWktMapper wktMapper;
     private final FonteDadoRepository fonteDadoRepository;
@@ -56,7 +59,33 @@ public class IngestaoCarService {
                         "fonte_dado '" + NOME_FONTE_CAR_PR + "' não cadastrada (seed ausente?)"));
 
         String corpoBruto = wfsClient.buscarCorpoBruto();
-        String hash = sha256Hex(corpoBruto);
+        JsonNode featureCollection = lerJson(corpoBruto);
+
+        // Hash só das features, não do corpo bruto inteiro: o WFS carimba um
+        // "timeStamp" na resposta que muda a cada chamada mesmo com dado idêntico —
+        // confirmado comparando duas respostas reais (mesmas 111 features, timeStamp
+        // diferente). Hashear o corpo bruto nunca bateria de uma chamada pra outra.
+        String hash = sha256Hex(escreverJson(featureCollection.path("features")));
+
+        // RN018/§2.8: se o conteúdo é idêntico ao do último lote desta fonte, registra
+        // a execução (auditoria — "checamos, não mudou") mas não reprocessa/duplica os
+        // registro_bruto. Vale tanto pra disparo manual quanto (no futuro) pelo Quartz.
+        boolean semMudanca = loteIngestaoRepository
+                .findFirstByFonteDadoIdOrderByIdDesc(fonte.getId())
+                .map(anterior -> hash.equals(anterior.getHashConteudo()))
+                .orElse(false);
+
+        if (semMudanca) {
+            LoteIngestao loteSemMudanca = LoteIngestao.builder()
+                    .fonteDado(fonte)
+                    .origemReferencia(fonte.getUrlOrigem())
+                    .hashConteudo(hash)
+                    .quantidadeRegistros(0)
+                    .status(STATUS_SEM_MUDANCA)
+                    .dataExecucao(LocalDateTime.now())
+                    .build();
+            return loteIngestaoRepository.save(loteSemMudanca);
+        }
 
         LoteIngestao lote = LoteIngestao.builder()
                 .fonteDado(fonte)
@@ -67,7 +96,6 @@ public class IngestaoCarService {
                 .build();
         lote = loteIngestaoRepository.save(lote);
 
-        JsonNode featureCollection = lerJson(corpoBruto);
         JsonNode features = featureCollection.path("features");
 
         int contador = 0;
@@ -85,7 +113,7 @@ public class IngestaoCarService {
         }
 
         lote.setQuantidadeRegistros(contador);
-        lote.setStatus("CONCLUIDO");
+        lote.setStatus(STATUS_CONCLUIDO);
         return loteIngestaoRepository.save(lote);
     }
 

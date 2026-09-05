@@ -19,6 +19,6 @@ public class IngestaoController {
     @PostMapping("/car/pr")
     public IngestaoResultado ingerirCarPr() {
         LoteIngestao lote = service.ingerir();
-        return new IngestaoResultado(lote.getId(), lote.getQuantidadeRegistros());
+        return new IngestaoResultado(lote.getId(), lote.getQuantidadeRegistros(), lote.getStatus());
     }
 }
