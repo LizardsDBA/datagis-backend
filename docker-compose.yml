@@ -43,7 +43,7 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: ./datagis-frontend
       dockerfile: Dockerfile.dev
     container_name: datagis-frontend
     depends_on:

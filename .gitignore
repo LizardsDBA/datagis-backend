@@ -4,6 +4,7 @@ HELP.md
 # 'frontend/' e um repositorio git proprio (git init dentro da pasta).
 # Fica TOTALMENTE fora do repo do backend, de proposito. Nao remover esta linha.
 frontend/
+datagis-frontend/
 
 ### Build Maven ###
 target/
