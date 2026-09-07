@@ -51,7 +51,7 @@ services:
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
     volumes:
-      - ./frontend:/app
+      - ./datagis-frontend:/app
       - frontend-node-modules:/app/node_modules
     working_dir: /app
     command: >
