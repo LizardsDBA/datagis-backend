@@ -1,7 +1,6 @@
 services:
   oracle:
     image: gvenzl/oracle-free:23.26.3-slim
-    container_name: datagis-oracle
     environment:
       ORACLE_PASSWORD: ${ORACLE_PASSWORD}
       APP_USER: ${APP_USER}
@@ -24,7 +23,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    container_name: datagis-backend
     depends_on:
       oracle:
         condition: service_healthy
@@ -45,7 +43,6 @@ services:
     build:
       context: ./datagis-frontend
       dockerfile: Dockerfile.dev
-    container_name: datagis-frontend
     depends_on:
       - backend
     ports:
