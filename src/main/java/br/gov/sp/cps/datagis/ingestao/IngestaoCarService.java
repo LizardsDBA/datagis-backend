@@ -3,7 +3,6 @@ package br.gov.sp.cps.datagis.ingestao;
 import br.gov.sp.cps.datagis.bronze.RegistroBruto;
 import br.gov.sp.cps.datagis.bronze.RegistroBrutoRepository;
 import br.gov.sp.cps.datagis.controle.FonteDado;
-import br.gov.sp.cps.datagis.controle.FonteDadoRepository;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
 import br.gov.sp.cps.datagis.controle.LoteIngestaoRepository;
 import java.nio.charset.StandardCharsets;
@@ -19,19 +18,22 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * Busca o WFS do CAR, cria o lote_ingestao e grava cada feature como registro_bruto.
  * Sem validar geometria, sem quarentena, sem paginacao ainda — so ingestao bruta.
+ *
+ * <p>É um {@link IngestaoExecutor} como outro qualquer — não recebe tratamento
+ * especial do disparo genérico (ver {@link IngestaoExecucaoService}). Reconhece que é
+ * dele processar uma fonte pela URL de origem (única por fonte cadastrada).
  */
 @Service
-public class IngestaoCarService {
+public class IngestaoCarService implements IngestaoExecutor {
 
-    /** Precisa bater com o nome inserido em V003__seed_fonte_dado_car_pr.sql. */
-    private static final String NOME_FONTE_CAR_PR = "CAR - Imóveis (PR)";
+    /** Trecho fixo da URL do WFS do CAR/SICAR — usado só para reconhecer a fonte. */
+    private static final String URL_WFS_CAR = "geoserver.car.gov.br/geoserver/sicar/wfs";
 
     private static final String STATUS_CONCLUIDO = "CONCLUIDO";
     private static final String STATUS_SEM_MUDANCA = "SEM_MUDANCA";
 
     private final CarWfsClient wfsClient;
     private final GeoJsonWktMapper wktMapper;
-    private final FonteDadoRepository fonteDadoRepository;
     private final LoteIngestaoRepository loteIngestaoRepository;
     private final RegistroBrutoRepository registroBrutoRepository;
     private final ObjectMapper objectMapper;
@@ -39,24 +41,24 @@ public class IngestaoCarService {
     public IngestaoCarService(
             CarWfsClient wfsClient,
             GeoJsonWktMapper wktMapper,
-            FonteDadoRepository fonteDadoRepository,
             LoteIngestaoRepository loteIngestaoRepository,
             RegistroBrutoRepository registroBrutoRepository,
             ObjectMapper objectMapper) {
         this.wfsClient = wfsClient;
         this.wktMapper = wktMapper;
-        this.fonteDadoRepository = fonteDadoRepository;
         this.loteIngestaoRepository = loteIngestaoRepository;
         this.registroBrutoRepository = registroBrutoRepository;
         this.objectMapper = objectMapper;
     }
 
-    @Transactional
-    public LoteIngestao ingerir() {
-        FonteDado fonte = fonteDadoRepository.findByNome(NOME_FONTE_CAR_PR)
-                .orElseThrow(() -> new IllegalStateException(
-                        "fonte_dado '" + NOME_FONTE_CAR_PR + "' não cadastrada (seed ausente?)"));
+    @Override
+    public boolean suportar(FonteDado fonte) {
+        return fonte.getUrlOrigem() != null && fonte.getUrlOrigem().contains(URL_WFS_CAR);
+    }
 
+    @Override
+    @Transactional
+    public LoteIngestao executar(FonteDado fonte) {
         String corpoBruto = wfsClient.buscarCorpoBruto();
         JsonNode featureCollection = lerJson(corpoBruto);
 

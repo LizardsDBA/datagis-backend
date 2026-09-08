@@ -12,6 +12,7 @@ public record FonteDadoResponse(
         String cronExpressao,
         String formatoEsperado,
         Boolean ativo,
+        LocalDateTime ultimaExecucaoEm,
         LocalDateTime dataAdd) {
 
     public static FonteDadoResponse de(FonteDado fonte) {
@@ -24,6 +25,7 @@ public record FonteDadoResponse(
                 fonte.getCronExpressao(),
                 fonte.getFormatoEsperado(),
                 fonte.getAtivo(),
+                fonte.getUltimaExecucaoEm(),
                 fonte.getDataAdd());
     }
 }

@@ -9,7 +9,6 @@ import static org.mockito.Mockito.when;
 import br.gov.sp.cps.datagis.bronze.RegistroBruto;
 import br.gov.sp.cps.datagis.bronze.RegistroBrutoRepository;
 import br.gov.sp.cps.datagis.controle.FonteDado;
-import br.gov.sp.cps.datagis.controle.FonteDadoRepository;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
 import br.gov.sp.cps.datagis.controle.LoteIngestaoRepository;
 import java.io.IOException;
@@ -32,8 +31,6 @@ class IngestaoCarServiceTest {
     @Mock
     private CarWfsClient wfsClient;
     @Mock
-    private FonteDadoRepository fonteDadoRepository;
-    @Mock
     private LoteIngestaoRepository loteIngestaoRepository;
     @Mock
     private RegistroBrutoRepository registroBrutoRepository;
@@ -48,8 +45,21 @@ class IngestaoCarServiceTest {
                 StandardCharsets.UTF_8);
 
         service = new IngestaoCarService(
-                wfsClient, new GeoJsonWktMapper(), fonteDadoRepository,
+                wfsClient, new GeoJsonWktMapper(),
                 loteIngestaoRepository, registroBrutoRepository, new ObjectMapper());
+    }
+
+    @Test
+    void deveReconhecerFontePelaUrlDoWfsDoCar() {
+        FonteDado car = FonteDado.builder()
+                .urlOrigem("https://geoserver.car.gov.br/geoserver/sicar/wfs?service=WFS...")
+                .build();
+        FonteDado outra = FonteDado.builder().urlOrigem("https://outra-fonte.gov.br/api").build();
+        FonteDado semUrl = FonteDado.builder().build();
+
+        assertThat(service.suportar(car)).isTrue();
+        assertThat(service.suportar(outra)).isFalse();
+        assertThat(service.suportar(semUrl)).isFalse();
     }
 
     @Test
@@ -59,7 +69,6 @@ class IngestaoCarServiceTest {
                 .nome("CAR - Imóveis (PR)")
                 .urlOrigem("https://geoserver.car.gov.br/geoserver/sicar/wfs")
                 .build();
-        when(fonteDadoRepository.findByNome("CAR - Imóveis (PR)")).thenReturn(Optional.of(fonte));
         when(wfsClient.buscarCorpoBruto()).thenReturn(corpoAmostra);
         when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
             LoteIngestao lote = chamada.getArgument(0);
@@ -71,7 +80,7 @@ class IngestaoCarServiceTest {
         when(registroBrutoRepository.save(any(RegistroBruto.class)))
                 .thenAnswer(chamada -> chamada.getArgument(0));
 
-        LoteIngestao resultado = service.ingerir();
+        LoteIngestao resultado = service.executar(fonte);
 
         assertThat(resultado.getId()).isEqualTo(10L);
         assertThat(resultado.getStatus()).isEqualTo("CONCLUIDO");
@@ -111,7 +120,6 @@ class IngestaoCarServiceTest {
                 .status("CONCLUIDO")
                 .build();
 
-        when(fonteDadoRepository.findByNome("CAR - Imóveis (PR)")).thenReturn(Optional.of(fonte));
         when(wfsClient.buscarCorpoBruto()).thenReturn(corpoAmostra);
         when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L))
                 .thenReturn(Optional.of(loteAnterior));
@@ -121,7 +129,7 @@ class IngestaoCarServiceTest {
             return lote;
         });
 
-        LoteIngestao resultado = service.ingerir();
+        LoteIngestao resultado = service.executar(fonte);
 
         assertThat(resultado.getStatus()).isEqualTo("SEM_MUDANCA");
         assertThat(resultado.getQuantidadeRegistros()).isEqualTo(0);

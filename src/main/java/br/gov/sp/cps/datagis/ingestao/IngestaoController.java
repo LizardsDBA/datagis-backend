@@ -1,24 +1,29 @@
 package br.gov.sp.cps.datagis.ingestao;
 
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** So dispara a ingestao bruta do CAR, sem validar ou calcular nada ainda. */
+/**
+ * Dispara a ingestão de qualquer fonte cadastrada, pelo id. Não sabe qual fonte é CAR,
+ * IBGE, embargos etc. — isso é responsabilidade de cada {@link IngestaoExecutor} (ver
+ * {@link IngestaoExecucaoService}).
+ */
 @RestController
-@RequestMapping("/api/ingestao")
+@RequestMapping("/api/fontes")
 public class IngestaoController {
 
-    private final IngestaoCarService service;
+    private final IngestaoExecucaoService execucaoService;
 
-    public IngestaoController(IngestaoCarService service) {
-        this.service = service;
+    public IngestaoController(IngestaoExecucaoService execucaoService) {
+        this.execucaoService = execucaoService;
     }
 
-    @PostMapping("/car/pr")
-    public IngestaoResultado ingerirCarPr() {
-        LoteIngestao lote = service.ingerir();
+    @PostMapping("/{id}/executar")
+    public IngestaoResultado executar(@PathVariable Long id) {
+        LoteIngestao lote = execucaoService.executar(id);
         return new IngestaoResultado(lote.getId(), lote.getQuantidadeRegistros(), lote.getStatus());
     }
 }
