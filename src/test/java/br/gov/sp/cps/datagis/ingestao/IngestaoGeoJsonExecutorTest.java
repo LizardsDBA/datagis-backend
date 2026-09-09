@@ -158,9 +158,10 @@ class IngestaoGeoJsonExecutorTest {
 
         executor.executar(fonte);
 
-        // 2x no tamanho cheio (retentativa no mesmo tamanho antes de reduzir - cobre
-        // instabilidade passageira do servidor), depois reduz e acerta de primeira.
-        verify(httpFetchClient, org.mockito.Mockito.times(2))
+        // TENTATIVAS_POR_TAMANHO vezes no tamanho cheio (retentativa no mesmo tamanho
+        // antes de reduzir - cobre instabilidade passageira do servidor), depois reduz
+        // e acerta de primeira.
+        verify(httpFetchClient, org.mockito.Mockito.times(4))
                 .buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultRecordCount=1000"));
         verify(httpFetchClient).buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultRecordCount=500"));
 
@@ -192,6 +193,33 @@ class IngestaoGeoJsonExecutorTest {
         assertThat(captor.getValue()).hasSize(1);
         assertThat(captor.getValue().get(0).geometriaWkt()).isNull();
         assertThat(captor.getValue().get(0).payloadJson()).contains("3938");
+    }
+
+    /**
+     * Achado ao vivo no "IAT/PR - Embargos ICMBio": um registro real tem geometria
+     * malformada (um polígono dentro do MultiPolygon vem {@code null} no array de
+     * coordenadas) - derrubava o lote inteiro com NullPointerException. Um registro
+     * ruim não pode impedir os outros de serem gravados.
+     */
+    @Test
+    void devePrepararRegistroSemGeometriaQuandoGeometriaForMalformada() {
+        FonteDado fonte = FonteDado.builder().id(7L).urlOrigem("https://exemplo.gov.br/malformado.geojson").build();
+        String corpo = "{\"type\":\"FeatureCollection\",\"features\":["
+                + "{\"type\":\"Feature\","
+                + "\"geometry\":{\"type\":\"MultiPolygon\",\"coordinates\":[null]},"
+                + "\"properties\":{\"num_tad\":\"002458\"}}]}";
+        when(httpFetchClient.buscarCorpoBruto(anyString())).thenReturn(corpo);
+        when(writer.gravar(eq(fonte), anyString(), any()))
+                .thenReturn(LoteIngestao.builder().id(16L).status("CONCLUIDO").build());
+
+        executor.executar(fonte);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
+        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        assertThat(captor.getValue()).hasSize(1);
+        assertThat(captor.getValue().get(0).geometriaWkt()).isNull();
+        assertThat(captor.getValue().get(0).payloadJson()).contains("002458");
     }
 
     /** Fonte sem família de paginação reconhecida continua com uma chamada só, como sempre foi. */

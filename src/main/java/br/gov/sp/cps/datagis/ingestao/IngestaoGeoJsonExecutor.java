@@ -80,10 +80,27 @@ public class IngestaoGeoJsonExecutor implements IngestaoExecutor {
         for (JsonNode feature : todasFeatures) {
             registros.add(new RegistroPreparado(
                     escreverJson(feature.path("properties")),
-                    wktMapper.paraWkt(feature.path("geometry"))));
+                    paraWktOuNulo(feature)));
         }
 
         return writer.gravar(fonte, conteudoParaHash, registros);
+    }
+
+    /**
+     * Achado ao vivo no "IAT/PR - Embargos ICMBio": um registro real da fonte tem
+     * geometria malformada (um polígono dentro do MultiPolygon vem {@code null} no
+     * array de coordenadas), o que derrubava o lote inteiro com NullPointerException —
+     * um único registro ruim não pode impedir os outros milhares de serem gravados.
+     * Mesmo princípio já usado pra geometria ausente (RN007: não inventamos dado, só
+     * preservamos o que veio - aqui preservamos os atributos e deixamos a geometria
+     * vazia em vez de rejeitar o registro inteiro).
+     */
+    private String paraWktOuNulo(JsonNode feature) {
+        try {
+            return wktMapper.paraWkt(feature.path("geometry"));
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /** Página já buscada, junto do tamanho de página que efetivamente funcionou (pode ter sido reduzido). */
@@ -123,8 +140,8 @@ public class IngestaoGeoJsonExecutor implements IngestaoExecutor {
      * não tinha nada a ver com tamanho de página, o servidor só estava instável
      * naquele instante).
      */
-    private static final int TENTATIVAS_POR_TAMANHO = 2;
-    private static final long ESPERA_ENTRE_TENTATIVAS_MS = 500;
+    private static final int TENTATIVAS_POR_TAMANHO = 4;
+    private static final long ESPERA_ENTRE_TENTATIVAS_MS = 1500;
 
     /**
      * Busca uma página. Duas estratégias de recuperação, nessa ordem:
