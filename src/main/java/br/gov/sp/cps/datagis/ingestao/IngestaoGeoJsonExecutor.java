@@ -25,6 +25,13 @@ import tools.jackson.databind.node.ArrayNode;
  * uma chamada só pra fontes cuja família de API não reconhecemos (ex.: download direto
  * de um arquivo estático GeoJSON) — não tem o que paginar nesse caso.
  *
+ * <p><b>Redução automática de página:</b> se uma página falhar (achado ao vivo: a Malha
+ * Municipal do IBGE/IAT-PR quebra com HTTP 500 ao converter ~500+ polígonos municipais
+ * pra GeoJSON de uma vez, mesmo servidor que aguenta 1000+ pontos numa página sem
+ * problema), tenta de novo com metade do tamanho, até {@link PaginadorUrlGeoJson#TAMANHO_MINIMO_PAGINA}.
+ * Isso resolve o problema sem precisar de um tamanho de página fixo por fonte — cada
+ * fonte "encontra" o próprio limite na hora.
+ *
  * <p><b>Cuidado conhecido, não resolvido aqui:</b> o hash de "mudou desde a última
  * execução" (RN018) é calculado sobre a concatenação de todas as páginas, na ordem em
  * que chegaram. Se o servidor não garantir ordem estável entre chamadas (sem
@@ -79,20 +86,23 @@ public class IngestaoGeoJsonExecutor implements IngestaoExecutor {
         return writer.gravar(fonte, conteudoParaHash, registros);
     }
 
+    /** Página já buscada, junto do tamanho de página que efetivamente funcionou (pode ter sido reduzido). */
+    private record PaginaBuscada(List<JsonNode> features, int tamanhoUsado) {
+    }
+
     private List<JsonNode> buscarTodasAsPaginas(FonteDado fonte) {
         PaginadorUrlGeoJson.Familia familia = PaginadorUrlGeoJson.detectarFamilia(fonte.getUrlOrigem());
         List<JsonNode> todasFeatures = new ArrayList<>();
         int offset = 0;
+        int tamanhoPagina = PaginadorUrlGeoJson.TAMANHO_PAGINA;
 
         for (int pagina = 1; ; pagina++) {
-            String urlPagina = PaginadorUrlGeoJson.montarUrlPagina(fonte.getUrlOrigem(), familia, offset);
-            String corpoBruto = httpFetchClient.buscarCorpoBruto(urlPagina);
-            JsonNode featureCollection = lerJson(corpoBruto, fonte);
-            JsonNode features = featureCollection.path("features");
-            features.forEach(todasFeatures::add);
+            PaginaBuscada resultado = buscarPaginaComReducaoAutomatica(fonte, familia, offset, tamanhoPagina);
+            todasFeatures.addAll(resultado.features());
+            tamanhoPagina = resultado.tamanhoUsado();
 
             boolean ultimaPagina = familia == PaginadorUrlGeoJson.Familia.DESCONHECIDA
-                    || features.size() < PaginadorUrlGeoJson.TAMANHO_PAGINA;
+                    || resultado.features().size() < tamanhoPagina;
             if (ultimaPagina) {
                 return todasFeatures;
             }
@@ -102,7 +112,72 @@ public class IngestaoGeoJsonExecutor implements IngestaoExecutor {
                                 + " páginas (" + todasFeatures.size()
                                 + " registros) - parando por segurança, algo pode estar errado.");
             }
-            offset += features.size();
+            offset += resultado.features().size();
+        }
+    }
+
+    /**
+     * Tentativas no MESMO tamanho de página antes de reduzir — cobre instabilidade
+     * passageira do servidor (achado ao vivo: "IAT/PR - Embargos ICMBio" falhou duas
+     * vezes com HTTP 500 e, minutos depois, a mesma URL exata funcionou de primeira —
+     * não tinha nada a ver com tamanho de página, o servidor só estava instável
+     * naquele instante).
+     */
+    private static final int TENTATIVAS_POR_TAMANHO = 2;
+    private static final long ESPERA_ENTRE_TENTATIVAS_MS = 500;
+
+    /**
+     * Busca uma página. Duas estratégias de recuperação, nessa ordem:
+     * <ol>
+     *   <li>Repete no MESMO tamanho de página (com uma pequena espera) — resolve
+     *       instabilidade passageira do servidor;</li>
+     *   <li>Se continuar falhando, reduz o tamanho pela metade e recomeça, até o piso
+     *       {@link PaginadorUrlGeoJson#TAMANHO_MINIMO_PAGINA} — resolve o caso de o
+     *       servidor não aguentar converter muita geometria pesada pra GeoJSON de uma
+     *       vez (achado ao vivo na Malha Municipal do IBGE/IAT-PR).</li>
+     * </ol>
+     * O tamanho que funcionou volta no resultado — as páginas seguintes desta mesma
+     * execução já nascem com ele.
+     */
+    private PaginaBuscada buscarPaginaComReducaoAutomatica(
+            FonteDado fonte, PaginadorUrlGeoJson.Familia familia, int offset, int tamanhoPagina) {
+        int tamanhoTentativa = tamanhoPagina;
+        RuntimeException ultimaFalha = null;
+
+        while (familia == PaginadorUrlGeoJson.Familia.DESCONHECIDA
+                || tamanhoTentativa >= PaginadorUrlGeoJson.TAMANHO_MINIMO_PAGINA) {
+            String urlPagina = PaginadorUrlGeoJson.montarUrlPagina(fonte.getUrlOrigem(), familia, offset, tamanhoTentativa);
+
+            for (int tentativa = 1; tentativa <= TENTATIVAS_POR_TAMANHO; tentativa++) {
+                try {
+                    String corpoBruto = httpFetchClient.buscarCorpoBruto(urlPagina);
+                    JsonNode featureCollection = lerJson(corpoBruto, fonte);
+                    List<JsonNode> features = new ArrayList<>();
+                    featureCollection.path("features").forEach(features::add);
+                    return new PaginaBuscada(features, tamanhoTentativa);
+                } catch (RuntimeException e) {
+                    ultimaFalha = e;
+                    if (tentativa < TENTATIVAS_POR_TAMANHO) {
+                        aguardar();
+                    }
+                }
+            }
+            if (familia == PaginadorUrlGeoJson.Familia.DESCONHECIDA) {
+                break;
+            }
+            tamanhoTentativa /= 2;
+        }
+        throw new IllegalStateException(
+                "Fonte \"" + fonte.getNome() + "\" falhou ao buscar página em offset=" + offset
+                        + " mesmo reduzindo o tamanho de página até " + PaginadorUrlGeoJson.TAMANHO_MINIMO_PAGINA,
+                ultimaFalha);
+    }
+
+    private void aguardar() {
+        try {
+            Thread.sleep(ESPERA_ENTRE_TENTATIVAS_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

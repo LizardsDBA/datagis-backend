@@ -50,6 +50,22 @@ class GeoJsonWktMapperTest {
         assertThatThrownBy(() -> mapper.paraWkt(geometria)).isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * Achado ao vivo nos Autos de Infração do IBAMA (IAT/PR): muita autuação não tem
+     * coordenada, só atributos — {@code "geometry": null} no GeoJSON. Isso não é erro,
+     * é ausência legítima de geometria.
+     */
+    @Test
+    void deveVoltarNuloQuandoGeometriaForNula() {
+        assertThat(mapper.paraWkt(geometria("null"))).isNull();
+    }
+
+    @Test
+    void deveVoltarNuloQuandoGeometriaEstiverAusenteDoNo() {
+        JsonNode semGeometria = objectMapper.readTree("{}").path("geometry");
+        assertThat(mapper.paraWkt(semGeometria)).isNull();
+    }
+
     private JsonNode geometria(String json) {
         return objectMapper.readTree(json);
     }

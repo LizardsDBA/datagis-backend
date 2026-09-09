@@ -27,11 +27,26 @@ import java.util.regex.Pattern;
  * <p>Fonte de família {@link Familia#DESCONHECIDA} (ex.: download direto de um arquivo
  * estático) não é paginada — a URL volta exatamente como estava, uma chamada só, igual
  * sempre foi.
+ *
+ * <p><b>Tamanho de página nem sempre é seguro em 1000:</b> achado ao vivo com a Malha
+ * Municipal do IBGE/IAT-PR — o mesmo servidor ArcGIS que devolve 1000+ pontos numa
+ * página sem problema quebra com {@code HTTP 500} ao tentar converter ~500 polígonos
+ * municipais (mais complexos/pesados) pra GeoJSON de uma vez. Em vez de cravar um
+ * tamanho de página menor pra todo mundo (penaliza fontes leves com mais chamadas à
+ * toa) ou tentar adivinhar por fonte, {@link IngestaoGeoJsonExecutor} reduz o tamanho
+ * pela metade e tenta de novo quando uma página falha, até {@link #TAMANHO_MINIMO_PAGINA}.
  */
 final class PaginadorUrlGeoJson {
 
-    /** Tamanho de página usado nas duas famílias. */
+    /** Tamanho de página inicial, usado nas duas famílias. */
     static final int TAMANHO_PAGINA = 1000;
+
+    /**
+     * Piso da redução automática de tamanho de página (ver javadoc da classe). Abaixo
+     * disso, se ainda estiver falhando, o problema não é tamanho de página — desiste e
+     * deixa o erro real subir.
+     */
+    static final int TAMANHO_MINIMO_PAGINA = 50;
 
     /**
      * Trava de segurança: nenhuma fonte real do catálogo hoje chega perto disso (a
@@ -67,14 +82,14 @@ final class PaginadorUrlGeoJson {
     }
 
     /** Monta a URL de uma página específica (offset já em número de registros, não em página). */
-    static String montarUrlPagina(String urlBase, Familia familia, int offset) {
+    static String montarUrlPagina(String urlBase, Familia familia, int offset, int tamanhoPagina) {
         if (familia == Familia.DESCONHECIDA) {
             return urlBase;
         }
         String urlLimpa = PARAMS_PAGINACAO.matcher(urlBase).replaceAll("");
         return switch (familia) {
-            case WFS -> urlLimpa + "&startIndex=" + offset + "&maxFeatures=" + TAMANHO_PAGINA;
-            case ARCGIS -> urlLimpa + "&resultOffset=" + offset + "&resultRecordCount=" + TAMANHO_PAGINA;
+            case WFS -> urlLimpa + "&startIndex=" + offset + "&maxFeatures=" + tamanhoPagina;
+            case ARCGIS -> urlLimpa + "&resultOffset=" + offset + "&resultRecordCount=" + tamanhoPagina;
             case DESCONHECIDA -> urlBase;
         };
     }

@@ -42,7 +42,7 @@ class PaginadorUrlGeoJsonTest {
     void montaUrlDePaginaWfsComStartIndexEMaxFeatures() {
         String url = PaginadorUrlGeoJson.montarUrlPagina(
                 "https://geoserver.car.gov.br/wfs?service=WFS&version=2.0.0&request=GetFeature",
-                PaginadorUrlGeoJson.Familia.WFS, 2000);
+                PaginadorUrlGeoJson.Familia.WFS, 2000, PaginadorUrlGeoJson.TAMANHO_PAGINA);
 
         assertThat(url).contains("&startIndex=2000");
         assertThat(url).contains("&maxFeatures=" + PaginadorUrlGeoJson.TAMANHO_PAGINA);
@@ -52,10 +52,23 @@ class PaginadorUrlGeoJsonTest {
     void montaUrlDePaginaArcgisComResultOffsetEResultRecordCount() {
         String url = PaginadorUrlGeoJson.montarUrlPagina(
                 "https://geo.iat.pr.gov.br/server/rest/services/Embargos/FeatureServer/9/query?f=geojson",
-                PaginadorUrlGeoJson.Familia.ARCGIS, 2000);
+                PaginadorUrlGeoJson.Familia.ARCGIS, 2000, PaginadorUrlGeoJson.TAMANHO_PAGINA);
 
         assertThat(url).contains("&resultOffset=2000");
         assertThat(url).contains("&resultRecordCount=" + PaginadorUrlGeoJson.TAMANHO_PAGINA);
+    }
+
+    @Test
+    void montaUrlDePaginaComTamanhoReduzido() {
+        // Achado ao vivo: a Malha Municipal (IBGE/IAT-PR) quebra em HTTP 500 com
+        // tamanho de página cheio - IngestaoGeoJsonExecutor reduz e passa um tamanho
+        // menor aqui, não sempre TAMANHO_PAGINA.
+        String url = PaginadorUrlGeoJson.montarUrlPagina(
+                "https://geo.iat.pr.gov.br/server/rest/services/Municipios/FeatureServer/0/query?f=geojson",
+                PaginadorUrlGeoJson.Familia.ARCGIS, 0, 200);
+
+        assertThat(url).contains("&resultOffset=0");
+        assertThat(url).contains("&resultRecordCount=200");
     }
 
     @Test
@@ -64,7 +77,7 @@ class PaginadorUrlGeoJsonTest {
         // pra provar que o parâmetro salvo foi REMOVIDO e não só coincidiu com o novo.
         String url = PaginadorUrlGeoJson.montarUrlPagina(
                 "https://terrabrasilis.dpi.inpe.br/ows?service=WFS&maxFeatures=500",
-                PaginadorUrlGeoJson.Familia.WFS, 0);
+                PaginadorUrlGeoJson.Familia.WFS, 0, PaginadorUrlGeoJson.TAMANHO_PAGINA);
 
         assertThat(url).containsOnlyOnce("maxFeatures=");
         assertThat(url).doesNotContain("maxFeatures=500");
@@ -74,7 +87,8 @@ class PaginadorUrlGeoJsonTest {
     @Test
     void fonteDesconhecidaVoltaComAUrlIntacta() {
         String urlOriginal = "https://exemplo.gov.br/dados/arquivo.geojson";
-        assertThat(PaginadorUrlGeoJson.montarUrlPagina(urlOriginal, PaginadorUrlGeoJson.Familia.DESCONHECIDA, 5000))
+        assertThat(PaginadorUrlGeoJson.montarUrlPagina(
+                        urlOriginal, PaginadorUrlGeoJson.Familia.DESCONHECIDA, 5000, PaginadorUrlGeoJson.TAMANHO_PAGINA))
                 .isEqualTo(urlOriginal);
     }
 }

@@ -108,6 +108,92 @@ class IngestaoGeoJsonExecutorTest {
         assertThat(captor.getValue()).hasSize(tamanhoPagina + 113);
     }
 
+    /**
+     * Reproduz o problema real do "IAT/PR - Embargos ICMBio": falhou com HTTP 500 e,
+     * minutos depois, a mesma URL exata funcionou de primeira — instabilidade
+     * passageira do servidor, sem nenhuma relação com tamanho de página. A retentativa
+     * no MESMO tamanho precisa resolver isso sem precisar reduzir nada.
+     */
+    @Test
+    void deveRepetirNoMesmoTamanhoQuandoFalhaForPassageira() {
+        String url = "https://geopr.iat.pr.gov.br/server/rest/services/Embargos/FeatureServer/5/query?f=geojson";
+        FonteDado fonte = FonteDado.builder().id(6L).urlOrigem(url).build();
+
+        when(httpFetchClient.buscarCorpoBruto(anyString()))
+                .thenThrow(new IllegalStateException("curl falhou (exit 22): HTTP 500"))
+                .thenReturn(featureCollectionDePontos(443));
+        when(writer.gravar(eq(fonte), anyString(), any()))
+                .thenReturn(LoteIngestao.builder().id(15L).status("CONCLUIDO").build());
+
+        executor.executar(fonte);
+
+        // As duas chamadas pedem o MESMO tamanho de página - não reduziu, só repetiu.
+        verify(httpFetchClient, org.mockito.Mockito.times(2))
+                .buscarCorpoBruto(org.mockito.ArgumentMatchers.contains(
+                        "resultRecordCount=" + PaginadorUrlGeoJson.TAMANHO_PAGINA));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
+        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        assertThat(captor.getValue()).hasSize(443);
+    }
+
+    /**
+     * Reproduz o problema real da Malha Municipal (IBGE/IAT-PR): o servidor devolve
+     * HTTP 500 tentando converter demais pra GeoJSON de uma vez só, mas funciona com
+     * uma página menor. O executor precisa reduzir e tentar de novo sozinho, sem
+     * precisar de configuração nenhuma por fonte.
+     */
+    @Test
+    void deveReduzirTamanhoDePaginaQuandoServidorFalharENaoDesistir() {
+        String url = "https://geo.iat.pr.gov.br/server/rest/services/Municipios/FeatureServer/0/query?f=geojson";
+        FonteDado fonte = FonteDado.builder().id(4L).urlOrigem(url).build();
+
+        when(httpFetchClient.buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultRecordCount=1000")))
+                .thenThrow(new IllegalStateException("curl falhou (exit 22): HTTP 500"));
+        when(httpFetchClient.buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultRecordCount=500")))
+                .thenReturn(featureCollectionDePontos(399));
+        when(writer.gravar(eq(fonte), anyString(), any()))
+                .thenReturn(LoteIngestao.builder().id(13L).status("CONCLUIDO").build());
+
+        executor.executar(fonte);
+
+        // 2x no tamanho cheio (retentativa no mesmo tamanho antes de reduzir - cobre
+        // instabilidade passageira do servidor), depois reduz e acerta de primeira.
+        verify(httpFetchClient, org.mockito.Mockito.times(2))
+                .buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultRecordCount=1000"));
+        verify(httpFetchClient).buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultRecordCount=500"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
+        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        assertThat(captor.getValue()).hasSize(399);
+    }
+
+    /**
+     * Achado ao vivo nos Autos de Infração do IBAMA (IAT/PR): muita autuação não tem
+     * coordenada (só atributos, {@code "geometry": null}) - o registro precisa ser
+     * gravado do mesmo jeito, só sem geometria.
+     */
+    @Test
+    void devePrepararRegistroSemGeometriaQuandoFeatureNaoTiverCoordenada() {
+        FonteDado fonte = FonteDado.builder().id(5L).urlOrigem("https://exemplo.gov.br/sem-geo.geojson").build();
+        String corpo = "{\"type\":\"FeatureCollection\",\"features\":["
+                + "{\"type\":\"Feature\",\"geometry\":null,\"properties\":{\"num_auto_infracao\":\"3938\"}}]}";
+        when(httpFetchClient.buscarCorpoBruto(anyString())).thenReturn(corpo);
+        when(writer.gravar(eq(fonte), anyString(), any()))
+                .thenReturn(LoteIngestao.builder().id(14L).status("CONCLUIDO").build());
+
+        executor.executar(fonte);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
+        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        assertThat(captor.getValue()).hasSize(1);
+        assertThat(captor.getValue().get(0).geometriaWkt()).isNull();
+        assertThat(captor.getValue().get(0).payloadJson()).contains("3938");
+    }
+
     /** Fonte sem família de paginação reconhecida continua com uma chamada só, como sempre foi. */
     @Test
     void naoPaginaFonteDeFamiliaDesconhecida() {

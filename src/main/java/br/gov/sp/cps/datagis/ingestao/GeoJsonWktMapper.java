@@ -18,6 +18,12 @@ import tools.jackson.databind.JsonNode;
  * fontes cadastradas (perímetro de imóvel, UC, embargo são polígono; foco de calor é
  * ponto). Qualquer outro tipo dá erro na hora, de propósito, pra não gravar um WKT
  * errado sem perceber — apareceu um tipo novo, é só adicionar aqui.
+ *
+ * <p>Geometria ausente ({@code null}) volta como {@code null}, não é erro — achado ao
+ * vivo nos Autos de Infração do IBAMA/IAT-PR: muita autuação não tem coordenada
+ * (infração sem geo-referência), só os atributos. O registro continua sendo gravado
+ * normalmente, com {@code geometria_wkt} vazio (mesmo comportamento já usado pra CSV
+ * sem lat/lon configurado).
  */
 @Component
 public class GeoJsonWktMapper {
@@ -26,6 +32,9 @@ public class GeoJsonWktMapper {
     private final WKTWriter wktWriter = new WKTWriter();
 
     public String paraWkt(JsonNode geometryNode) {
+        if (geometryNode == null || geometryNode.isMissingNode() || geometryNode.isNull()) {
+            return null;
+        }
         String tipo = geometryNode.path("type").asString();
         JsonNode coordinates = geometryNode.path("coordinates");
 
