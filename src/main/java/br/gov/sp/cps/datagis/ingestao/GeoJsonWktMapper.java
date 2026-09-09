@@ -4,6 +4,7 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LinearRing;
+import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
 import org.locationtech.jts.io.WKTWriter;
 import org.springframework.stereotype.Component;
@@ -13,8 +14,10 @@ import tools.jackson.databind.JsonNode;
  * Converte a geometria de uma feature GeoJSON pra WKT (texto), sem validar nada.
  * Feito com JTS puro, sem precisar do GeoTools so pra isso.
  *
- * So trata Polygon e MultiPolygon, que e o que o CAR manda. Qualquer outro tipo
- * da erro na hora, de proposito, pra nao gravar um WKT errado sem perceber.
+ * Trata Point, MultiPoint, Polygon e MultiPolygon — o que apareceu até agora entre as
+ * fontes cadastradas (perímetro de imóvel, UC, embargo são polígono; foco de calor é
+ * ponto). Qualquer outro tipo dá erro na hora, de propósito, pra não gravar um WKT
+ * errado sem perceber — apareceu um tipo novo, é só adicionar aqui.
  */
 @Component
 public class GeoJsonWktMapper {
@@ -27,12 +30,30 @@ public class GeoJsonWktMapper {
         JsonNode coordinates = geometryNode.path("coordinates");
 
         Geometry geometria = switch (tipo) {
+            case "Point" -> pontoDe(coordinates);
+            case "MultiPoint" -> multiPontoDe(coordinates);
             case "Polygon" -> polygonDe(coordinates);
             case "MultiPolygon" -> multiPolygonDe(coordinates);
             default -> throw new IllegalArgumentException(
                     "Tipo de geometria GeoJSON não suportado: " + tipo);
         };
         return wktWriter.write(geometria);
+    }
+
+    private Point pontoDe(JsonNode coordenadasPar) {
+        return geometryFactory.createPoint(coordenadaDe(coordenadasPar));
+    }
+
+    private Geometry multiPontoDe(JsonNode pontosCoords) {
+        Coordinate[] coordenadas = new Coordinate[pontosCoords.size()];
+        for (int i = 0; i < pontosCoords.size(); i++) {
+            coordenadas[i] = coordenadaDe(pontosCoords.get(i));
+        }
+        return geometryFactory.createMultiPointFromCoords(coordenadas);
+    }
+
+    private static Coordinate coordenadaDe(JsonNode par) {
+        return new Coordinate(par.get(0).doubleValue(), par.get(1).doubleValue());
     }
 
     private Polygon polygonDe(JsonNode polygonCoords) {
@@ -55,8 +76,7 @@ public class GeoJsonWktMapper {
     private LinearRing anelDe(JsonNode anelCoords) {
         Coordinate[] coordenadas = new Coordinate[anelCoords.size()];
         for (int i = 0; i < anelCoords.size(); i++) {
-            JsonNode par = anelCoords.get(i);
-            coordenadas[i] = new Coordinate(par.get(0).doubleValue(), par.get(1).doubleValue());
+            coordenadas[i] = coordenadaDe(anelCoords.get(i));
         }
         return geometryFactory.createLinearRing(coordenadas);
     }

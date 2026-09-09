@@ -39,7 +39,10 @@ public class FonteDado {
     @Column(name = "tipo_aquisicao", nullable = false, length = 20)
     private String tipoAquisicao;
 
-    @Column(name = "url_origem", length = 1000)
+    /** URL final, já com todo filtro que a fonte precisar resolvido (CQL_FILTER,
+     * outSR, bbox etc.) — expandir um circuito ou trocar um parâmetro é editar aqui,
+     * não mexer em código. */
+    @Column(name = "url_origem", length = 2000)
     private String urlOrigem;
 
     @Column(name = "cron_expressao", length = 100)
@@ -48,6 +51,15 @@ public class FonteDado {
     /** CSV | GEOJSON | SHAPEFILE | JSON. */
     @Column(name = "formato_esperado", length = 30)
     private String formatoEsperado;
+
+    /** Nome da coluna de latitude, só relevante pra fontes CSV com coordenada
+     * (ex.: focos de calor). Nula = sem geometria ou formato que já embute
+     * geometria (GeoJSON). */
+    @Column(name = "campo_geometria_lat", length = 100)
+    private String campoGeometriaLat;
+
+    @Column(name = "campo_geometria_lon", length = 100)
+    private String campoGeometriaLon;
 
     // A coluna no banco e NUMBER(1), nao BOOLEAN. Esse conversor faz o Hibernate
     // ler/gravar 0 e 1 em vez de esperar um tipo booleano nativo.
