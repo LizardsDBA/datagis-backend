@@ -75,4 +75,62 @@ class IngestaoGeoJsonExecutorTest {
         assertThat(registros.get(0).geometriaWkt()).startsWith("MULTIPOLYGON");
         assertThat(registros.get(1).payloadJson()).contains("Maringá");
     }
+
+    /**
+     * Reproduz o problema real dos Embargos IBAMA (IAT/PR): o servidor ArcGIS corta em
+     * ~2000 registros por página por padrão. Aqui simulamos uma página cheia (exatamente
+     * TAMANHO_PAGINA) seguida de uma página menor, e conferimos que TODOS os registros
+     * das duas páginas chegam no writer — não só a primeira.
+     */
+    @Test
+    void devePaginarFonteArcgisAteReceberTodosOsRegistros() {
+        String url = "https://geo.iat.pr.gov.br/server/rest/services/Embargos/FeatureServer/9/query?f=geojson";
+        FonteDado fonte = FonteDado.builder().id(2L).urlOrigem(url).build();
+
+        int tamanhoPagina = PaginadorUrlGeoJson.TAMANHO_PAGINA;
+        when(httpFetchClient.buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultOffset=0")))
+                .thenReturn(featureCollectionDePontos(tamanhoPagina));
+        when(httpFetchClient.buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultOffset=" + tamanhoPagina)))
+                .thenReturn(featureCollectionDePontos(113));
+
+        LoteIngestao loteEsperado = LoteIngestao.builder().id(11L).status("CONCLUIDO").build();
+        when(writer.gravar(eq(fonte), anyString(), any())).thenReturn(loteEsperado);
+
+        LoteIngestao resultado = executor.executar(fonte);
+
+        assertThat(resultado).isSameAs(loteEsperado);
+        verify(httpFetchClient).buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultOffset=0"));
+        verify(httpFetchClient).buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultOffset=" + tamanhoPagina));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
+        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        assertThat(captor.getValue()).hasSize(tamanhoPagina + 113);
+    }
+
+    /** Fonte sem família de paginação reconhecida continua com uma chamada só, como sempre foi. */
+    @Test
+    void naoPaginaFonteDeFamiliaDesconhecida() {
+        String url = "https://exemplo.gov.br/dados/arquivo.geojson";
+        FonteDado fonte = FonteDado.builder().id(3L).urlOrigem(url).build();
+        when(httpFetchClient.buscarCorpoBruto(url)).thenReturn(featureCollectionDePontos(5));
+        when(writer.gravar(eq(fonte), anyString(), any()))
+                .thenReturn(LoteIngestao.builder().id(12L).status("CONCLUIDO").build());
+
+        executor.executar(fonte);
+
+        verify(httpFetchClient, org.mockito.Mockito.times(1)).buscarCorpoBruto(anyString());
+    }
+
+    private String featureCollectionDePontos(int quantidade) {
+        StringBuilder features = new StringBuilder();
+        for (int i = 0; i < quantidade; i++) {
+            if (i > 0) {
+                features.append(',');
+            }
+            features.append("{\"type\":\"Feature\",\"geometry\":{\"type\":\"Point\",\"coordinates\":[-49.0,-25.0]},")
+                    .append("\"properties\":{\"id\":").append(i).append("}}");
+        }
+        return "{\"type\":\"FeatureCollection\",\"features\":[" + features + "]}";
+    }
 }
