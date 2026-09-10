@@ -22,7 +22,7 @@ SELECT ir.cod_imovel,
        (SELECT rc.id FROM ${goldSchema}.regra_calculo rc
         JOIN ${goldSchema}.tipo_indicador ti ON ti.id = rc.tipo_indicador_id
         WHERE ti.codigo = 'ISAP' AND rc.versao = 1),
-       'SEEDDEMO-' || SUBSTR(ir.cod_imovel, -8),
+       'SEEDDEMO-' || ir.cod_imovel,
        1
 FROM ${silverSchema}.imovel_rural ir
 WHERE ir.hash_origem = 'SEED_DEMO'

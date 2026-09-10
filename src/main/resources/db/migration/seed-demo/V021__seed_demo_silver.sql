@@ -94,9 +94,9 @@ FROM ${silverSchema}.area_protegida ap WHERE ap.codigo_origem LIKE 'DEMO-%';
 
 -- ---------- auto_infracao ----------
 INSERT INTO ${silverSchema}.auto_infracao (numero_auto, orgao_id, tipo_auto_infracao_id, tipo_infracao_id, tipo_pessoa_id, status_auto_infracao_id, municipio_id, cpf_cnpj_infrator, nome_infrator, data_auto, num_processo, valor_multa, houve_embargo, houve_apreensao, descricao, geometria, fonte_dado_id, lote_ingestao_id, registro_bruto_id, data_competencia, hash_origem)
-SELECT x.na, o.id, ta.id, ti.id, tp.id, st.id, m.id, x.doc, x.nm, x.dt, x.proc, x.val, x.emb, x.apr, x.desc, x.geom, 26, 0, 0, x.dt, 'SEED_DEMO'
+SELECT x.na, o.id, ta.id, ti.id, tp.id, st.id, m.id, x.doc, x.nm, x.dt, x.proc, x.val, x.emb, x.apr, x.descr, x.geom, 26, 0, 0, x.dt, 'SEED_DEMO'
 FROM (
-    SELECT 'DEMO-AI-001' na, 'IBAMA' org, 'MULTA_SIMPLES' tac, 'CONTRA_FLORA' tic, 'PF' tpc, 'LAVRADO' stc, 4106902 mun, '111.222.333-44' doc, 'JOAO DEMO DA SILVA' nm, DATE '2022-03-15' dt, '02017.000001/2022-01' proc, 5000 val, 1 emb, 0 apr, 'Supressao de vegetacao sem autorizacao (demo).' "DESC",
+    SELECT 'DEMO-AI-001' na, 'IBAMA' org, 'MULTA_SIMPLES' tac, 'CONTRA_FLORA' tic, 'PF' tpc, 'LAVRADO' stc, 4106902 mun, '111.222.333-44' doc, 'JOAO DEMO DA SILVA' nm, DATE '2022-03-15' dt, '02017.000001/2022-01' proc, 5000 val, 1 emb, 0 apr, 'Supressao de vegetacao sem autorizacao (demo).' descr,
            CAST(NULL AS SDO_GEOMETRY) geom FROM dual
     UNION ALL SELECT 'DEMO-AI-002', 'IBAMA', 'MULTA_DIARIA', 'POLUICAO', 'PJ', 'HOMOLOGADO', 4115200, '11.222.333/0001-44', 'AGRO DEMO LTDA', DATE '2021-09-01', '02017.000002/2021-02', 25000, 0, 1, 'Lancamento de efluente sem tratamento (demo).',
            SDO_GEOMETRY(2001,4674,SDO_POINT_TYPE(-51.95,-23.40,NULL),NULL,NULL) FROM dual
@@ -114,9 +114,9 @@ JOIN ${silverSchema}.municipio            m  ON m.cod_ibge = x.mun;
 
 -- ---------- embargo_ambiental (2 ligados a auto) ----------
 INSERT INTO ${silverSchema}.embargo_ambiental (numero_termo, orgao_id, auto_infracao_id, tipo_area_embargo_id, municipio_id, cpf_cnpj, nome_autuado, data_embargo, num_processo, num_auto_infracao, area_embargada_ha, descricao, geometria, fonte_dado_id, lote_ingestao_id, registro_bruto_id, data_competencia, hash_origem)
-SELECT x.nt, o.id, ai.id, tae.id, m.id, x.doc, x.nm, x.dt, x.proc, x.nai, x.area, x.desc, x.geom, 6, 0, 0, x.dt, 'SEED_DEMO'
+SELECT x.nt, o.id, ai.id, tae.id, m.id, x.doc, x.nm, x.dt, x.proc, x.nai, x.area, x.descr, x.geom, 6, 0, 0, x.dt, 'SEED_DEMO'
 FROM (
-    SELECT 'DEMO-EMB-001' nt, 'IBAMA' org, 'DEMO-AI-001' aik, 'DESMATAMENTO' taec, 4106902 mun, '111.222.333-44' doc, 'JOAO DEMO DA SILVA' nm, DATE '2022-03-20' dt, '02017.000001/2022-01' proc, '3938' nai, 4.2 area, 'Fica embargada a area do poligono descrito (demo).' "DESC",
+    SELECT 'DEMO-EMB-001' nt, 'IBAMA' org, 'DEMO-AI-001' aik, 'DESMATAMENTO' taec, 4106902 mun, '111.222.333-44' doc, 'JOAO DEMO DA SILVA' nm, DATE '2022-03-20' dt, '02017.000001/2022-01' proc, '3938' nai, 4.2 area, 'Fica embargada a area do poligono descrito (demo).' descr,
            SDO_GEOMETRY(2003,4674,NULL,SDO_ELEM_INFO_ARRAY(1,1003,1),SDO_ORDINATE_ARRAY(-49.335,-25.525, -49.325,-25.525, -49.325,-25.515, -49.335,-25.515, -49.335,-25.525)) geom FROM dual
     UNION ALL SELECT 'DEMO-EMB-002', 'IBAMA', 'DEMO-AI-004', 'DESMATAMENTO', 4119905, '22.333.444/0001-55', 'FAZENDA DEMO SA', DATE '2023-06-15', '02017.000004/2023-04', NULL, 12.7, 'Embargo por corte raso (demo).',
            SDO_GEOMETRY(2003,4674,NULL,SDO_ELEM_INFO_ARRAY(1,1003,1),SDO_ORDINATE_ARRAY(-50.09,-25.04, -50.05,-25.04, -50.05,-25.00, -50.09,-25.00, -50.09,-25.04)) FROM dual
