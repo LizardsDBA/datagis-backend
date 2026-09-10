@@ -56,7 +56,7 @@
 
 | Achado | Consequência no modelo |
 |---|---|
-| **Bronze acumulou duplicata** de ingestões repetidas (CAR 13.775 ≈ 3× o circuito de 3 municípios; Embargos IBAMA 6.155 ≈ 3×) | Transformação Silver deduplica **por chave natural, mantendo a ocorrência do maior `lote_ingestao_id`** |
+| **Bronze acumulou duplicata** de ingestões repetidas (CAR 13.775 ≈ 3× o circuito de 3 municípios; Embargos IBAMA 6.155 ≈ 3×) | Dedup na transformação por chave natural — ver a regra completa em §3.5 (não é só "maior lote vence") |
 | **Tipos inconsistentes entre linhas** (`json(scalar)` no dataguide — Embargos IBAMA tem `num_latitude_tad`, `qtd_area_embargada`, `dat_embargo` ora string, ora número, ora null) | Cast + validação na transformação; o que falhar vai pra `quarentena` com `tipo_erro = TIPO_DE_DADO_INVALIDO` |
 | **Datas em epoch millis** (`data: 1520899200000` nos Embargos/Autos ICMBio) | `tipo_dado = epoch_millis` no `mapeamento_coluna`; coluna Silver é `DATE`/`TIMESTAMP` |
 | **Área só serve reprojetada** — `Shape__Area` está em graus². IBAMA tem `qtd_area_embargada` em ha; **ICMBio não tem área em ha** | `area_ha` calculada de `SDO_GEOM.SDO_AREA(geometria, tol, 'unit=SQ_M')/10000` quando a fonte não trouxer |
@@ -120,6 +120,27 @@ Silver e o Oracle Spatial for validado de verdade (§5.5 do CLAUDE.md).
 `data_competencia`, `area_ha`, `fonte_dado_id`). Os calculadores de ISAP/IAE/IDesmat
 leem essa view, não as três tabelas.
 
+### 3.5. Dedup do Bronze e temporalidade da Silver
+
+**A Silver é _current-state_: guarda o estado mais recente conhecido de cada registro,
+não histórico.** Reprodutibilidade não vive aqui — vive na Gold (versão + geometria
+congelada, §5). Se um dia precisar de histórico de verdade (`valido_de`/`valido_ate`/
+`is_current`), é outra fatia e outra decisão.
+
+**Por que "último lote" funciona pra estas fontes:** cada lote das nossas fontes é um
+**snapshot completo** — `GetFeature` do WFS inteiro, arquivo CSV inteiro — nunca um
+delta incremental. Então "a versão do registro no lote mais recente" É o estado atual.
+O Bronze acumulou 3× o mesmo circuito só porque a ingestão rodou 3× durante os testes.
+
+**Regra de dedup:**
+1. Agrupa por chave natural (`cod_imovel`, `numero_termo` + `orgao`, etc.).
+2. Pega a ocorrência do **maior `lote_ingestao_id`** como base.
+3. **Se um campo estava preenchido num lote anterior e veio nulo/vazio no lote mais
+   recente**, isso não sobrescreve em silêncio: a linha vai pra `quarentena` com
+   `tipo_erro = REGRESSAO_DE_VALOR`, pro Operador decidir (RN007 — o sistema não
+   "inventa" nem escolhe sozinho qual valor é o certo).
+4. Chave natural repetida **dentro do mesmo lote** → `CHAVE_NATURAL_DUPLICADA`.
+
 ---
 
 ## 4. Camada Quarentena
@@ -144,7 +165,9 @@ Tabelas (`V015`): `q_municipio`, `q_imovel_rural`, `q_area_protegida`,
 Referências (schema `quarentena`):
 - `tipo_erro_quarentena`: `GEOMETRIA_NULA`, `GEOMETRIA_INVALIDA`, `GEOMETRIA_MALFORMADA`,
   `CAMPO_OBRIGATORIO_AUSENTE`, `TIPO_DE_DADO_INVALIDO`, `VALOR_FORA_DO_DOMINIO`,
-  `CHAVE_NATURAL_DUPLICADA`, `REFERENCIA_NAO_ENCONTRADA`, `FORA_DO_RECORTE_TERRITORIAL`.
+  `CHAVE_NATURAL_DUPLICADA`, `REFERENCIA_NAO_ENCONTRADA`, `FORA_DO_RECORTE_TERRITORIAL`,
+  `REGRESSAO_DE_VALOR` (campo preenchido em lote anterior veio nulo no lote atual —
+  `V017`, ver §3.5).
 - `status_analise_quarentena`: `PENDENTE`, `EM_ANALISE`, `CORRIGIDO_REPROCESSADO`,
   `DESCARTADO`.
 
@@ -217,7 +240,9 @@ destravar, "APP declarada" e "Reserva Legal declarada" são fenômeno novo →
   booleano/flag continua `NUMBER(1)` (§1.2).
 - **[DECIDIDO]** Quarentena = espelho frouxo do Silver + bloco de rejeição.
 - **[DECIDIDO]** `geometria SDO_GEOMETRY` SRID 4674; metadata/índice espacial em migration própria.
-- **[DECIDIDO]** Dedup do Bronze por chave natural, mantendo maior `lote_ingestao_id`.
+- **[DECIDIDO]** Silver é current-state (não SCD); reprodutibilidade é da Gold.
+- **[DECIDIDO]** Dedup do Bronze por chave natural (lote = snapshot completo); campo que
+  regride de preenchido→nulo entre lotes vai pra quarentena, não sobrescreve (§3.5).
 - **[DECIDIDO]** FK real só intra-schema; linhagem cross-schema é `NUMBER` sem constraint.
 - **[EM ABERTO]** Transformação Bronze→Silver (fatia futura) — nada implementado aqui.
 - **[EM ABERTO]** Reprojeção pra cálculo de área/distância — usar `SDO_GEOM` direto no
