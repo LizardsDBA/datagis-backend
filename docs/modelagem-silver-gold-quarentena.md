@@ -178,8 +178,25 @@ Regra de negócio (RN007): correção só manual, pelo Operador de Dados — o s
 
 ## 5. Camada Gold
 
-Indicador versionado + linhagem (CLAUDE.md §2.6, `V016`). Os 7 indicadores do desafio:
-ICV, IRL, IAPP, ISAP, IAE, IDesmat, IFC.
+A Gold deste projeto **não é uma Gold genérica** — é a camada de **produtos analíticos
+e de portal do desafio**. O portal (Vue + Leaflet) e os relatórios do auditor leem
+**só a Gold, nunca a Silver**. São 3 blocos:
+
+- **Bloco 1 — Indicadores versionados** (§5.1): o cálculo em si, congelado e rastreável.
+- **Bloco 2 — Camadas de mapa publicadas** (§5.2): todo polígono/ponto que o mapa do
+  Paraná desenha (município, imóvel, UC, TI, embargo, desmatamento, foco).
+- **Bloco 3 — Detalhe congelado por imóvel** (§5.3): o "boletim" do imóvel + os recortes
+  de sobreposição que produziram cada indicador.
+
+**Por que cópia da geometria, e não Silver ao vivo:** congelamento (a versão publicada
+mostra o mapa como estava no cálculo), desacoplamento (Silver pode estar no meio de uma
+transformação), geometria web simplificada ≠ geometria de cálculo, e o portal nunca
+depende do schema interno da Silver.
+
+### 5.1. Bloco 1 — Indicadores versionados (`V016`)
+
+Indicador versionado + linhagem (CLAUDE.md §2.6). Os 7 indicadores do desafio: ICV,
+IRL, IAPP, ISAP, IAE, IDesmat, IFC.
 
 | Tabela | Papel |
 |---|---|
@@ -190,7 +207,7 @@ ICV, IRL, IAPP, ISAP, IAE, IDesmat, IFC.
 
 `tipo_indicador` é tabela de referência (schema `gold`) semeada com os 7.
 
-### Cobertura hoje
+#### Cobertura hoje
 
 | Indicador | Fonte Silver | Status |
 |---|---|---|
@@ -201,6 +218,18 @@ ICV, IRL, IAPP, ISAP, IAE, IDesmat, IFC.
 | ICV / IRL / IAPP | — | ❌ sem fonte (dependem da API SICAR Temas, credenciamento externo) |
 
 Os 3 sem fonte já têm `tipo_indicador` semeado e coluna na Gold — só não dá pra popular.
+
+---
+
+## 5-bis. O que cada tela lê
+
+| Tela | Fonte |
+|---|---|
+| Mapa do PR (municípios, propriedades, todas as camadas temáticas) | `gold.feature_publicada` + `gold.mapa_camada` (§5.2) |
+| Detalhe do imóvel (boletim + sobreposições destacadas) | `gold.imovel_publicado` + `gold.sobreposicao_publicada` (§5.3) |
+| Painel de indicadores | `gold.indicador_resultado` + `gold.imovel_publicado` |
+| Relatório / export do auditor | Bloco 3 + `indicador_versao_fonte` + `regra_calculo` (tudo congelado) |
+| Catálogo de fontes / Execuções | `controle` (`fonte_dado`, `lote_ingestao`, `pipeline_execucao`) — metadado operacional, não Gold |
 
 ---
 
