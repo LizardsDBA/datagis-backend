@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 
-/** Cadastra e lista as fontes de dados. */
+/** Cadastra, edita e lista as fontes de dados. */
 @Service
 public class FonteDadoService {
 
@@ -19,10 +19,7 @@ public class FonteDadoService {
     }
 
     public FonteDado cadastrar(FonteDadoRequest dados) {
-        if (!TIPOS_ACEITOS.contains(dados.tipoAquisicao())) {
-            throw new IllegalArgumentException(
-                    "tipoAquisicao precisa ser um destes: " + TIPOS_ACEITOS);
-        }
+        validarTipoAquisicao(dados.tipoAquisicao());
 
         FonteDado fonte = FonteDado.builder()
                 .nome(dados.nome())
@@ -31,6 +28,8 @@ public class FonteDadoService {
                 .urlOrigem(dados.urlOrigem())
                 .cronExpressao(dados.cronExpressao())
                 .formatoEsperado(dados.formatoEsperado())
+                .campoGeometriaLat(dados.campoGeometriaLat())
+                .campoGeometriaLon(dados.campoGeometriaLon())
                 .ativo(dados.ativo() != null ? dados.ativo() : true)
                 .dataAdd(LocalDateTime.now())
                 .build();
@@ -38,7 +37,36 @@ public class FonteDadoService {
         return repository.save(fonte);
     }
 
+    public FonteDado buscarPorId(Long id) {
+        return repository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Fonte de dado " + id + " não encontrada"));
+    }
+
+    public FonteDado atualizar(Long id, FonteDadoRequest dados) {
+        validarTipoAquisicao(dados.tipoAquisicao());
+
+        FonteDado fonte = buscarPorId(id);
+        fonte.setNome(dados.nome());
+        fonte.setOrgao(dados.orgao());
+        fonte.setTipoAquisicao(dados.tipoAquisicao());
+        fonte.setUrlOrigem(dados.urlOrigem());
+        fonte.setCronExpressao(dados.cronExpressao());
+        fonte.setFormatoEsperado(dados.formatoEsperado());
+        fonte.setCampoGeometriaLat(dados.campoGeometriaLat());
+        fonte.setCampoGeometriaLon(dados.campoGeometriaLon());
+        fonte.setAtivo(dados.ativo() != null ? dados.ativo() : fonte.getAtivo());
+
+        return repository.save(fonte);
+    }
+
     public List<FonteDado> listar() {
         return repository.findAll();
+    }
+
+    private void validarTipoAquisicao(String tipoAquisicao) {
+        if (!TIPOS_ACEITOS.contains(tipoAquisicao)) {
+            throw new IllegalArgumentException(
+                    "tipoAquisicao precisa ser um destes: " + TIPOS_ACEITOS);
+        }
     }
 }

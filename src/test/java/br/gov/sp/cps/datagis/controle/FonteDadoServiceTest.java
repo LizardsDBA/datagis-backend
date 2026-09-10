@@ -23,7 +23,7 @@ class FonteDadoServiceTest {
         when(repository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
 
         FonteDadoRequest dados = new FonteDadoRequest(
-                "IBAMA - Embargos", "IBAMA", "UPLOAD_MANUAL", null, null, "CSV", null);
+                "IBAMA - Embargos", "IBAMA", "UPLOAD_MANUAL", null, null, "CSV", null, null, null);
 
         FonteDado fonte = service.cadastrar(dados);
 
@@ -35,7 +35,7 @@ class FonteDadoServiceTest {
     void deveRecusarTipoDeAquisicaoDesconhecido() {
         FonteDadoService service = new FonteDadoService(repository);
         FonteDadoRequest dados = new FonteDadoRequest(
-                "Teste", null, "QUALQUER_COISA", null, null, null, null);
+                "Teste", null, "QUALQUER_COISA", null, null, null, null, null, null);
 
         assertThatThrownBy(() -> service.cadastrar(dados))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -48,5 +48,31 @@ class FonteDadoServiceTest {
         when(repository.findAll()).thenReturn(List.of(fonte));
 
         assertThat(service.listar()).containsExactly(fonte);
+    }
+
+    @Test
+    void deveAtualizarUmaFonteExistente() {
+        FonteDadoService service = new FonteDadoService(repository);
+        FonteDado existente = FonteDado.builder().id(1L).nome("Antigo").tipoAquisicao("UPLOAD_MANUAL").build();
+        when(repository.findById(1L)).thenReturn(java.util.Optional.of(existente));
+        when(repository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
+
+        FonteDadoRequest dados = new FonteDadoRequest(
+                "Novo nome", "Órgão", "API_REST", "https://x", "0 0 3 * * ?", "GEOJSON", null, null, false);
+
+        FonteDado atualizado = service.atualizar(1L, dados);
+
+        assertThat(atualizado.getNome()).isEqualTo("Novo nome");
+        assertThat(atualizado.getTipoAquisicao()).isEqualTo("API_REST");
+        assertThat(atualizado.getAtivo()).isFalse();
+    }
+
+    @Test
+    void deveFalharAoBuscarFonteInexistente() {
+        FonteDadoService service = new FonteDadoService(repository);
+        when(repository.findById(99L)).thenReturn(java.util.Optional.empty());
+
+        assertThatThrownBy(() -> service.buscarPorId(99L))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

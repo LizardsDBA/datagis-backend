@@ -11,7 +11,10 @@ public record FonteDadoResponse(
         String urlOrigem,
         String cronExpressao,
         String formatoEsperado,
+        String campoGeometriaLat,
+        String campoGeometriaLon,
         Boolean ativo,
+        LocalDateTime ultimaExecucaoEm,
         LocalDateTime dataAdd) {
 
     public static FonteDadoResponse de(FonteDado fonte) {
@@ -23,7 +26,10 @@ public record FonteDadoResponse(
                 fonte.getUrlOrigem(),
                 fonte.getCronExpressao(),
                 fonte.getFormatoEsperado(),
+                fonte.getCampoGeometriaLat(),
+                fonte.getCampoGeometriaLon(),
                 fonte.getAtivo(),
+                fonte.getUltimaExecucaoEm(),
                 fonte.getDataAdd());
     }
 }
