@@ -253,9 +253,12 @@ do algoritmo de hashing ainda não foi feito.
 - `pipeline_execucao` — histórico de execuções (substitui o que seria "DAG run" do Airflow)
 - `log_auditoria` — **append-only**, sem UPDATE/DELETE possível (RN025 do DRN)
 
-### 2.8. `fonte_dado` — extensão para agendamento automático
+### 2.8. `fonte_dado` — extensão para agendamento automático e ingestão genérica
 Discutido: além do cadastro básico, a fonte de dado pode ter aquisição automatizada
-(API ou download por URL) com frequência configurável:
+(API ou download por URL) com frequência configurável.
+
+**Estado real da tabela em 2026-09-09** (evoluiu por `V005__generalizar_fonte_dado.sql`,
+já refletindo a arquitetura de ingestão genérica por formato — ver §5.8):
 
 ```sql
 CREATE TABLE controle.fonte_dado (
@@ -263,23 +266,31 @@ CREATE TABLE controle.fonte_dado (
     nome                VARCHAR2(200) NOT NULL,
     orgao               VARCHAR2(200),
     tipo_aquisicao      VARCHAR2(20) NOT NULL, -- UPLOAD_MANUAL | API_REST | DOWNLOAD_URL
-    url_origem          VARCHAR2(1000),        -- nulo se UPLOAD_MANUAL
-    cron_expressao      VARCHAR2(100),         -- só relevante se automatizado
+    url_origem          VARCHAR2(2000),        -- widened na V005; já leva todo filtro
+                                                -- resolvido (CQL_FILTER, outSR, bbox...)
+    cron_expressao      VARCHAR2(100),         -- só relevante se automatizado (Quartz
+                                                -- ainda não lê este campo — ver §3.2)
     formato_esperado    VARCHAR2(30),          -- CSV | GEOJSON | SHAPEFILE | JSON
-    ativo               NUMBER(1) DEFAULT 1,
+    campo_geometria_lat VARCHAR2(100),         -- só CSV com coordenada (ex.: focos de calor)
+    campo_geometria_lon VARCHAR2(100),
+    ativo               NUMBER(1) DEFAULT 1,   -- Java usa @Convert(NumericBooleanConverter)
     ultima_execucao_em  TIMESTAMP,
     proxima_execucao_em TIMESTAMP,
     data_add            TIMESTAMP DEFAULT SYSTIMESTAMP
 );
 ```
 
-**Risco em aberto, ainda não resolvido:** para fontes `DOWNLOAD_URL`, como detectar se o
-arquivo baixado mudou desde a última execução (evitar reprocessar/duplicar lote se o
-conteúdo é idêntico)? Provável solução: hash do arquivo baixado comparado ao
-`hash_arquivo` do último `lote_ingestao` da mesma fonte — mas o desenho exato do fluxo
-ainda não foi feito. Isso amarra com RN018 (data de competência).
+CRUD completo já existe: `POST/GET/PUT /api/fontes`, `GET /api/fontes/{id}` — ver §5.8.
+
+**Risco que ERA aberto, agora resolvido:** detecção de "a fonte mudou desde a última
+execução" — implementado via hash do conteúdo relevante da resposta (não do envelope
+inteiro — ver a pegadinha do `timeStamp` do WFS registrada em §9.5/§5.8) comparado ao
+hash do último `lote_ingestao` da mesma fonte. Funciona igual para `API_REST` e (em
+tese) `DOWNLOAD_URL`; `cron_expressao`/agendamento automático via Quartz **ainda não foi
+ligado** — hoje toda execução é disparo manual via `POST /api/fontes/{id}/executar`.
 
 ---
+
 
 ## 3. Decisões de Infraestrutura e Orquestração
 
@@ -305,6 +316,13 @@ sobrevivendo a restart da aplicação.
   dinâmico (criar/atualizar/remover em runtime via `scheduler.rescheduleJob(...)`), com
   `JobStore` persistido em banco (`quartz-jobstore-jdbc`), sobrevivendo a restarts.
   Confirmar suporte oficial do Quartz JobStore para Oracle antes de gerar o schema dele.
+- **Status real em 2026-09-09: ainda não ligado.** A dependência está no `pom.xml` e o
+  contexto Spring sobe com ela sem conflito (confirmado contra o Oracle real), mas
+  nenhum `Job`/`Trigger` foi criado, o schema `quartz` (§2.1) segue vazio (sem as
+  migrations `tables_oracle.sql`) e `fonte_dado.cron_expressao` não é lido por
+  ninguém ainda. Toda execução de ingestão hoje é **disparo manual** via
+  `POST /api/fontes/{id}/executar` (§5.8). Ligar o Quartz de verdade é o próximo passo
+  óbvio de agendamento, não feito ainda.
 
 ### 3.3. Orquestração do pipeline — **[DECIDIDO: Spring Batch]**
 Sem Airflow, o pipeline Bronze→Silver→Gold precisa de reinício-do-meio, processamento em
@@ -321,6 +339,13 @@ lote, retry e desvio de registro ruim. O **Quartz só resolve "quando"**; quem r
   ao Batch por um `job_execution_id`. Não tentar servir a tela de auditoria direto das
   tabelas do Batch.
 - Confirmar no spike (§5.x) que Spring Batch 6 roda liso no Boot 4.1.1.
+- **Status real em 2026-09-09: mesma situação do Quartz — dependência presente, contexto
+  sobe sem conflito, mas nenhum `Job`/`Step` foi escrito e o schema `batch` segue vazio.**
+  Hoje `LoteIngestaoWriter` (§5.8) faz esse papel na marra: grava registro a registro
+  (sem chunk), sem retry nem skip automático de linha ruim — a resiliência que existe
+  (geometria nula/malformada não derruba o lote — §9.10) foi implementada manualmente no
+  executor, não via Spring Batch. Migrar pra `Job`/`Step`/`SkipListener` de verdade é
+  trabalho futuro, não uma reescrita urgente — o comportamento atual já cobre a fatia 1.
 
 ### 3.4. Nuvem / hospedagem — **[ADIADO]**
 Decisão da equipe: **não definir onde hospedar agora.** Certezas: o banco **é** Oracle
@@ -473,9 +498,25 @@ em `localhost:5173` e o proxy `/api` alcança o backend pela rede Docker.
 |---|---|
 | `docker-compose.yml` (raiz) | define os 3 serviços |
 | `Dockerfile.dev` (raiz) | imagem dev do backend: `eclipse-temurin:21-jdk-jammy` + `./mvnw` |
-| `frontend/Dockerfile.dev` | imagem dev do frontend: `node:22-slim` + `npm run dev` |
+| `datagis-frontend/Dockerfile.dev` | imagem dev do frontend: `node:22-slim` + `npm run dev` |
 | `infra/oracle-init/01-criar-schemas.sh` | cria os 6 schemas extras + grants `ANY` ao `CONTROLE` (ver §2.1) |
-| `.env.example` (raiz, rastreado) | modelo de variáveis — copiar para `.env` (gitignored) |
+| `.env.example` (raiz, rastreado) | modelo de variáveis |
+| `.env` (raiz) | **[DECIDIDO 2026-09-09] passou a ser rastreado no git, de propósito** — ver nota abaixo |
+
+**`frontend/` renomeado para `datagis-frontend/`** (commit `DATAGIS-17`, 2026-09-07) —
+mesmo princípio de antes (repositório git próprio, totalmente fora do repo do backend),
+só o nome da pasta mudou; `docker-compose.yml` já aponta pro caminho novo. As duas
+entradas (`frontend/` e `datagis-frontend/`) seguem no `.gitignore` do backend.
+
+**`.env` commitado — mudança de decisão, deliberada:** a linha que ignorava `.env` foi
+comentada no `.gitignore` (`DATAGIS-17`) e o arquivo real (com as senhas de
+desenvolvimento do Oracle) está no repositório desde 2026-09-07. **Confirmado como
+decisão consciente da equipe, não acidente:** essas credenciais valem só para o Oracle
+local do `docker compose` (nunca saem da máquina de quem sobe o ambiente); quando a
+hospedagem em nuvem entrar (§3.4), as credenciais de lá são outras e não vêm daqui. Isso
+inverte a recomendação genérica de "nunca commitar `.env`" citada em versões anteriores
+deste arquivo — mantendo aqui só pra registrar que foi avaliado e decidido, não
+esquecido.
 
 - **Modo dev, não "empacotado":** backend e frontend rodam a toolchain
   (`./mvnw spring-boot:run`, `npm run dev`) com o **código-fonte montado do host**
@@ -492,10 +533,15 @@ em `localhost:5173` e o proxy `/api` alcança o backend pela rede Docker.
   compose — Spring Boot faz o binding automático, **sem precisar de
   `application-docker.properties`** por enquanto.
 - `frontend`: `node_modules` em **volume nomeado** `frontend-node-modules` (nunca bind
-  mount do host); comando reinstala só se o volume estiver vazio
-  (`[ -d node_modules/vite ] || npm install`). Vite com `server.proxy` mandando `/api` →
-  `http://backend:8080` (sem CORS em dev, sem `rewrite` — os controllers já nascem com
-  `/api/...` no `@RequestMapping`, ex. §5.2).
+  mount do host); comando **sempre roda `npm install`** antes do `npm run dev`
+  (`sh -c "npm install; npm run dev -- --host 0.0.0.0"` — **[CORRIGIDO 2026-09-09]**,
+  era `[ -d node_modules/vite ] || npm install`, que só instalava na primeira vez;
+  quebrou quando `vue-router` foi adicionado ao `package.json` depois do volume já ter
+  `vite` — o container nunca rodava o install de novo e a tela quebrava com "Failed to
+  resolve import vue-router". `npm install` sem nada novo pra instalar é rápido
+  (<1s), então rodar sempre não pesa no dia a dia). Vite com `server.proxy` mandando
+  `/api` → `http://backend:8080` (sem CORS em dev, sem `rewrite` — os controllers já
+  nascem com `/api/...` no `@RequestMapping`, ex. §5.2).
 - Profiles Spring: `dev` (backend na IDE do host → `localhost:1521`) e `docker` (dentro
   do compose → host `oracle`, já setado via `SPRING_PROFILES_ACTIVE` no compose). Os dois
   cenários funcionam sem trocar código.
@@ -504,7 +550,8 @@ em `localhost:5173` e o proxy `/api` alcança o backend pela rede Docker.
   reseta os schemas, útil se o init script mudar).
 
 **Cuidados de WSL (toda a equipe está em WSL/Ubuntu):**
-- **Repositório vive no filesystem do WSL** (`~/projetos/datagis`), nunca em `/mnt/c/...`
+- **Repositório vive no filesystem do WSL** (`~/projetos/datagis-backend` — pasta
+  renomeada desde a versão anterior deste arquivo), nunca em `/mnt/c/...`
   — bind mount de `/mnt/c` para container é I/O lento.
 - File watching por **polling**: `server.watch.usePolling: true` já configurado no
   `vite.config.js`; considerar o mesmo para DevTools do backend quando ele entrar.
@@ -525,7 +572,12 @@ sentido**), uma de cada vez, em vez do padrão "todo o backend, depois todo o fr
 Sempre que a fatia tiver algo demonstrável na interface, o frontend correspondente entra
 na mesma fatia.
 
-### 5.2. Escopo da primeira fatia — **[DECIDIDO]**
+### 5.2. Escopo da primeira fatia — **[DECIDIDO, HISTÓRICO — superado pela §5.8]**
+> Esta seção documenta a decisão original da fatia 1 (CAR/PR apenas). Em 2026-09-08/09
+> essa arquitetura foi generalizada para qualquer fonte GeoJSON ou CSV cadastrada — ver
+> **§5.8, que é o desenho vigente**. Mantido aqui por valor histórico/rastreabilidade da
+> decisão; não usar como referência do estado atual do código.
+
 Prioridade explícita da equipe: **acessar o sistema e salvar dados brutos, e somente
 isso.** Login, RBAC completo e tela de cadastro de fontes ficam para depois.
 
@@ -617,16 +669,83 @@ https://geoserver.car.gov.br/geoserver/sicar/wfs?service=WFS&version=2.0.0&reque
   (Quartz) entrar. O hash do corpo recebido alimenta a detecção de "mudou desde a
   última execução" (§2.8 / RN018).
 
-### 5.7. Catálogo de fontes de dados do desafio — **[NOVO, ver `docs/fontes-de-dados.md`]**
-Documento dedicado (não neste arquivo, pelo tamanho) com o levantamento e teste real, em
-2026-09-04, de **todos os endpoints/serviços citados na página "Dados necessários, fontes
-e formatos" do desafio oficial da Visiona** — CAR, IBGE (malha e biomas), ICMBio/MMA
-(UCs), FUNAI (Terras Indígenas), INCRA, IBAMA (embargos), INPE PRODES (desmatamento) e
-INPE Queimadas (focos de calor). Cada fonte tem: endpoint testado, resultado real
-(contagem, CRS, atributos), e observações de acesso (ex.: FUNAI exige WFS 1.1.0 + User-
-Agent de navegador; embargos do IBAMA têm o link publicado quebrado agora; INCRA não tem
-WFS estável encontrado). **8 das 10 fontes têm caminho técnico confirmado**; os 2
-pendentes (INCRA e APP/RL/vegetação do CAR) não travam a fatia 1.
+### 5.7. Catálogo de fontes de dados do desafio — **[ver `docs/fontes-de-dados.md` (v1) e `docs/fontes-de-dados-v2.md` (v2)]**
+Documentos dedicados (não neste arquivo, pelo tamanho) com o levantamento e teste real
+de **todos os endpoints/serviços citados na página "Dados necessários, fontes e
+formatos" do desafio oficial da Visiona**.
+
+- **v1 (2026-09-04):** primeiro levantamento — CAR, IBGE (malha e biomas), ICMBio/MMA
+  (UCs), FUNAI (Terras Indígenas), INCRA, IBAMA (embargos), INPE PRODES (desmatamento) e
+  INPE Queimadas (focos de calor). 8 de 10 fontes com caminho técnico confirmado.
+- **v2 (2026-09-08):** aprofundamento — mais fontes reais via geoportal do PR (IAT/PR,
+  ArcGIS REST), incluindo Embargos/Autos de Infração (IBAMA e ICMBio), Malha Municipal,
+  Terras Indígenas via fonte alternativa, PRODES Mata Atlântica. Descobriu também a API
+  oficial do CAR para APP/RL (`api-sicar-tema`), que existe mas exige credenciamento
+  OAuth2 + allowlist de IP no Serpro — **fora do alcance da equipe sem apoio externo**.
+- **`docs/checklist-cobertura-fontes.md` (2026-09-08):** cruzamento linha a linha da
+  tabela oficial do desafio contra v1+v2, com veredito honesto por severidade. **Gaps
+  reais que seguem sem solução:** APP declarada e Reserva Legal do CAR (IAPP e IRL não
+  têm fonte de dado funcionando até hoje, por causa do bloqueio de credenciamento acima).
+  Demais linhas: atendidas de forma exata ou com formato de acesso equivalente
+  (ex.: GeoJSON via API no lugar de `.shp` estático — mesma fonte/órgão, canal diferente).
+
+### 5.8. Arquitetura de ingestão genérica por formato — **[DECIDIDO e implementado, 2026-09-08/09 — substitui a lógica CAR-específica da §5.2/§5.6]**
+
+A fatia 1 (§5.2) nasceu com um `IngestaoCarService` que só sabia processar o CAR. Ele
+foi generalizado em duas etapas (`DATAGIS-14` e `LIZARDS-5`) até virar: **qualquer fonte
+cadastrada com `formatoEsperado` conhecido roda sem escrever código novo.**
+
+**Camadas (pacote `br.gov.sp.cps.datagis.ingestao`):**
+
+| Classe | Papel |
+|---|---|
+| `IngestaoExecutor` | Interface — `suporta(FonteDado)` e `executar(FonteDado)`. Cada implementação decide sozinha se sabe processar aquela fonte. |
+| `IngestaoExecucaoService` | Ponto único de disparo (`POST /api/fontes/{id}/executar`): carrega a `FonteDado`, acha o executor certo entre os registrados (Spring injeta a lista), atualiza `ultima_execucao_em`. Fonte sem executor compatível → `400` com mensagem clara, nunca `500`. |
+| `IngestaoGeoJsonExecutor` | Suporta `formatoEsperado=GEOJSON` — cobre WFS (GeoServer) **e** ArcGIS REST (que já devolve GeoJSON padrão com `f=geojson`, sem parser próprio). Busca **todas as páginas** antes de gravar (ver `PaginadorUrlGeoJson`). |
+| `IngestaoCsvExecutor` | Suporta `formatoEsperado=CSV` — parser que respeita aspas/vírgula dentro de campo; geometria opcional via `campo_geometria_lat`/`campo_geometria_lon` (§2.8). |
+| `PaginadorUrlGeoJson` | Detecta a família do serviço **pela própria URL cadastrada** — WFS (`service=WFS`, pagina com `startIndex`+`maxFeatures`) ou ArcGIS REST (`FeatureServer`/`MapServer`, pagina com `resultOffset`+`resultRecordCount`). Família desconhecida (ex.: arquivo estático) não tenta paginar o que não dá pra paginar. |
+| `HttpFetchClient` | Generaliza o antigo `CarWfsClient` — URL é parâmetro, não fixa no CAR; User-Agent de navegador por padrão (necessário pra fontes com WAF, ex. FUNAI — ver `docs/fontes-de-dados.md`). |
+| `LoteIngestaoWriter` | Ciclo de vida comum a qualquer formato: hash do conteúdo, detecção de "sem mudança" (§2.8), criação do `lote_ingestao`, gravação registro a registro em `registro_bruto`, fechamento do lote. |
+| `GeoJsonWktMapper` | GeoJSON→WKT em JTS puro (sem GeoTools). Suporta `Polygon`/`MultiPolygon`/`Point`/`MultiPoint` (os dois últimos entraram ao vivo testando focos de calor). |
+| `RegistroPreparado` / `IngestaoResultado` | DTOs internos do pipeline de ingestão. |
+
+**Resiliência — 3 bugs achados ao vivo contra fontes reais, não em teste unitário:**
+1. **Geometria ausente não é erro.** Feature sem coordenada (ex.: autuação do IBAMA sem
+   georreferência) grava o registro normalmente, só sem `geometria_wkt`.
+2. **Geometria malformada não derruba o lote inteiro.** Um polígono nulo dentro de um
+   `MultiPolygon` (achado nos Embargos ICMBio) lançava `NullPointerException` — **não**
+   era `IllegalStateException`, então nem o `TratadorDeErro` pegava, virava `500` cru do
+   Spring. Corrigido: falha ao converter geometria → grava sem WKT, mesmo princípio do
+   item 1, não derruba o lote.
+3. **Paginação de verdade.** Sem paginar, cada servidor aplicava seu próprio limite
+   (ArcGIS corta em ~2000 por padrão) e a ingestão perdia o resto **silenciosamente**.
+   Confirmado ao vivo nos Embargos IBAMA (IAT/PR): faltavam ~113 de 2.113 registros
+   antes da correção.
+4. **Retentativa antes de reduzir tamanho de página.** Falha intermitente de servidor
+   (confirmado no "Embargos ICMBio": falhou, minutos depois funcionou de primeira com a
+   mesma URL) → tenta de novo no mesmo tamanho antes de reduzir pela metade (isso cobre
+   servidor que não aguenta converter muita geometria pesada numa página só, achado na
+   Malha Municipal do IBGE/IAT-PR, que quebra com HTTP 500 acima de ~200-500 polígonos).
+
+**`TratadorDeErro`** (`@RestControllerAdvice`, pacote `config`) transforma
+`IllegalArgumentException` em `400` e `IllegalStateException` (falha de ingestão) em
+`502`, sempre com a mensagem real no corpo — antes disso, qualquer falha de ingestão
+virava `500` genérico do Spring sem detalhe nenhum, escondendo qual fonte falhou e por quê.
+
+**Fontes semeadas hoje (migrations V006/V009), todas rodando pelo executor GEOJSON
+genérico, sem código específico por fonte:** CAR/PR, ICMBio (UCs), PRODES Mata Atlântica,
+Focos de Calor (via geoportal PR), Embargos IBAMA e ICMBio (via IAT/PR, ArcGIS REST),
+Autos de Infração IBAMA e ICMBio, Malha Municipal IBGE, Terras Indígenas FUNAI (via
+IAT/PR) — mais 1 CSV do INPE semeado só pra provar o caminho `IngestaoCsvExecutor`
+(152 mil linhas, validado por teste unitário, não rodado ao vivo por desproporção de
+volume sem paginação de CSV ainda).
+
+**CRUD de fontes agora completo:** `POST`, `GET` (lista), `GET /{id}`, `PUT /{id}` —
+fonte cadastrada é editável (útil pra corrigir URL/circuito sem nova migration).
+
+**Testes:** 36 automatizados (`GeoJsonWktMapperTest`, `IngestaoCsvExecutorTest`,
+`IngestaoGeoJsonExecutorTest`, `LoteIngestaoWriterTest`, `PaginadorUrlGeoJsonTest`,
+`TratadorDeErroTest`, `FonteDadoServiceTest`), `BUILD SUCCESS`.
 
 ### 5.3. Spring Security — bypass temporário
 A dependência `spring-boot-starter-security` fica no projeto (para não reconfigurar
@@ -668,23 +787,38 @@ genéricos de banco de dados por camada, o que sustenta essa leitura. A interfac
 `.zip`/`.geojson` como baixado, se um dia precisar guardá-lo à parte do payload
 estruturado) — não é o mecanismo de armazenamento da zona Bronze em si.
 
-### 5.5. Spike de compatibilidade — **[PARCIALMENTE FEITO]**
+### 5.5. Spike de compatibilidade — **[PARCIALMENTE FEITO, atualizado 2026-09-09]**
 ½–1 dia, uma pessoa, branch descartável. Objetivo: provar que a stack bleeding-edge
 (Boot 4.1.1 / Framework 7 / Jakarta 11 / Hibernate 7.4 / Jackson 3) funciona ANTES de
 construir em cima:
 1. ✅ `mvn dependency:tree` — feito em 2026-09-04 (§4.4): **sem conflito de versão
    reportado**, todas as libs (hibernate-spatial, GeoTools 35.1, jts-core 1.20.0,
    springdoc 3.0.3, Quartz, Spring Batch) resolveram limpo.
-2. ⬜ 1 teste: Testcontainer `gvenzl/oracle-free` + Hibernate salva/lê um `SDO_GEOMETRY`
-   (JTS `Polygon`) round-trip.
-3. ⬜ 1 teste: GeoTools abre um `.shp` pequeno e lê a primeira feição.
-4. ⬜ Subir app, abrir `/swagger-ui.html` (springdoc 3.x).
-5. ⬜ Spring Batch: job trivial roda no Boot 4.1.1 (Spring Batch 6 / Framework 7).
-6. ⬜ Anotar o que quebrou / versões pinadas. Se GeoTools conflitar → plano B já em §4.4.
+2. ❓ **Não é mais necessário do jeito que foi desenhado.** `RegistroBruto.geometriaWkt`
+   é `CLOB`/texto (§2.2, decisão consciente — Bronze não tipa geometria), não
+   `SDO_GEOMETRY`. `hibernate-spatial` está no `pom.xml` e o contexto sobe com ele sem
+   conflito (confirmado contra o Oracle real, DATAGIS-14), mas **nenhum código do
+   projeto até hoje mapeia uma coluna `SDO_GEOMETRY`** — o round-trip real só vira
+   obrigatório quando a Silver (§2.5) nascer com colunas espaciais tipadas.
+3. ⬜ 1 teste: GeoTools abre um `.shp` pequeno e lê a primeira feição — **ainda não
+   necessário**: todas as fontes reais ligadas até hoje são GeoJSON ou CSV (§5.8),
+   nenhuma usa `gt-shapefile` de fato.
+4. ✅ **Feito** (DATAGIS-14) — app sobe, `/swagger-ui.html` confirmado com springdoc 3.x.
+5. ⬜ Spring Batch: job trivial ainda não escrito — ver status real em §3.3 (dependência
+   presente, não ligada; `LoteIngestaoWriter` faz esse papel na marra por enquanto).
+6. Achado ao vivo, fora do que os itens 1-5 previam: **Jackson 3 mudou de pacote**
+   (`tools.jackson.databind.*`, não `com.fasterxml.jackson.databind.*` — os dois
+   convivem no classpath porque uma lib transitiva ainda traz o antigo; importar o
+   errado **compila** mas o Spring não acha o bean de `ObjectMapper` certo) e **métodos
+   mudaram** (`asText()`→`asString()`, `asDouble()` removido → usar `doubleValue()`).
+   Isso pegou na prática construindo o `GeoJsonWktMapper` (§5.8) — vale mais que
+   qualquer um dos itens 2/3 que ainda não foram exercidos de verdade.
 
-**Resolver dependência sem conflito não prova que funciona em runtime** — os passos
-2-5 (o que realmente importa) ainda não foram feitos. Não tratar o item 1 como spike
-concluído.
+**Resolver dependência sem conflito não prova que funciona em runtime.** Dos itens que
+*foram* exercidos de verdade (Hibernate JPA comum + JSON nativo + Quartz/Batch coexistindo
+no boot + springdoc + Jackson 3), tudo passou — mas isso não é o mesmo que validar
+`SDO_GEOMETRY` ou `gt-shapefile`, que seguem não exercitados porque a Silver e uma fonte
+Shapefile de verdade ainda não existem.
 
 ---
 
@@ -891,6 +1025,53 @@ CRUD simples de `fonte_dado`, branch `feat/cadastro-fontes`:
 - Testes: `FonteDadoServiceTest` (cadastra válido, recusa tipo inválido, lista delega
   pro repositório).
 
+### 9.7. Portabilidade do ambiente — **[FEITO, 2026-09-07, `DATAGIS-17`]**
+- Repositório do backend renomeado/clonado como `datagis-backend`; frontend passou a
+  viver em **`datagis-frontend/`** (era `frontend/`) — ver §4.6.
+- `docker-compose.yml` ajustado pra funcionar em máquinas diferentes da que originou o
+  projeto (contexto de build do frontend, pequenos ajustes de path).
+- **`.env` passou a ser rastreado no git, de propósito** — decisão confirmada pela
+  equipe em 2026-09-09: credenciais são só do Oracle de desenvolvimento local, trocam
+  quando a hospedagem em nuvem (§3.4) entrar. Ver nota detalhada em §4.6.
+- Primeiro commit da equipe assinado por outro integrante (Flavio Pereira Jr.) — o
+  projeto deixou de ser trabalho solo.
+- `.devcontainer/devcontainer.json` adicionado (suporte a abrir o projeto em Dev
+  Container no VS Code, alternativa ao fluxo manual do `docker compose`).
+
+### 9.8. Ingestão deixa de ser exclusiva do CAR — **[FEITO, 2026-09-08, `DATAGIS-14`]**
+- `IngestaoExecutor`/`IngestaoExecucaoService` — qualquer fonte cadastrada pode ser
+  disparada por `POST /api/fontes/{id}/executar`, não só o CAR. Detalhe completo em §5.8
+  (que descreve o estado final, já pós-`LIZARDS-5`).
+- `docs/checklist-cobertura-fontes.md` e `docs/fontes-de-dados-v2.md` criados — ver §5.7.
+- Confirmado ao vivo: Hibernate Spatial + Quartz + Spring Batch sobem juntos no mesmo
+  contexto Spring sem conflito (mas nenhum dos três está funcionalmente exercitado —
+  ver status real em §3.2/§3.3/§5.5).
+- `FonteDadoResponse` ganhou `ultimaExecucaoEm`.
+
+### 9.9. Ingestão genérica por formato + resiliência — **[FEITO, 2026-09-09, `LIZARDS-5`]**
+Descrito em detalhe na §5.8 (arquitetura vigente). Resumo do que mudou de estado:
+- Executor deixou de ser "1 por fonte" e virou "1 por formato" (GEOJSON, CSV).
+- Paginação real pra WFS e ArcGIS REST — sem isso, fontes grandes perdiam registro
+  silenciosamente (achado nos Embargos IBAMA: ~113 de 2.113 sumindo sem erro nenhum).
+- 3 causas de falha achadas testando contra fontes reais, não em teste unitário:
+  geometria ausente, geometria malformada (`NullPointerException` que nem chegava no
+  `TratadorDeErro`), e falha intermitente de servidor externo (retentativa antes de
+  reduzir o tamanho de página).
+- CRUD de `fonte_dado` completo (`PUT`/`GET /{id}` novos).
+- 9 fontes reais rodando pelo executor genérico, de 2 famílias de serviço diferentes
+  (GeoServer WFS e ArcGIS REST), sem nenhuma linha de código específica de fonte.
+- 36 testes automatizados, `BUILD SUCCESS`.
+- **Gap real, não escondido**: APP declarada e Reserva Legal do CAR (indicadores IAPP e
+  IRL) não têm fonte funcionando — API oficial existe mas exige credenciamento OAuth2 +
+  allowlist de IP no Serpro, fora do alcance da equipe sozinha (`docs/checklist-
+  cobertura-fontes.md`).
+
+### 9.10. Convenção de commit evoluiu de `<untracked>` para IDs reais — **[2026-09-07 em diante]**
+A partir de `DATAGIS-17`, os commits passaram a usar ids de board de verdade
+(`LIZARDS-5`, `DATAGIS-14`, `DATAGIS-17`) em vez do placeholder `<untracked>` — ver
+§10.2. Sessões futuras: **usar o id real da task quando o usuário informar um**; só
+recorrer a `<untracked>` se explicitamente não houver id disponível ainda.
+
 ---
 
 ## 10. Git — branches, commits e fluxo de PR — **[DECIDIDO, padrão da equipe LizardsDBA]**
@@ -958,3 +1139,20 @@ ex. `chore<untracked>: estruturação inicial do repositório`. Trocar para o id
   sem branch de dev no frontend (nada de concreto pra fazer lá até o spike do backend
   destravar a 1ª fatia). PR de cada `feat/*` para `sprint-1` é aberto manualmente pelo
   time no GitHub.
+
+### 10.4. Estado atual (2026-09-09)
+- **PRs mesclados em `sprint-1` até agora:** #1 (`feat/spike-compatibilidade`), #4
+  (`feat/dependencias-spatial-quartz-batch`), #5 (`feat/ingestao-car-pr`), #6
+  (`feat/cadastro-fontes`).
+- **Equipe deixou de ser um único dev**: commits de `DATAGIS-17` em diante já mostram
+  mais de um autor (Flavio Pereira Jr. além do Fagner). Task ids reais em uso
+  (`LIZARDS-5`, `DATAGIS-14`, `DATAGIS-17`) — ver §9.10.
+- **Branch de trabalho corrente:** `feat/tela-cadastro-fontes`, em cima da `sprint-1`
+  (que já contém tudo de §9.7-§9.9). Ainda não mesclada — é onde a tela de cadastro de
+  fontes está sendo lapidada.
+- **Trabalho feito em sessão/máquina diferente da que gerou as seções anteriores deste
+  arquivo** — por isso o `CLAUDE.md` ficou defasado por alguns dias (2026-09-05 até
+  2026-09-09) até esta atualização. **Lição prática**: como o arquivo não se atualiza
+  sozinho quando o trabalho acontece em outra sessão/máquina/pessoa, vale o hábito de
+  pedir "atualiza o CLAUDE.md" no fim de qualquer sessão que gerou commits reais, não só
+  quando alguém lembra depois.
