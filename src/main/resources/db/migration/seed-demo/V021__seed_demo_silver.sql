@@ -145,19 +145,21 @@ JOIN ${silverSchema}.sensor        se ON se.codigo = x.senc;
 
 -- ---------- foco_calor (12 pontos espalhados) ----------
 INSERT INTO ${silverSchema}.foco_calor (identificador_origem, data_hora, satelite_id, bioma_id, municipio_id, latitude, longitude, risco_fogo, dias_sem_chuva, precipitacao_mm, frp, geometria, fonte_dado_id, lote_ingestao_id, registro_bruto_id, data_competencia, hash_origem)
-SELECT 'DEMO-FC-' || LPAD(LEVEL,3,'0'),
-       TIMESTAMP '2024-01-01 12:00:00' + NUMTODSINTERVAL(LEVEL*7, 'HOUR'),
-       (SELECT id FROM ${silverSchema}.satelite WHERE codigo='AQUA_M-T'),
-       (SELECT id FROM ${silverSchema}.bioma WHERE codigo='MATA_ATLANTICA'),
-       (SELECT id FROM ${silverSchema}.municipio WHERE cod_ibge = CASE MOD(LEVEL,3) WHEN 0 THEN 4106902 WHEN 1 THEN 4115200 ELSE 4119905 END),
-       -25.10 - (LEVEL*0.02),
-       -50.10 - (LEVEL*0.03),
-       ROUND(0.3 + MOD(LEVEL,7)/10, 2),
-       MOD(LEVEL,15),
-       ROUND(MOD(LEVEL,5) * 1.7, 1),
-       ROUND(10 + MOD(LEVEL,40) * 2.5, 1),
-       SDO_GEOMETRY(2001, 4674, SDO_POINT_TYPE(-50.10 - (LEVEL*0.03), -25.10 - (LEVEL*0.02), NULL), NULL, NULL),
+SELECT 'DEMO-FC-' || LPAD(g.n, 3, '0'),
+       TIMESTAMP '2024-01-01 12:00:00' + NUMTODSINTERVAL(g.n*7, 'HOUR'),
+       sat.id, bio.id, m.id,
+       -25.10 - (g.n*0.02),
+       -50.10 - (g.n*0.03),
+       ROUND(0.3 + MOD(g.n,7)/10, 2),
+       MOD(g.n,15),
+       ROUND(MOD(g.n,5) * 1.7, 1),
+       ROUND(10 + MOD(g.n,40) * 2.5, 1),
+       SDO_GEOMETRY(2001, 4674, SDO_POINT_TYPE(-50.10 - (g.n*0.03), -25.10 - (g.n*0.02), NULL), NULL, NULL),
        5, 0, 0, DATE '2024-01-15', 'SEED_DEMO'
-FROM dual CONNECT BY LEVEL <= 12;
+FROM (SELECT LEVEL n FROM dual CONNECT BY LEVEL <= 12) g
+CROSS JOIN (SELECT id FROM ${silverSchema}.satelite WHERE codigo='AQUA_M-T') sat
+CROSS JOIN (SELECT id FROM ${silverSchema}.bioma WHERE codigo='MATA_ATLANTICA') bio
+JOIN ${silverSchema}.municipio m
+     ON m.cod_ibge = CASE MOD(g.n,3) WHEN 0 THEN 4106902 WHEN 1 THEN 4115200 ELSE 4119905 END;
 
 COMMIT;
