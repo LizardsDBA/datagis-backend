@@ -219,6 +219,35 @@ IRL, IAPP, ISAP, IAE, IDesmat, IFC.
 
 Os 3 sem fonte já têm `tipo_indicador` semeado e coluna na Gold — só não dá pra popular.
 
+### 5.2. Bloco 2 — Camadas de mapa publicadas (`V018`)
+
+Todo polígono/ponto que o mapa do Paraná desenha vive aqui, como **cópia publicada**
+(não Silver ao vivo).
+
+**`gold.mapa_camada`** (referência, semeada) — o catálogo de camadas; o front monta o
+seletor de camadas a partir daqui.
+
+| coluna | conteúdo |
+|---|---|
+| `codigo` | `MUNICIPIO`, `AREA_PROTEGIDA`, `DESMATAMENTO`, `EMBARGO`, `IMOVEL_RURAL`, `FOCO_CALOR` |
+| `tipo_camada` | `BASE` (basemap: município) \| `TEMATICA` |
+| `geometria_tipo`, `cor_padrao`, `ordem_z` | dicas de estilo/empilhamento pro Leaflet |
+
+**`gold.feature_publicada`** (genérica, discriminada por `mapa_camada_id`):
+
+| coluna | papel |
+|---|---|
+| `mapa_camada_id` FK | qual camada |
+| `cod_natural` + `origem_silver_id` | volta pra Silver (linhagem) |
+| `geometria` `MDSYS.SDO_GEOMETRY` | **cópia generalizada** (Douglas-Peucker) pra web; precisão total fica na Silver |
+| `rotulo`, `propriedades` JSON | texto e atributos do popup |
+| `municipio_cod_ibge` | filtro rápido por cidade |
+| `versao_publicacao`, `data_publicacao`, `fonte_dado_id`, `lote_ingestao_id` | congelamento/linhagem |
+
+Um endpoint só: `GET /api/mapa/{camada}?bbox=…&municipio=…` → GeoJSON. **Camada nova =
+novo `codigo` em `mapa_camada` + linhas em `feature_publicada`, zero DDL** — mesmo
+princípio "fenômeno novo sem tabela nova" da Silver, um nível acima.
+
 ---
 
 ## 5-bis. O que cada tela lê
