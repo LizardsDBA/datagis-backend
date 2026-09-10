@@ -18,9 +18,13 @@
    existe** — não gera tabela nova (ver §6). Tabela nova só quando aparece um fenômeno
    que nenhum dos 7 indicadores cobre.
 
-2. **Todo campo "enum" é FK pra tabela de referência.** Nada de `VARCHAR2` com valores
-   canônicos soltos. `imovel_rural.situacao_imovel_id` → `silver.situacao_imovel`, etc.
-   As tabelas de referência já nascem semeadas (§3).
+2. **Domínio de negócio controlado é FK pra tabela de referência; flag booleana não.**
+   Se o valor é um domínio que se relaciona com outras entidades, evolui, ou precisa
+   de governança (`situacao_imovel`, `tipo_area_protegida`, `orgao`…), vira tabela de
+   referência semeada (§3) e a coluna é `_id` FK — nada de `VARCHAR2` com valor
+   canônico solto. O que **não** vira tabela: booleano/flag (`ativo`, `obrigatorio`,
+   `houve_embargo`, `publicado` são `NUMBER(1)`) e contador. O critério é
+   "isso é um cadastro?", não "isso tem um conjunto fixo de valores?".
 
 3. **Núcleo tipado + cauda JSON.** Cada tabela de fato tem as colunas canônicas
    tipadas (as que os indicadores usam) e uma coluna `atributos_origem JSON` pro que é
@@ -209,7 +213,8 @@ destravar, "APP declarada" e "Reserva Legal declarada" são fenômeno novo →
 ## 7. Decisões travadas nesta rodada
 
 - **[DECIDIDO]** Silver por fenômeno; fonte nova → tabela existente via `mapeamento_coluna`.
-- **[DECIDIDO]** Todo enum é FK pra tabela de referência semeada.
+- **[DECIDIDO]** Domínio de negócio controlado é FK pra tabela de referência semeada;
+  booleano/flag continua `NUMBER(1)` (§1.2).
 - **[DECIDIDO]** Quarentena = espelho frouxo do Silver + bloco de rejeição.
 - **[DECIDIDO]** `geometria SDO_GEOMETRY` SRID 4674; metadata/índice espacial em migration própria.
 - **[DECIDIDO]** Dedup do Bronze por chave natural, mantendo maior `lote_ingestao_id`.
