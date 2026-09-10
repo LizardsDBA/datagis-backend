@@ -334,4 +334,29 @@ destravar, "APP declarada" e "Reserva Legal declarada" são fenômeno novo →
   `SDO_ANYINTERACT`/`SDO_RELATE` pra interseção). Reprojetar pra métrico (EPSG:5880 —
   Polyconic do Brasil) só se aparecer inconsistência de precisão. Validar na fatia de
   cálculo antes de fechar.
+- **[EM ABERTO]** `gold.indicador_versao.regra_calculo_id` amarra a versão a **uma**
+  regra, mas uma versão produz os 7 indicadores, cada um com a sua regra. Resolver na
+  fatia de cálculo — ou `indicador_versao` vira por (imóvel, indicador), ou
+  `regra_calculo_id` desce pra `indicador_resultado`.
 - **[EM ABERTO]** Transformação Bronze→Silver (fatia futura) — nada implementado aqui.
+
+---
+
+## 8. Seeds de demonstração (`V021`-`V023`, location `db/migration/seed-demo`)
+
+**Dados FALSOS** em Silver / Gold / Quarentena pra o time desenvolver as telas que leem
+essas camadas **antes** da transformação Bronze→Silver existir. Não vieram de
+transformação nenhuma — geometrias são retângulos pequenos perto de coordenadas reais
+do PR, só pro Leaflet desenhar algo.
+
+- **Location isolada:** `spring.flyway.locations` ganhou `classpath:db/migration/seed-demo`.
+  Pra parar de aplicar (ex.: quando a transformação real entrar), é só tirar essa
+  location da linha.
+- **Conteúdo:** `V021` Silver (3 municípios do circuito, 9 imóveis, 3 áreas protegidas,
+  4 autos, 3 embargos, 3 desmatamentos, 12 focos) · `V022` Quarentena (~8 linhas com
+  `tipo_erro` variado) · `V023` Gold (7 regras, 6 versões de indicador, resultados,
+  linhagem, ~33 `feature_publicada`, 6 `imovel_publicado`, 6 `sobreposicao_publicada`).
+- **Limpeza:** `silver.*` e `feature_publicada` → `hash_origem = 'SEED_DEMO'` /
+  `versao_publicacao = 0`; `quarentena.q_*` → `motivo_rejeicao LIKE '[SEED]%'`;
+  `gold.regra_calculo` → `descricao LIKE '[SEED]%'` (o resto sai por FK);
+  `gold.indicador_versao` → `hash_versao LIKE 'SEEDDEMO%'`.
