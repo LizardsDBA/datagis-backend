@@ -267,6 +267,13 @@ linhagem (`fonte_dado_id`/`lote_ingestao_id`).
 `geometria_intersecao` **não existe na Silver** — nasce no cálculo do indicador, então a
 Gold é obrigada a guardá-la.
 
+### 5.4. Metadata espacial da Gold — `V020`
+
+`INSERT` em `MDSYS.SDO_GEOM_METADATA_TABLE` pras 3 colunas geométricas dos blocos 2 e 3
+(`feature_publicada.geometria`, `imovel_publicado.geometria`,
+`sobreposicao_publicada.geometria_intersecao`). Mesmo padrão da `V013` (Silver).
+Índices espaciais ficam pra fatia de publicação (tabelas vazias agora).
+
 ---
 
 ## 5-bis. O que cada tela lê
