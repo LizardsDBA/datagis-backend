@@ -523,8 +523,12 @@ esquecido.
   (bind mount). Nada de código dentro da imagem.
 - **Dockerfile multi-stage (build imutável) fica para quando hospedagem entrar** (§3.4).
   Barato de escrever depois; opcionalmente o CI compila cedo para pegar quebra.
-- `oracle`: imagem `gvenzl/oracle-free:23.26.3-slim` (tag exata pinada — checar tags novas
-  periodicamente em hub.docker.com/r/gvenzl/oracle-free/tags), volume nomeado
+- `oracle`: imagem `gvenzl/oracle-free:23.26.3-faststart` (tag exata pinada — checar tags novas
+  periodicamente em hub.docker.com/r/gvenzl/oracle-free/tags). **NÃO usar o `-slim`**:
+  ele remove o Oracle Spatial, e a camada Silver usa `SDO_GEOMETRY` (SRID 4674) — com
+  `-slim` as migrations `V012+` quebram com `ORA-00902: invalid datatype` (descoberto
+  2026-09-10 ao criar a Silver). Era `-slim` até então porque nenhuma tabela usava
+  SDO_GEOMETRY ainda. Volume nomeado
   `oracle-data` para datafiles, `infra/oracle-init/` montado em
   `/container-entrypoint-initdb.d`, `healthcheck: healthcheck.sh` (nativo da imagem).
   `backend` usa `depends_on: { oracle: { condition: service_healthy } }`.
