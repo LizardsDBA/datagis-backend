@@ -244,6 +244,10 @@ destravar, "APP declarada" e "Reserva Legal declarada" são fenômeno novo →
 - **[DECIDIDO]** Dedup do Bronze por chave natural (lote = snapshot completo); campo que
   regride de preenchido→nulo entre lotes vai pra quarentena, não sobrescreve (§3.5).
 - **[DECIDIDO]** FK real só intra-schema; linhagem cross-schema é `NUMBER` sem constraint.
+- **[PROPOSTO]** Cálculo espacial (área, distância, sobreposição) direto no **SRID 4674
+  nativo** — o Oracle faz área/distância geodésicas corretas pra SRID geográfico
+  (`SDO_GEOM.SDO_AREA(g, tol, 'unit=SQ_M')`, `SDO_GEOM.SDO_DISTANCE`,
+  `SDO_ANYINTERACT`/`SDO_RELATE` pra interseção). Reprojetar pra métrico (EPSG:5880 —
+  Polyconic do Brasil) só se aparecer inconsistência de precisão. Validar na fatia de
+  cálculo antes de fechar.
 - **[EM ABERTO]** Transformação Bronze→Silver (fatia futura) — nada implementado aqui.
-- **[EM ABERTO]** Reprojeção pra cálculo de área/distância — usar `SDO_GEOM` direto no
-  4674 (geodésico) ou reprojetar pra métrico (EPSG:5880). Decidir na fatia de cálculo.
