@@ -248,6 +248,25 @@ Um endpoint só: `GET /api/mapa/{camada}?bbox=…&municipio=…` → GeoJSON. **
 novo `codigo` em `mapa_camada` + linhas em `feature_publicada`, zero DDL** — mesmo
 princípio "fenômeno novo sem tabela nova" da Silver, um nível acima.
 
+### 5.3. Bloco 3 — Detalhe congelado por imóvel (`V019`)
+
+O artefato de reprodutibilidade (RN016-019): a tela de detalhe do imóvel e o relatório
+do auditor leem daqui.
+
+**`gold.imovel_publicado`** — a propriedade + seu boletim, uma linha por versão:
+`cod_imovel`, `indicador_versao_id` FK, `geometria` congelada no momento da publicação,
+os 7 valores de indicador **denormalizados** (`valor_icv` … `valor_ifc` — `NULL` =
+não calculável), `municipio_cod_ibge`, `area_ha`, `data_publicacao`.
+
+**`gold.sobreposicao_publicada`** — cada recorte de sobreposição que entrou no cálculo:
+`imovel_publicado_id` FK, `tipo_restricao` (`AREA_PROTEGIDA`/`EMBARGO`/`DESMATAMENTO`),
+`nome`, `orgao`, **`geometria_intersecao`** (o recorte `imóvel ∩ restrição` em
+**precisão total** — é o que o auditor confere), `area_intersecao_ha`, `percentual`,
+linhagem (`fonte_dado_id`/`lote_ingestao_id`).
+
+`geometria_intersecao` **não existe na Silver** — nasce no cálculo do indicador, então a
+Gold é obrigada a guardá-la.
+
 ---
 
 ## 5-bis. O que cada tela lê
