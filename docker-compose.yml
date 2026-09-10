@@ -1,6 +1,9 @@
 services:
   oracle:
-    image: gvenzl/oracle-free:23.26.3-slim
+    # Imagem COMPLETA + faststart (nao -slim): o -slim remove o Oracle Spatial, e a
+    # Silver usa SDO_GEOMETRY (SRID 4674). Trocar de volta pro -slim quebra V012+.
+    # -faststart mantem todos os componentes e ainda sobe rapido (DB pre-criado).
+    image: gvenzl/oracle-free:23.26.3-faststart
     environment:
       ORACLE_PASSWORD: ${ORACLE_PASSWORD}
       APP_USER: ${APP_USER}

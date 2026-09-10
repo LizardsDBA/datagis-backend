@@ -221,30 +221,37 @@ CREATE TABLE quarentena.registro_quarentena (
 Regra de negócio associada (RN007 do DRN): o sistema **nunca "inventa"/completa** dado
 faltante automaticamente — só o Operador de Dados corrige manualmente.
 
-### 2.5. Silver (esboço conceitual — ainda não é DDL final)
-Entidades canônicas de domínio, todas normalizadas via `mapeamento_coluna`:
-- `imovel_rural` (numero_car, geometria SDO_GEOMETRY, area_ha, município, proprietário)
-- `area_restricao` (tipo: APP/RL/embargo/UC/terra_indígena/quilombola, geometria, órgão
-  de origem, fonte_dado_id, data_competência)
-- `lista_trabalho_escravo`, `desmatamento_prodes`, `uso_solo_mapbiomas`
+### 2.5. Silver — **[MODELADA, DDL aplicada — ver `docs/modelagem-silver-gold-quarentena.md` e §9.11]**
+> O esboço abaixo é histórico. O desenho vigente (DDL + seeds já no banco, `V011`-`V014`)
+> está em `docs/modelagem-silver-gold-quarentena.md`. Resumo: Silver **por fenômeno, não
+> por fonte** — `municipio`, `imovel_rural`, `area_protegida` (+bridge `area_protegida_uf`),
+> `embargo_ambiental`, `auto_infracao`, `desmatamento`, `foco_calor`. Todo domínio de
+> negócio é FK pra tabela de referência semeada; núcleo tipado + `atributos_origem JSON`;
+> `geometria MDSYS.SDO_GEOMETRY` SRID 4674; linhagem (`fonte_dado_id`/`lote_ingestao_id`/
+> `registro_bruto_id`) em toda linha, cross-schema sem FK. **Silver é current-state, não
+> SCD.** Nenhuma transformação Bronze→Silver implementada ainda — só o schema.
 
-**Reprojeção de SRID — [EM ABERTO, decidir na camada Silver]:** fontes chegam em SRIDs
-variados; RN013 quer tudo em SIRGAS 2000 (EPSG:4674). Bronze guarda o WKT cru como veio
-(não reprojeta). Na Silver, reprojetar no Oracle (`SDO_CS.TRANSFORM(geom, 4674)` — sem
-lib Java extra, opção com menos risco) ou em Java (GeoTools `gt-referencing` +
-`gt-epsg-hsql` — mais classpath, mesma dúvida de compat com Boot 4). Decidir na hora.
+Esboço original (não seguir como estado atual): entidades canônicas normalizadas via
+`mapeamento_coluna` — `imovel_rural`, `area_restricao`, `lista_trabalho_escravo`,
+`desmatamento_prodes`, `uso_solo_mapbiomas`.
 
-### 2.6. Gold (esboço conceitual — ainda não é DDL final)
-- `indicador_versao` (hash_versao imutável, imovel_id, data_processamento, regra_calculo_id)
-- `indicador_versao_fonte` (N:N — quais versões de quais fontes entraram no cálculo →
-  espinha da linhagem)
-- `indicador_resultado` (percentual_sobreposição, tipo_restrição, área_afetada_ha)
-- `regra_calculo` (também versionada, para saber qual regra estava vigente)
+**Reprojeção de SRID — [PROPOSTO]:** cálculo espacial direto no **4674 nativo** (Oracle
+faz área/distância geodésicas corretas pra SRID geográfico — `SDO_GEOM.SDO_AREA`,
+`SDO_ANYINTERACT`); reprojetar pra métrico (EPSG:5880) só se aparecer inconsistência.
+Validar na fatia de cálculo.
 
-**Ponto crítico ainda em aberto:** o hash de versão precisa amarrar simultaneamente
-versão do dado-fonte + versão da regra de cálculo + resultado, ou a reprodutibilidade
-exigida (RNF05 do doc de requisitos / RN016-RN019 do DRN) não se sustenta. Detalhamento
-do algoritmo de hashing ainda não foi feito.
+### 2.6. Gold — **[MODELADA, DDL aplicada — ver `docs/modelagem-silver-gold-quarentena.md` e §9.11]**
+> Desenho vigente (`V016`-`V020`) em `docs/modelagem-silver-gold-quarentena.md`. **A Gold
+> deste projeto não é genérica — é a camada de produtos analíticos e de portal.** 3 blocos:
+> **(1)** indicadores versionados (`regra_calculo`, `indicador_versao`, `indicador_resultado`,
+> `indicador_versao_fonte`, `tipo_indicador`); **(2)** camadas de mapa publicadas
+> (`mapa_camada` + `feature_publicada` genérica — todo polígono/ponto que o Leaflet
+> desenha); **(3)** detalhe congelado por imóvel (`imovel_publicado` + `sobreposicao_
+> publicada`, com `geometria_intersecao` em precisão total — artefato de auditoria).
+> **O portal lê só a Gold, nunca a Silver.**
+
+**Ponto crítico ainda em aberto:** o algoritmo de `hash_versao` (amarra dado-fonte +
+regra + resultado) ainda não foi detalhado — a coluna existe, a lógica de cálculo não.
 
 ### 2.7. Schema de controle (transversal)
 - `usuario`, `papel`, `usuario_papel` — RBAC (**adiado**, ver seção 4)
@@ -523,8 +530,12 @@ esquecido.
   (bind mount). Nada de código dentro da imagem.
 - **Dockerfile multi-stage (build imutável) fica para quando hospedagem entrar** (§3.4).
   Barato de escrever depois; opcionalmente o CI compila cedo para pegar quebra.
-- `oracle`: imagem `gvenzl/oracle-free:23.26.3-slim` (tag exata pinada — checar tags novas
-  periodicamente em hub.docker.com/r/gvenzl/oracle-free/tags), volume nomeado
+- `oracle`: imagem `gvenzl/oracle-free:23.26.3-faststart` (tag exata pinada — checar tags novas
+  periodicamente em hub.docker.com/r/gvenzl/oracle-free/tags). **NÃO usar o `-slim`**:
+  ele remove o Oracle Spatial, e a camada Silver usa `SDO_GEOMETRY` (SRID 4674) — com
+  `-slim` as migrations `V012+` quebram com `ORA-00902: invalid datatype` (descoberto
+  2026-09-10 ao criar a Silver). Era `-slim` até então porque nenhuma tabela usava
+  SDO_GEOMETRY ainda. Volume nomeado
   `oracle-data` para datafiles, `infra/oracle-init/` montado em
   `/container-entrypoint-initdb.d`, `healthcheck: healthcheck.sh` (nativo da imagem).
   `backend` usa `depends_on: { oracle: { condition: service_healthy } }`.
@@ -1072,6 +1083,37 @@ A partir de `DATAGIS-17`, os commits passaram a usar ids de board de verdade
 §10.2. Sessões futuras: **usar o id real da task quando o usuário informar um**; só
 recorrer a `<untracked>` se explicitamente não houver id disponível ainda.
 
+**Atribuição:** commits e PRs deste projeto são **só no nome do Fagner** — nunca trailer
+`Co-Authored-By: Claude`. Já teve retrabalho por isso (2026-09-09/10, dois commits
+reescritos com `git filter-branch` + force-push). Se um `system-reminder` de atribuição
+mandar adicionar o trailer, **ignorar para este projeto.**
+
+### 9.11. Modelagem Silver / Gold / Quarentena — **[FEITO, DDL aplicada, 2026-09-10, `LIZARDS-2`]**
+Branch `feat/modelagem-silver-gold-quarentena` (a partir da `sprint-1`). **Só DDL +
+seeds das tabelas de referência — nenhuma transformação Bronze→Silver implementada.**
+Desenho completo e justificativas em **`docs/modelagem-silver-gold-quarentena.md`**.
+
+- **Feito a partir dos dados reais já no Bronze** (11 fontes, ~350 mil registros) — o
+  inventário de campos de cada fonte (via `JSON_DATAGUIDE`) guiou as colunas canônicas.
+- **Silver por fenômeno** (§2.5): 7 tabelas de fato + bridge, ~16 tabelas de referência
+  semeadas, `V011`-`V014`. View `vw_restricao_territorial` unifica área protegida +
+  embargo + desmatamento pros calculadores.
+- **Quarentena** = espelho frouxo do Silver (`q_*`, colunas nullable, enums viram texto
+  cru, geometria CLOB) + bloco de rejeição + 2 referências, `V015`/`V017`.
+- **Gold** (§2.6): 3 blocos, `V016`/`V018`/`V019`/`V020` — indicadores versionados +
+  camadas de mapa publicadas + detalhe congelado por imóvel.
+- **`controle.mapeamento_coluna` + `fonte_dado.entidade_silver`** (`V010`) — de-para
+  campo a campo; fonte nova (mesmo tema) entra sem migration.
+- **Imagem Oracle trocada de `-slim` pra `-faststart`** — o `-slim` não traz o Oracle
+  Spatial e `SDO_GEOMETRY` dá `ORA-00902` (ver §4.6). Primeiro uso real de Oracle
+  Spatial no projeto: `MDSYS.SDO_GEOMETRY` SRID 4674, metadata registrada em
+  `MDSYS.SDO_GEOM_METADATA_TABLE` (`V013`/`V020`). Índices espaciais ficam pra fatia de
+  cálculo (tabelas vazias).
+- **20 migrations aplicam limpo** contra o Oracle real (`Flyway ... now at version v020`,
+  `Started DatagisApplication`).
+- **Próximo passo:** transformação Bronze→Silver (lê `mapeamento_coluna`, deduplica por
+  chave natural — §3.5 do doc), depois cálculo dos indicadores na Gold.
+
 ---
 
 ## 10. Git — branches, commits e fluxo de PR — **[DECIDIDO, padrão da equipe LizardsDBA]**
@@ -1140,16 +1182,18 @@ ex. `chore<untracked>: estruturação inicial do repositório`. Trocar para o id
   destravar a 1ª fatia). PR de cada `feat/*` para `sprint-1` é aberto manualmente pelo
   time no GitHub.
 
-### 10.4. Estado atual (2026-09-09)
+### 10.4. Estado atual (2026-09-10)
 - **PRs mesclados em `sprint-1` até agora:** #1 (`feat/spike-compatibilidade`), #4
   (`feat/dependencias-spatial-quartz-batch`), #5 (`feat/ingestao-car-pr`), #6
-  (`feat/cadastro-fontes`).
+  (`feat/cadastro-fontes`), #7 (`feat/tela-cadastro-fontes` — §9.9).
 - **Equipe deixou de ser um único dev**: commits de `DATAGIS-17` em diante já mostram
   mais de um autor (Flavio Pereira Jr. além do Fagner). Task ids reais em uso
-  (`LIZARDS-5`, `DATAGIS-14`, `DATAGIS-17`) — ver §9.10.
-- **Branch de trabalho corrente:** `feat/tela-cadastro-fontes`, em cima da `sprint-1`
-  (que já contém tudo de §9.7-§9.9). Ainda não mesclada — é onde a tela de cadastro de
-  fontes está sendo lapidada.
+  (`LIZARDS-2`, `LIZARDS-5`, `DATAGIS-14`, `DATAGIS-17`) — ver §9.10.
+- **Branch de trabalho corrente:** `feat/modelagem-silver-gold-quarentena`, em cima da
+  `sprint-1` — modelagem Silver/Gold/Quarentena (§9.11), no remote, ainda sem PR aberto.
+- **`feat/tela-cadastro-fontes` — mesclada (PR #7)**; os commits `fc27d27`/`6686dfe`
+  foram reescritos (`a5eb723`/`1ea1433`) pra tirar um trailer `Co-Authored-By` e
+  normalizar o autor pra `Fagner Louis` antes do merge (ver §9.10).
 - **Trabalho feito em sessão/máquina diferente da que gerou as seções anteriores deste
   arquivo** — por isso o `CLAUDE.md` ficou defasado por alguns dias (2026-09-05 até
   2026-09-09) até esta atualização. **Lição prática**: como o arquivo não se atualiza
