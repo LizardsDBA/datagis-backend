@@ -61,6 +61,11 @@ public class FonteDado {
     @Column(name = "campo_geometria_lon", length = 100)
     private String campoGeometriaLon;
 
+    /** Endereço (devolvido por ArmazenamentoArquivoBruto.salvar) do último arquivo
+     * enviado por upload — só relevante pra tipoAquisicao=UPLOAD_MANUAL. */
+    @Column(name = "caminho_arquivo_upload", length = 500)
+    private String caminhoArquivoUpload;
+
     // A coluna no banco e NUMBER(1), nao BOOLEAN. Esse conversor faz o Hibernate
     // ler/gravar 0 e 1 em vez de esperar um tipo booleano nativo.
     @Convert(converter = NumericBooleanConverter.class)
