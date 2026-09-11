@@ -35,8 +35,10 @@ tem** — ver §5.
 
 Segue o mesmo princípio de toda a ingestão (`IngestaoExecutor` + dispatch por
 `formatoEsperado`/`tipoAquisicao`, CLAUDE.md §5.8): peça nova e isolada, nada do que já
-existia (`IngestaoGeoJsonExecutor`, `IngestaoCsvExecutor`, `LoteIngestaoWriter`,
-cadastro de fontes) foi alterado em comportamento.
+existia (`IngestaoGeoJsonExecutor`, `IngestaoCsvExecutor`, cadastro de fontes) foi
+alterado em comportamento. **Exceção, 2026-09-11 (§3.5):** `LoteIngestaoWriter` ganhou
+um método novo (`gravarStreaming`) pro caso do Shapefile — o método antigo (`gravar`,
+baseado em `List`) continua existindo do mesmo jeito pros outros dois executores.
 
 | Peça | Arquivo | Papel |
 |---|---|---|
@@ -44,7 +46,9 @@ cadastro de fontes) foi alterado em comportamento.
 | Fonte semeada | `V025` | `CAR - Imóveis (PR) via Shapefile (upload)` — `UPLOAD_MANUAL` + `SHAPEFILE`, pra comparar com a fonte 1 (via WFS) |
 | `ArmazenamentoArquivoBruto` (interface) | `armazenamento/ArmazenamentoArquivoBruto.java` | Interface fina já prevista desde o início (CLAUDE.md §5.4), nunca implementada até agora |
 | `ArmazenamentoArquivoBrutoLocalFs` | `armazenamento/ArmazenamentoArquivoBrutoLocalFs.java` | Única implementação hoje — disco local do container (`/tmp/datagis-uploads` por padrão, configurável via `app.armazenamento.diretorio`). Nome salvo com `UUID` (não só timestamp — dois uploads no mesmo milissegundo colidiam, achado escrevendo o teste) |
-| `IngestaoShapefileExecutor` | `ingestao/IngestaoShapefileExecutor.java` | `formatoEsperado=SHAPEFILE`. Descompacta o `.zip` (achata subpastas), abre cada `.shp` com GeoTools, converte geometria (JTS nativo) pra WKT com o mesmo `WKTWriter` do `GeoJsonWktMapper`, atributos viram `payload` JSON. Mesma resiliência dos outros executores: geometria ausente/malformada não derruba o registro |
+| `IngestaoShapefileExecutor` | `ingestao/IngestaoShapefileExecutor.java` | `formatoEsperado=SHAPEFILE`. Descompacta o `.zip` (achata subpastas), abre cada `.shp` com GeoTools, converte geometria (JTS nativo) pra WKT com o mesmo `WKTWriter` do `GeoJsonWktMapper`, atributos viram `payload` JSON. Mesma resiliência dos outros executores: geometria ausente/malformada não derruba o registro. **Lê em streaming, não junta feições numa lista (§3.5)** |
+| `FornecedorRegistros` (interface) | `ingestao/FornecedorRegistros.java` | Adicionada em §3.5 — quem lê a fonte entrega um `RegistroPreparado` por vez pro consumidor, em vez de devolver uma `List` pronta |
+| `LoteIngestaoWriter.gravarStreaming(...)` | `ingestao/LoteIngestaoWriter.java` | Adicionado em §3.5 — mesmo ciclo de vida do `gravar` original, mas consumindo um `FornecedorRegistros` em vez de uma `List` |
 | `IngestaoExecucaoService.executarComUpload(...)` | `ingestao/IngestaoExecucaoService.java` | Salva o arquivo via `ArmazenamentoArquivoBruto`, grava o endereço na fonte, e dispara o **mesmo** `executar()` genérico de sempre — o upload não duplica lógica de disparo |
 | `POST /api/fontes/{id}/upload` | `ingestao/IngestaoController.java` | `multipart/form-data`, campo `arquivo` |
 | Botão de upload na tela | `datagis-frontend/src/components/CadastroFontes.vue` | Fontes `UPLOAD_MANUAL` ganham um ícone de upload no lugar do play (que ficava sempre desabilitado); reaproveita o mesmo painel de resultado (executando/sucesso/erro) que o play já usava |
@@ -81,7 +85,7 @@ A imagem do backend é JDK puro (`eclipse-temurin:21-jdk-jammy`), sem `unzip`. P
 inspecionar `.jar` de dentro do container, usar `jar tf <arquivo>` (vem com o JDK) em
 vez de `unzip -l`.
 
-### 3.3. Limite de upload — 100 MB não bastava, foi pra 2 GB
+### 3.3. Limite de upload — 100 MB não bastava, foi pra 2 GB, e depois 2 GB também não bastou
 
 Achado ao vivo: o arquivo de teste (Ponta Grossa+Maringá+Curitiba não, na verdade o
 Shapefile é **estadual inteiro**, sem filtro por município como o WFS tem) tem
@@ -89,14 +93,15 @@ Shapefile é **estadual inteiro**, sem filtro por município como o WFS tem) tem
 (`spring.servlet.multipart.max-file-size`) é 1 MB; configuramos 100 MB numa primeira
 tentativa, que também não bastou.
 
-**Sintoma:** não aparece erro nenhum no backend — nem exceção, nem `ORA-`. A
-requisição chega (`Initializing Spring DispatcherServlet`), e a conexão simplesmente é
-resetada pelo Tomcat no meio do recebimento do corpo. No navegador isso vira
-`Failed to fetch` (erro de rede, sem resposta HTTP nenhuma) — não confundir com falha
-de ingestão de verdade (essas aparecem com mensagem real, via `TratadorDeErro`).
+**Sintoma (arquivo ainda dentro do teto configurado):** não aparece erro nenhum no
+backend — nem exceção, nem `ORA-`. A requisição chega (`Initializing Spring
+DispatcherServlet`), e a conexão simplesmente é resetada pelo Tomcat no meio do
+recebimento do corpo. No navegador isso vira `Failed to fetch` (erro de rede, sem
+resposta HTTP nenhuma) — não confundir com falha de ingestão de verdade (essas aparecem
+com mensagem real, via `TratadorDeErro`).
 
-**Correção:** subiu pra 2 GB em duas propriedades (uma pode não bastar dependendo da
-versão do Tomcat/Spring Boot):
+**1ª correção (não durou):** subiu pra 2 GB em quatro propriedades (uma pode não bastar
+dependendo da versão do Tomcat/Spring Boot):
 ```properties
 spring.servlet.multipart.max-file-size=2GB
 spring.servlet.multipart.max-request-size=2GB
@@ -104,16 +109,85 @@ server.tomcat.max-http-form-post-size=2GB
 server.tomcat.max-swallow-size=2GB
 ```
 
+**Estourou nesse teto também, 2026-09-11:** um `.zip` real de **3,24 GB**
+(`3477706048` bytes) bateu em cheio no limite de 2 GB (`2147483648` bytes — o número
+que aparece na mensagem de erro é literalmente `2GB` em bytes). Dessa vez o erro veio
+com mensagem clara (`SizeLimitExceededException`), diferente do sintoma silencioso de
+antes — sinal de que o teto em si é checado antes do corpo ser todo recebido, não é o
+Tomcat resetando a conexão sem avisar.
+
+**2ª correção — parar de perseguir um teto fixo:** em vez de subir pra 4 GB, 8 GB etc.
+a cada arquivo maior do CAR (o portal não dá nenhuma garantia de tamanho máximo por
+estado), as 4 propriedades foram trocadas pra **sem limite** (`-1`):
+```properties
+spring.servlet.multipart.max-file-size=-1
+spring.servlet.multipart.max-request-size=-1
+server.tomcat.max-http-form-post-size=-1
+server.tomcat.max-swallow-size=-1
+```
+Exige restart do container `backend` pra valer (sem `spring-boot-devtools` no projeto,
+o Maven não recarrega `application.properties` sozinho). **Isso não resolve §3.4** — só
+tira o teto de tamanho de upload; o processamento síncrono em memória continua sem
+mudar, e é o próximo limite real a aparecer se um arquivo muito maior que os já
+testados travar ou estourar memória do container.
+
 ### 3.4. Processamento é síncrono — pode levar minutos
 
-Hoje todo o ciclo (upload → descompacta → GeoTools lê tudo em memória → grava linha a
-linha no Bronze) acontece dentro da mesma requisição HTTP, sem chunk/lote/paralelismo.
-**Testado ao vivo: 218 MB / 559.899 feições levou ~3 minutos**, sem erro, sem estourar
-memória — mas não tem indicação de progresso nenhuma além do cronômetro da tela.
-**Não foi redesenhado pra processamento assíncrono** porque funcionou dentro do que foi
-testado; fica documentado como ponto de atenção se um arquivo de 1 GB+ (bem mais
-feições) começar a demorar demais ou estourar timeout de algum componente no meio do
-caminho (proxy do Vite, memória do container).
+Hoje todo o ciclo (upload → descompacta → lê → grava no Bronze) acontece dentro da
+mesma requisição HTTP, sem chunk/lote/paralelismo — **isso não mudou** com a correção
+do §3.5 abaixo, só a forma de ler/gravar mudou. **Testado ao vivo: 218 MB / 559.899
+feições levou ~3 minutos**, sem erro. Não foi redesenhado pra processamento assíncrono
+porque funcionou dentro do que foi testado; fica documentado como ponto de atenção se
+um arquivo bem maior começar a demorar demais ou estourar timeout de algum componente
+no meio do caminho (proxy do Vite) — o risco de **memória**, que era o mais óbvio aqui,
+foi endereçado no §3.5.
+
+### 3.5. `OutOfMemoryError` real com um arquivo de 3,24 GB — corrigido com leitura/gravação em streaming
+
+Aconteceu exatamente o que o parágrafo acima (na versão anterior deste documento) já
+apontava como risco: um upload de **3,24 GB** (bem maior que o de 218 MB já testado)
+derrubou a ingestão com:
+```
+java.lang.OutOfMemoryError: Java heap space
+  at IngestaoExecucaoService.executarComUpload(...)
+```
+
+**Causa raiz:** `IngestaoShapefileExecutor` lia **todas** as feições do Shapefile pra
+uma `List<RegistroPreparado>` (JSON + WKT de cada uma) antes de gravar qualquer linha —
+por desenho, já que `LoteIngestaoWriter.gravar` precisa do hash do conteúdo inteiro pra
+decidir "mudou desde a última execução" (RN018/§2.8) antes de começar a escrever. Pra
+560 mil feições (218 MB) isso cabia no heap padrão do container (~2 GB, ergonomia da
+JVM); pra um arquivo bem maior, não cabia mais.
+
+**Correção — ler e gravar em streaming, nunca materializar tudo:**
+- Nova interface `FornecedorRegistros` (`void fornecer(Consumer<RegistroPreparado>)`) —
+  quem lê a fonte (o executor) chama o consumidor um registro por vez, em vez de
+  devolver uma lista pronta.
+- `IngestaoShapefileExecutor` não monta mais `List<RegistroPreparado>`: itera cada
+  `.shp` com `SimpleFeatureIterator` e entrega cada feição direto pro consumidor.
+- `LoteIngestaoWriter.gravarStreaming` (novo método; o `gravar(List)` original continua
+  existindo, ainda usado pelos executores GeoJSON/CSV, que não tinham esse problema)
+  grava cada `RegistroBruto` assim que chega e calcula o hash **incrementalmente**
+  (`MessageDigest.update` por registro, em vez de `String.join` de tudo antes de
+  hashear).
+- **Só se sabe se "mudou" depois de gravar tudo** — inversão consciente: se o hash final
+  bater com o do lote anterior, os registros recém-gravados são apagados **em bloco**
+  (`DELETE ... WHERE lote_ingestao_id = ?`, não um por linha) e o lote vira
+  `SEM_MUDANCA`. Mais I/O que o caminho antigo no caso "sem mudança", mas não exige mais
+  caber a fonte inteira na memória pra chegar nessa resposta.
+- **Achado ao implementar, não só teórico:** ler e gravar um registro por vez resolve a
+  lista da aplicação, mas o Hibernate mantém toda entidade `save()`-ada como "managed"
+  no *persistence context* da sessão até a transação terminar — pra milhões de linhas
+  isso vira o **mesmo estouro de heap, só que dentro do JPA**. Corrigido com
+  `EntityManager.flush()` + `clear()` a cada 500 registros dentro do loop de gravação.
+- Testes atualizados/criados: `LoteIngestaoWriterTest` ganhou 2 casos pro
+  `gravarStreaming` (conclui gravando tudo; descobre "sem mudança" só no fim e apaga em
+  bloco); `IngestaoShapefileExecutorTest` passou a capturar o `FornecedorRegistros`
+  entregue ao writer em vez de uma lista. 40 testes de `ingestao`+`controle`, todos
+  passando.
+- **Não testado ainda com o próprio arquivo de 3,24 GB** que causou o OOM (só validado
+  com os testes unitários acima + um upload pequeno de verdade) — é o próximo passo
+  óbvio antes de considerar isso definitivamente resolvido pra esse tamanho.
 
 ---
 
@@ -230,12 +304,23 @@ arquivo.
 - **Regra de `situacao_imovel` na transformação Bronze→Silver** — anotado aqui e em
   `docs/modelagem-silver-gold-quarentena.md` §3.5, ainda não implementado (a
   transformação em si não existe ainda).
-- **Processamento síncrono do upload** (§3.4) — funcionou até 218 MB / ~560 mil linhas;
-  não testado com arquivo de 1 GB+. Se aparecer timeout/problema de memória, considerar
-  processar em background (ex.: devolver `202 Accepted` na hora do upload e processar
-  via thread/Job assíncrono, ou finalmente ligar o Spring Batch que está no `pom.xml`
-  desde o início e nunca foi usado — CLAUDE.md §3.3).
-- **Gravação ainda é 1 linha por vez** (`LoteIngestaoWriter`, sem chunk) — funcionou
-  para 559.899 linhas em ~3 min; se um arquivo bem maior (1GB+, potencialmente mais de
-  1 milhão de linhas) ficar lento demais, é candidato a usar `saveAll`/batch insert do
-  Spring Data ou o Spring Batch de verdade.
+- **Limite de tamanho de upload removido (2026-09-11)** — as 4 propriedades de
+  multipart/Tomcat (§3.3) viraram `-1` (sem limite) depois que um `.zip` de 3,24 GB
+  estourou o teto de 2 GB. Sem contenção nenhuma de tamanho hoje — se isso for um
+  problema (disco/memória de quem sobe o ambiente), considerar validar tamanho antes de
+  aceitar o upload, não só confiar no bom senso de quem envia.
+- **Processamento continua síncrono** (§3.4) — a memória (§3.5) foi resolvida com
+  streaming, mas a requisição HTTP ainda fica presa até o fim do processamento. Um
+  arquivo grande o suficiente ainda pode estourar timeout de algum componente no meio
+  do caminho (proxy do Vite). Se isso aparecer, o próximo passo é processar em
+  background (`202 Accepted` na hora do upload + thread/Job assíncrono, ou finalmente
+  ligar o Spring Batch que está no `pom.xml` desde o início e nunca foi usado —
+  CLAUDE.md §3.3).
+- **`OutOfMemoryError` com arquivo de 3,24 GB — corrigido com streaming (§3.5)**, mas
+  **ainda não re-testado com esse mesmo arquivo** depois da correção — validado só por
+  teste unitário + upload pequeno de verdade. É o próximo passo antes de considerar o
+  caso resolvido de ponta a ponta.
+- **Gravação ainda é 1 `INSERT` por linha** (`LoteIngestaoWriter`, sem batch de verdade
+  — o streaming do §3.5 só evita acumular tudo em memória, não agrupa os `INSERT`s) —
+  funcionou para 559.899 linhas em ~3 min; se um arquivo bem maior ficar lento demais,
+  é candidato a `saveAll`/batch insert do Spring Data ou o Spring Batch de verdade.
