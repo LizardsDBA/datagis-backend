@@ -5,6 +5,7 @@ import br.gov.sp.cps.datagis.bronze.RegistroBrutoRepository;
 import br.gov.sp.cps.datagis.controle.FonteDado;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
 import br.gov.sp.cps.datagis.controle.LoteIngestaoRepository;
+import jakarta.persistence.EntityManager;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -28,13 +29,26 @@ public class LoteIngestaoWriter {
     private static final String STATUS_SEM_MUDANCA = "SEM_MUDANCA";
     private static final String STATUS_EM_PROCESSAMENTO = "EM_PROCESSAMENTO";
 
+    /**
+     * A cada N registros gravados em {@link #gravarStreaming}, força um flush + clear
+     * do persistence context do Hibernate. Sem isso, mesmo gravando um registro por vez
+     * (sem lista em memória do lado da aplicação), o Hibernate mantém toda entidade
+     * como "managed" na sessão até o fim da transação — pra uma fonte de milhões de
+     * linhas isso vira o novo estouro de heap, só que dentro do JPA em vez da aplicação.
+     */
+    private static final int TAMANHO_LOTE_FLUSH = 500;
+
     private final LoteIngestaoRepository loteIngestaoRepository;
     private final RegistroBrutoRepository registroBrutoRepository;
+    private final EntityManager entityManager;
 
     public LoteIngestaoWriter(
-            LoteIngestaoRepository loteIngestaoRepository, RegistroBrutoRepository registroBrutoRepository) {
+            LoteIngestaoRepository loteIngestaoRepository,
+            RegistroBrutoRepository registroBrutoRepository,
+            EntityManager entityManager) {
         this.loteIngestaoRepository = loteIngestaoRepository;
         this.registroBrutoRepository = registroBrutoRepository;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -90,6 +104,85 @@ public class LoteIngestaoWriter {
         lote.setQuantidadeRegistros(contador);
         lote.setStatus(STATUS_CONCLUIDO);
         return loteIngestaoRepository.save(lote);
+    }
+
+    /**
+     * Mesmo ciclo de vida de {@link #gravar}, mas pra fontes grandes demais pra
+     * materializar numa {@code List} antes de gravar (achado ao vivo com um Shapefile
+     * de 3,24 GB — ver {@link FornecedorRegistros}). Grava cada registro assim que
+     * chega, com flush/clear periódico do Hibernate (ver {@link #TAMANHO_LOTE_FLUSH}).
+     *
+     * <p>Só se sabe se "mudou desde o último lote" depois de ler tudo — igual no
+     * método antigo — só que aqui isso significa gravar tudo primeiro; se o hash final
+     * bater com o do lote anterior, os registros recém-gravados são apagados em bloco
+     * (um {@code DELETE} por {@code lote_ingestao_id}, não um por linha) e o lote vira
+     * {@code SEM_MUDANCA}. É mais I/O que o caminho antigo no caso "sem mudança", mas
+     * não precisa mais caber a fonte inteira na memória pra chegar nessa resposta.
+     */
+    @Transactional
+    public LoteIngestao gravarStreaming(FonteDado fonte, FornecedorRegistros fornecedor) {
+        String hashAnterior = loteIngestaoRepository
+                .findFirstByFonteDadoIdOrderByIdDesc(fonte.getId())
+                .map(LoteIngestao::getHashConteudo)
+                .orElse(null);
+
+        LoteIngestao lote = LoteIngestao.builder()
+                .fonteDado(fonte)
+                .origemReferencia(fonte.getCaminhoArquivoUpload())
+                .status(STATUS_EM_PROCESSAMENTO)
+                .dataExecucao(LocalDateTime.now())
+                .build();
+        lote = loteIngestaoRepository.save(lote);
+        Long loteId = lote.getId();
+
+        MessageDigest digest = criarDigestSha256();
+        int[] contador = {0};
+        fornecedor.fornecer(registro -> {
+            if (contador[0] > 0) {
+                digest.update((byte) '\n');
+            }
+            digest.update(registro.payloadJson().getBytes(StandardCharsets.UTF_8));
+
+            RegistroBruto bruto = RegistroBruto.builder()
+                    .loteIngestaoId(loteId)
+                    .fonteDadoId(fonte.getId())
+                    .numeroLinha(contador[0])
+                    .payload(registro.payloadJson())
+                    .geometriaWkt(registro.geometriaWkt())
+                    .dataIngestao(LocalDateTime.now())
+                    .build();
+            registroBrutoRepository.save(bruto);
+            contador[0]++;
+
+            if (contador[0] % TAMANHO_LOTE_FLUSH == 0) {
+                entityManager.flush();
+                entityManager.clear();
+            }
+        });
+
+        String hash = HexFormat.of().formatHex(digest.digest());
+        boolean semMudanca = hash.equals(hashAnterior);
+
+        // O clear() acima desanexa "lote" — save() re-anexa (merge) pelo id, sem problema.
+        if (semMudanca) {
+            entityManager.flush();
+            registroBrutoRepository.deleteByLoteIngestaoId(loteId);
+            lote.setQuantidadeRegistros(0);
+            lote.setStatus(STATUS_SEM_MUDANCA);
+        } else {
+            lote.setQuantidadeRegistros(contador[0]);
+            lote.setStatus(STATUS_CONCLUIDO);
+        }
+        lote.setHashConteudo(hash);
+        return loteIngestaoRepository.save(lote);
+    }
+
+    private static MessageDigest criarDigestSha256() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 indisponível na JVM", e);
+        }
     }
 
     private static String sha256Hex(String texto) {

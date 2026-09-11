@@ -9,12 +9,11 @@ import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -46,6 +45,11 @@ import tools.jackson.databind.ObjectMapper;
  *
  * <p>Mesma resiliência dos outros executores: geometria ausente ou que falhar ao
  * converter não derruba o registro (grava sem WKT), e feição ruim não derruba o lote.
+ *
+ * <p>Lê e grava em <b>streaming</b> (ver {@link FornecedorRegistros}), não junta as
+ * feições numa lista antes: um Shapefile de 3,24 GB estourava o heap só na leitura,
+ * antes de gravar a primeira linha (achado ao vivo, 2026-09-11 —
+ * {@code docs/upload-shapefile-car.md} §3.4).
  */
 @Service
 public class IngestaoShapefileExecutor implements IngestaoExecutor {
@@ -85,11 +89,8 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
 
         Path diretorioTemp = descompactar(fonte);
         try {
-            List<RegistroPreparado> registros = lerShapefiles(diretorioTemp, fonte);
-            String conteudoParaHash = registros.stream()
-                    .map(RegistroPreparado::payloadJson)
-                    .collect(Collectors.joining("\n"));
-            return writer.gravar(fonte, conteudoParaHash, registros);
+            List<Path> shapefiles = listarShapefiles(diretorioTemp, fonte);
+            return writer.gravarStreaming(fonte, consumidor -> lerShapefiles(shapefiles, consumidor));
         } finally {
             apagarRecursivo(diretorioTemp);
         }
@@ -120,7 +121,7 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
         return destino;
     }
 
-    private List<RegistroPreparado> lerShapefiles(Path diretorio, FonteDado fonte) {
+    private List<Path> listarShapefiles(Path diretorio, FonteDado fonte) {
         List<Path> shapefiles;
         try (Stream<Path> arquivos = Files.list(diretorio)) {
             shapefiles = arquivos
@@ -134,23 +135,24 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
             throw new IllegalStateException(
                     "Nenhum arquivo .shp encontrado dentro do .zip enviado pra \"" + fonte.getNome() + "\"");
         }
-
-        List<RegistroPreparado> registros = new ArrayList<>();
-        for (Path shp : shapefiles) {
-            registros.addAll(lerUmShapefile(shp));
-        }
-        return registros;
+        return shapefiles;
     }
 
-    private List<RegistroPreparado> lerUmShapefile(Path shp) {
-        List<RegistroPreparado> registros = new ArrayList<>();
+    /** Chama {@code consumidor} um registro por vez, pra cada .shp, sem acumular nada em lista. */
+    private void lerShapefiles(List<Path> shapefiles, Consumer<RegistroPreparado> consumidor) {
+        for (Path shp : shapefiles) {
+            lerUmShapefile(shp, consumidor);
+        }
+    }
+
+    private void lerUmShapefile(Path shp, Consumer<RegistroPreparado> consumidor) {
         DataStore dataStore = abrir(shp);
         try {
             String nomeCamada = dataStore.getTypeNames()[0];
             SimpleFeatureSource origem = dataStore.getFeatureSource(nomeCamada);
             try (SimpleFeatureIterator it = origem.getFeatures().features()) {
                 while (it.hasNext()) {
-                    registros.add(paraRegistro(it.next()));
+                    consumidor.accept(paraRegistro(it.next()));
                 }
             }
         } catch (IOException e) {
@@ -158,7 +160,6 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
         } finally {
             dataStore.dispose();
         }
-        return registros;
     }
 
     private DataStore abrir(Path shp) {

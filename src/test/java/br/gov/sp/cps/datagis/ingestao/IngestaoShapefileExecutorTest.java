@@ -2,7 +2,6 @@ package br.gov.sp.cps.datagis.ingestao;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -38,7 +37,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.ObjectMapper;
@@ -104,23 +102,26 @@ class IngestaoShapefileExecutorTest {
                 .build();
         when(armazenamento.ler(eq("qualquer-endereco.zip"))).thenReturn(new ByteArrayInputStream(zip));
         LoteIngestao loteEsperado = LoteIngestao.builder().id(20L).status("CONCLUIDO").build();
-        when(writer.gravar(eq(fonte), anyString(), any())).thenReturn(loteEsperado);
+
+        // gravarStreaming não devolve uma lista pronta — pra inspecionar o que o
+        // executor leu, a resposta do mock "consome" o FornecedorRegistros na hora,
+        // igual o LoteIngestaoWriter de verdade faria.
+        List<RegistroPreparado> registrosRecebidos = new ArrayList<>();
+        when(writer.gravarStreaming(eq(fonte), any(FornecedorRegistros.class))).thenAnswer(chamada -> {
+            FornecedorRegistros fornecedor = chamada.getArgument(1);
+            fornecedor.fornecer(registrosRecebidos::add);
+            return loteEsperado;
+        });
 
         LoteIngestao resultado = executor.executar(fonte);
 
         assertThat(resultado).isSameAs(loteEsperado);
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
-        org.mockito.Mockito.verify(writer).gravar(eq(fonte), anyString(), captor.capture());
-
-        List<RegistroPreparado> registros = captor.getValue();
-        assertThat(registros).hasSize(2);
-        assertThat(registros).anySatisfy(r -> {
+        assertThat(registrosRecebidos).hasSize(2);
+        assertThat(registrosRecebidos).anySatisfy(r -> {
             assertThat(r.payloadJson()).contains("Imovel A").contains("12.5");
             assertThat(r.geometriaWkt()).startsWith("POINT");
         });
-        assertThat(registros).anySatisfy(r -> assertThat(r.payloadJson()).contains("Imovel B"));
+        assertThat(registrosRecebidos).anySatisfy(r -> assertThat(r.payloadJson()).contains("Imovel B"));
     }
 
     /** Cria um Shapefile de verdade (via GeoTools, o mesmo escritor que a produção usaria) e zipa. */

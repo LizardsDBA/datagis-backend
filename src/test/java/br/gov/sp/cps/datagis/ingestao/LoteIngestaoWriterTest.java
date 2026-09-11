@@ -11,6 +11,8 @@ import br.gov.sp.cps.datagis.bronze.RegistroBrutoRepository;
 import br.gov.sp.cps.datagis.controle.FonteDado;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
 import br.gov.sp.cps.datagis.controle.LoteIngestaoRepository;
+import jakarta.persistence.EntityManager;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -26,12 +28,14 @@ class LoteIngestaoWriterTest {
     private LoteIngestaoRepository loteIngestaoRepository;
     @Mock
     private RegistroBrutoRepository registroBrutoRepository;
+    @Mock
+    private EntityManager entityManager;
 
     private LoteIngestaoWriter writer;
 
     @Test
     void deveGravarLoteConcluidoComTodosOsRegistros() {
-        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository);
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
         FonteDado fonte = FonteDado.builder().id(1L).urlOrigem("https://x").build();
         when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L)).thenReturn(Optional.empty());
         when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
@@ -57,7 +61,7 @@ class LoteIngestaoWriterTest {
 
     @Test
     void naoDeveGravarRegistrosQuandoHashJaFoiIngeridoNoUltimoLote() {
-        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository);
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
         FonteDado fonte = FonteDado.builder().id(1L).urlOrigem("https://x").build();
 
         // Mesmo hash que "conteudo-de-teste" vai gerar - o teste so precisa que bata.
@@ -79,5 +83,72 @@ class LoteIngestaoWriterTest {
 
         assertThat(resultado.getStatus()).isEqualTo("SEM_MUDANCA");
         assertThat(resultado.getQuantidadeRegistros()).isEqualTo(0);
+    }
+
+    /**
+     * {@code gravarStreaming} (usado pelo Shapefile — LIZARDS-3 doc/upload-shapefile-
+     * car.md §3.4): mesmo resultado do caminho baseado em {@code List}, mas
+     * consumindo os registros um a um via {@link FornecedorRegistros}, sem nunca
+     * existir uma lista com todos eles em memória.
+     */
+    @Test
+    void gravarStreamingDeveConcluirComTodosOsRegistrosQuandoMudou() {
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        FonteDado fonte = FonteDado.builder().id(1L).caminhoArquivoUpload("/tmp/x.zip").build();
+        when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L)).thenReturn(Optional.empty());
+        when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
+            LoteIngestao lote = chamada.getArgument(0);
+            if (lote.getId() == null) {
+                lote.setId(10L);
+            }
+            return lote;
+        });
+        when(registroBrutoRepository.save(any(RegistroBruto.class))).thenAnswer(chamada -> chamada.getArgument(0));
+
+        FornecedorRegistros fornecedor = consumidor -> {
+            consumidor.accept(new RegistroPreparado("{\"a\":1}", "POINT(1 2)"));
+            consumidor.accept(new RegistroPreparado("{\"a\":2}", null));
+        };
+
+        LoteIngestao resultado = writer.gravarStreaming(fonte, fornecedor);
+
+        assertThat(resultado.getStatus()).isEqualTo("CONCLUIDO");
+        assertThat(resultado.getQuantidadeRegistros()).isEqualTo(2);
+        assertThat(resultado.getHashConteudo()).hasSize(64);
+        verify(registroBrutoRepository, times(2)).save(any(RegistroBruto.class));
+        verify(registroBrutoRepository, times(0)).deleteByLoteIngestaoId(any());
+    }
+
+    @Test
+    void gravarStreamingDeveApagarRegistrosGravadosQuandoDescobreSemMudancaSoNoFim() {
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        FonteDado fonte = FonteDado.builder().id(1L).caminhoArquivoUpload("/tmp/x.zip").build();
+
+        List<LoteIngestao> salvos = new ArrayList<>();
+        when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
+            LoteIngestao lote = chamada.getArgument(0);
+            if (lote.getId() == null) {
+                lote.setId(20L);
+            }
+            salvos.add(lote);
+            return lote;
+        });
+        // Primeira chamada só pra descobrir o hash de um fornecedor com o mesmo
+        // conteúdo e plantar num "lote anterior" com esse hash já gravado.
+        FornecedorRegistros fornecedor = consumidor -> consumidor.accept(new RegistroPreparado("{\"a\":1}", null));
+        when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L)).thenReturn(Optional.empty());
+        writer.gravarStreaming(fonte, fornecedor);
+        String hashJaConhecido = salvos.get(salvos.size() - 1).getHashConteudo();
+
+        LoteIngestao loteAnterior = LoteIngestao.builder().id(20L).hashConteudo(hashJaConhecido).build();
+        when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L)).thenReturn(Optional.of(loteAnterior));
+
+        LoteIngestao resultado = writer.gravarStreaming(fonte, fornecedor);
+
+        assertThat(resultado.getStatus()).isEqualTo("SEM_MUDANCA");
+        assertThat(resultado.getQuantidadeRegistros()).isEqualTo(0);
+        // Grava (não sabia ainda que era igual) e só depois apaga em bloco.
+        verify(registroBrutoRepository, times(2)).save(any(RegistroBruto.class));
+        verify(registroBrutoRepository).deleteByLoteIngestaoId(20L);
     }
 }
