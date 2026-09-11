@@ -1,8 +1,10 @@
 package br.gov.sp.cps.datagis.ingestao;
 
+import br.gov.sp.cps.datagis.armazenamento.ArmazenamentoArquivoBruto;
 import br.gov.sp.cps.datagis.controle.FonteDado;
 import br.gov.sp.cps.datagis.controle.FonteDadoRepository;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
+import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.springframework.stereotype.Service;
@@ -20,16 +22,19 @@ public class IngestaoExecucaoService {
 
     private final FonteDadoRepository fonteDadoRepository;
     private final List<IngestaoExecutor> executores;
+    private final ArmazenamentoArquivoBruto armazenamento;
 
-    public IngestaoExecucaoService(FonteDadoRepository fonteDadoRepository, List<IngestaoExecutor> executores) {
+    public IngestaoExecucaoService(
+            FonteDadoRepository fonteDadoRepository,
+            List<IngestaoExecutor> executores,
+            ArmazenamentoArquivoBruto armazenamento) {
         this.fonteDadoRepository = fonteDadoRepository;
         this.executores = executores;
+        this.armazenamento = armazenamento;
     }
 
     public LoteIngestao executar(Long fonteId) {
-        FonteDado fonte = fonteDadoRepository.findById(fonteId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Fonte de dado " + fonteId + " não encontrada"));
+        FonteDado fonte = buscarFonte(fonteId);
 
         IngestaoExecutor executor = executores.stream()
                 .filter(e -> e.suportar(fonte))
@@ -43,5 +48,25 @@ public class IngestaoExecucaoService {
         fonteDadoRepository.save(fonte);
 
         return lote;
+    }
+
+    /**
+     * Salva o arquivo enviado (nome original + conteúdo) como o "último arquivo" da
+     * fonte e, na sequência, dispara a mesma ingestão genérica de {@link #executar} —
+     * só fontes {@code UPLOAD_MANUAL} chegam até aqui de verdade (quem tem URL usa o
+     * fluxo normal); a validação de tipo mora no executor, não aqui.
+     */
+    public LoteIngestao executarComUpload(Long fonteId, String nomeArquivo, InputStream conteudo) {
+        FonteDado fonte = buscarFonte(fonteId);
+        String endereco = armazenamento.salvar(nomeArquivo, conteudo);
+        fonte.setCaminhoArquivoUpload(endereco);
+        fonteDadoRepository.save(fonte);
+        return executar(fonteId);
+    }
+
+    private FonteDado buscarFonte(Long fonteId) {
+        return fonteDadoRepository.findById(fonteId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Fonte de dado " + fonteId + " não encontrada"));
     }
 }
