@@ -38,41 +38,41 @@ public class LoteIngestaoWriter {
      */
     private static final int TAMANHO_LOTE_FLUSH = 500;
 
+    /** A cada N registros gravados, atualiza {@link ProgressoExecucaoRegistry} — mesma cadência do flush. */
+    private static final int INTERVALO_PROGRESSO = TAMANHO_LOTE_FLUSH;
+
     private final LoteIngestaoRepository loteIngestaoRepository;
     private final RegistroBrutoRepository registroBrutoRepository;
     private final EntityManager entityManager;
+    private final ProgressoExecucaoRegistry progresso;
 
     public LoteIngestaoWriter(
             LoteIngestaoRepository loteIngestaoRepository,
             RegistroBrutoRepository registroBrutoRepository,
-            EntityManager entityManager) {
+            EntityManager entityManager,
+            ProgressoExecucaoRegistry progresso) {
         this.loteIngestaoRepository = loteIngestaoRepository;
         this.registroBrutoRepository = registroBrutoRepository;
         this.entityManager = entityManager;
+        this.progresso = progresso;
     }
 
     /**
-     * @param conteudoParaHash só a parte do corpo bruto que representa dado de verdade
-     *                         (ex.: as features de um GeoJSON, sem o envelope que traz
-     *                         timestamp variável a cada chamada — ver RN018/§2.8).
-     * @param registros        já prontos; calculado só se o hash indicar mudança.
-     */
-    /**
-     * Decide se o conteúdo mudou desde o último lote da fonte, SEM gravar nada.
+     * Decide se um hash (já calculado por quem chama — ver {@link #hashDePartes}) é
+     * diferente do hash do último lote da fonte, SEM gravar nada.
      *
-     * <p>Existe pra quem tiver que converter cada registro antes de poder montar
-     * {@code conteudoParaHash} de verdade (ex.: {@link IngestaoGeoJsonExecutor}, que
-     * precisa serializar JSON e converter geometria pra WKT feature a feature) poder
-     * checar "mudou?" primeiro e pular esse trabalho inteiro quando a resposta for não —
-     * achado ao vivo com o circuito do CAR/PR: a conversão de ~4.590 features levava a
-     * maior parte do tempo de uma execução, mesmo quando o resultado era
-     * {@code SEM_MUDANCA} e nada daquilo era usado.
+     * <p>Existe pra quem tiver que converter cada registro antes de montar o payload
+     * de verdade (ex.: {@link IngestaoGeoJsonExecutor}, que serializa JSON e converte
+     * geometria pra WKT feature a feature) poder checar "mudou?" primeiro e pular esse
+     * trabalho inteiro quando a resposta for não — achado ao vivo com o circuito do
+     * CAR/PR: a conversão de ~4.590 features levava a maior parte do tempo de uma
+     * execução, mesmo quando o resultado era {@code SEM_MUDANCA} e nada daquilo era
+     * usado.
      */
-    public boolean mudou(FonteDado fonte, String conteudoParaHash) {
-        String hash = sha256Hex(conteudoParaHash);
+    public boolean mudou(FonteDado fonte, String hashHex) {
         return loteIngestaoRepository
                 .findFirstByFonteDadoIdOrderByIdDesc(fonte.getId())
-                .map(anterior -> !hash.equals(anterior.getHashConteudo()))
+                .map(anterior -> !hashHex.equals(anterior.getHashConteudo()))
                 .orElse(true);
     }
 
@@ -81,11 +81,11 @@ public class LoteIngestaoWriter {
      * usar depois de {@link #mudou} já ter confirmado que não há nada de novo.
      */
     @Transactional
-    public LoteIngestao gravarSemMudanca(FonteDado fonte, String conteudoParaHash) {
+    public LoteIngestao gravarSemMudanca(FonteDado fonte, String hashHex) {
         LoteIngestao loteSemMudanca = LoteIngestao.builder()
                 .fonteDado(fonte)
                 .origemReferencia(fonte.getUrlOrigem())
-                .hashConteudo(sha256Hex(conteudoParaHash))
+                .hashConteudo(hashHex)
                 .quantidadeRegistros(0)
                 .status(STATUS_SEM_MUDANCA)
                 .dataExecucao(LocalDateTime.now())
@@ -93,36 +93,47 @@ public class LoteIngestaoWriter {
         return loteIngestaoRepository.save(loteSemMudanca);
     }
 
+    /**
+     * @param conteudoParaHash conteúdo bruto inteiro pra hashear — só serve quando ele
+     *                         cabe numa única String sem risco (fontes pequenas/médias,
+     *                         ex. CSV). Fontes onde montar essa String sozinha já é
+     *                         arriscado (ex. GeoJSON com muitas features — ver
+     *                         {@link #hashDePartes}) devem calcular o hash antes, feature
+     *                         a feature, e chamar {@link #gravarComHash} diretamente.
+     * @param registros        já prontos; calculado só se o hash indicar mudança.
+     */
     @Transactional
     public LoteIngestao gravar(FonteDado fonte, String conteudoParaHash, List<RegistroPreparado> registros) {
-        String hash = sha256Hex(conteudoParaHash);
+        return gravarComHash(fonte, sha256Hex(conteudoParaHash), registros);
+    }
 
+    /**
+     * Mesmo {@link #gravar}, recebendo o hash já calculado — usar quando quem chama
+     * (ex.: {@link IngestaoGeoJsonExecutor}) precisou calcular o hash antes (via
+     * {@link #hashDePartes}) pra decidir "mudou?" (ver {@link #mudou}) sem montar os
+     * {@link RegistroPreparado} à toa.
+     */
+    @Transactional
+    public LoteIngestao gravarComHash(FonteDado fonte, String hashHex, List<RegistroPreparado> registros) {
         boolean semMudanca = loteIngestaoRepository
                 .findFirstByFonteDadoIdOrderByIdDesc(fonte.getId())
-                .map(anterior -> hash.equals(anterior.getHashConteudo()))
+                .map(anterior -> hashHex.equals(anterior.getHashConteudo()))
                 .orElse(false);
 
         if (semMudanca) {
-            LoteIngestao loteSemMudanca = LoteIngestao.builder()
-                    .fonteDado(fonte)
-                    .origemReferencia(fonte.getUrlOrigem())
-                    .hashConteudo(hash)
-                    .quantidadeRegistros(0)
-                    .status(STATUS_SEM_MUDANCA)
-                    .dataExecucao(LocalDateTime.now())
-                    .build();
-            return loteIngestaoRepository.save(loteSemMudanca);
+            return gravarSemMudanca(fonte, hashHex);
         }
 
         LoteIngestao lote = LoteIngestao.builder()
                 .fonteDado(fonte)
                 .origemReferencia(fonte.getUrlOrigem())
-                .hashConteudo(hash)
+                .hashConteudo(hashHex)
                 .status(STATUS_EM_PROCESSAMENTO)
                 .dataExecucao(LocalDateTime.now())
                 .build();
         lote = loteIngestaoRepository.save(lote);
 
+        int total = registros.size();
         int contador = 0;
         for (RegistroPreparado registro : registros) {
             RegistroBruto bruto = RegistroBruto.builder()
@@ -135,11 +146,39 @@ public class LoteIngestaoWriter {
                     .build();
             registroBrutoRepository.save(bruto);
             contador++;
+            if (contador % INTERVALO_PROGRESSO == 0 || contador == total) {
+                progresso.atualizar(fonte.getId(), FaseExecucao.GRAVANDO, contador, (long) total, null);
+            }
         }
 
         lote.setQuantidadeRegistros(contador);
         lote.setStatus(STATUS_CONCLUIDO);
         return loteIngestaoRepository.save(lote);
+    }
+
+    /**
+     * Calcula o hash SHA-256 de uma lista de textos, um de cada vez — NUNCA concatena
+     * tudo numa única String antes de hashear.
+     *
+     * <p>Existe por causa de um {@code OutOfMemoryError} real: {@link
+     * IngestaoGeoJsonExecutor} processando o PRODES Mata Atlântica (~38 mil features)
+     * montava toda a coleção como uma String gigante só pra hashear — o stack trace
+     * mostrou o estouro acontecendo DENTRO do serializador do Jackson
+     * ({@code WriterBasedJsonGenerator}/{@code TextBuffer}), não na lista de features
+     * nem nos registros convertidos. Hasheando pedaço por pedaço, o pico de memória
+     * fica limitado ao tamanho de UMA feature por vez, não da coleção inteira.
+     */
+    public static String hashDePartes(Iterable<String> partes) {
+        MessageDigest digest = criarDigestSha256();
+        boolean primeira = true;
+        for (String parte : partes) {
+            if (!primeira) {
+                digest.update((byte) '\n');
+            }
+            digest.update(parte.getBytes(StandardCharsets.UTF_8));
+            primeira = false;
+        }
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     /**
@@ -157,6 +196,19 @@ public class LoteIngestaoWriter {
      */
     @Transactional
     public LoteIngestao gravarStreaming(FonteDado fonte, FornecedorRegistros fornecedor) {
+        return gravarStreaming(fonte, fornecedor, null);
+    }
+
+    /**
+     * Mesmo {@link #gravarStreaming(FonteDado, FornecedorRegistros)}, recebendo também
+     * um total estimado de registros (ex.: soma do cabeçalho do `.dbf` de cada
+     * Shapefile — barato de obter, não precisa ler feição nenhuma) pra alimentar a
+     * barra de progresso com percentual de verdade, não só uma contagem crescente.
+     * {@code null} quando quem chama não sabe o total de antemão — a tela cai pra
+     * "N registros processados", sem percentual.
+     */
+    @Transactional
+    public LoteIngestao gravarStreaming(FonteDado fonte, FornecedorRegistros fornecedor, Long totalEstimado) {
         String hashAnterior = loteIngestaoRepository
                 .findFirstByFonteDadoIdOrderByIdDesc(fonte.getId())
                 .map(LoteIngestao::getHashConteudo)
@@ -193,6 +245,9 @@ public class LoteIngestaoWriter {
             if (contador[0] % TAMANHO_LOTE_FLUSH == 0) {
                 entityManager.flush();
                 entityManager.clear();
+            }
+            if (contador[0] == 1 || contador[0] % INTERVALO_PROGRESSO == 0) {
+                progresso.atualizar(fonte.getId(), FaseExecucao.GRAVANDO, contador[0], totalEstimado, null);
             }
         });
 
