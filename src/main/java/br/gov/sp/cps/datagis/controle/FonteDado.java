@@ -75,6 +75,17 @@ public class FonteDado {
     @Column(name = "ultima_execucao_em")
     private LocalDateTime ultimaExecucaoEm;
 
+    @Column(name = "ultima_duracao_ms")
+    private Long ultimaDuracaoMs;
+
+    /** SUCESSO | ERRO — nulo quando a fonte nunca foi executada ainda. */
+    @Column(name = "ultimo_status_execucao", length = 20)
+    private String ultimoStatusExecucao;
+
+    /** Só preenchido quando ultimoStatusExecucao = ERRO. */
+    @Column(name = "ultimo_erro_mensagem", length = 2000)
+    private String ultimoErroMensagem;
+
     @Column(name = "proxima_execucao_em")
     private LocalDateTime proximaExecucaoEm;
 
