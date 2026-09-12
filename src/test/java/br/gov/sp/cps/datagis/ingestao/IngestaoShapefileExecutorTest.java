@@ -62,7 +62,7 @@ class IngestaoShapefileExecutorTest {
 
     @BeforeEach
     void configurar() {
-        executor = new IngestaoShapefileExecutor(armazenamento, writer, new ObjectMapper());
+        executor = new IngestaoShapefileExecutor(armazenamento, writer, new ObjectMapper(), new ProgressoExecucaoRegistry());
     }
 
     @Test
@@ -107,7 +107,7 @@ class IngestaoShapefileExecutorTest {
         // executor leu, a resposta do mock "consome" o FornecedorRegistros na hora,
         // igual o LoteIngestaoWriter de verdade faria.
         List<RegistroPreparado> registrosRecebidos = new ArrayList<>();
-        when(writer.gravarStreaming(eq(fonte), any(FornecedorRegistros.class))).thenAnswer(chamada -> {
+        when(writer.gravarStreaming(eq(fonte), any(FornecedorRegistros.class), any())).thenAnswer(chamada -> {
             FornecedorRegistros fornecedor = chamada.getArgument(1);
             fornecedor.fornecer(registrosRecebidos::add);
             return loteEsperado;
@@ -122,6 +122,12 @@ class IngestaoShapefileExecutorTest {
             assertThat(r.geometriaWkt()).startsWith("POINT");
         });
         assertThat(registrosRecebidos).anySatisfy(r -> assertThat(r.payloadJson()).contains("Imovel B"));
+
+        // Total pra barra de progresso vem do cabeçalho do .dbf (2 feições), sem
+        // precisar ler nenhuma geometria pra saber isso - ver contarRegistrosTotais.
+        org.mockito.ArgumentCaptor<Long> totalCaptor = org.mockito.ArgumentCaptor.forClass(Long.class);
+        org.mockito.Mockito.verify(writer).gravarStreaming(eq(fonte), any(FornecedorRegistros.class), totalCaptor.capture());
+        assertThat(totalCaptor.getValue()).isEqualTo(2L);
     }
 
     /** Cria um Shapefile de verdade (via GeoTools, o mesmo escritor que a produção usaria) e zipa. */
