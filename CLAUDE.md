@@ -1114,6 +1114,36 @@ Desenho completo e justificativas em **`docs/modelagem-silver-gold-quarentena.md
 - **Próximo passo:** transformação Bronze→Silver (lê `mapeamento_coluna`, deduplica por
   chave natural — §3.5 do doc), depois cálculo dos indicadores na Gold.
 
+### 9.12. Upload manual + ingestão de Shapefile — **[FEITO e testado ao vivo, 2026-09-11, `LIZARDS-3`]**
+Branch `feat/upload-shp`. Detalhe completo, achados e itens em aberto em
+**`docs/upload-shapefile-car.md`**. Resumo:
+
+- **`consultapublica.car.gov.br` (download em lote de Shapefile por estado) é uma SPA
+  com sessão — confirmado de novo que não dá pra automatizar por HTTP simples** (loop
+  de redirect). Solução: usuário baixa no navegador dele, sobe pro sistema por
+  **upload manual** — `tipo_aquisicao=UPLOAD_MANUAL` já existia no cadastro, só faltava
+  a execução de verdade.
+- Peças novas: `ArmazenamentoArquivoBruto` (interface do §5.4, finalmente
+  implementada — local-FS), `IngestaoShapefileExecutor` (`formatoEsperado=SHAPEFILE`,
+  usa GeoTools — item 3 do spike §5.5, finalmente exercitado), endpoint
+  `POST /api/fontes/{id}/upload`, botão de upload na tela pra fontes `UPLOAD_MANUAL`.
+- **GeoTools 35.1 usa `org.geotools.api.*`, não `org.opengis.*`** — mapa completo de
+  pacotes no doc (mesma classe de pegadinha do Jackson 3, §5.5 item 6).
+- **Limite de upload teve que subir pra 2GB** — arquivo real de teste (218MB) já
+  passava do limite inicial de 100MB, e tem casos de 1GB+. Sintoma de limite estourado:
+  sem erro nenhum no log, só `Failed to fetch` no navegador (Tomcat reseta a conexão no
+  meio do recebimento, não devolve resposta HTTP).
+- **Testado com arquivo de produção real**: 218MB, 559.899 registros, ~3 min,
+  processamento síncrono (sem chunk/batch) sem erro.
+- **Achado real comparando com a fonte via WFS**: o Shapefile bulk traz o **histórico
+  completo** do CAR (`situacao_imovel` = `AT`/`CA`/`PE`), o WFS só devolve o vigente.
+  Refina a regra de dedup do §3.5 do doc de modelagem — duplicata **dentro do mesmo
+  lote** (não entre lotes) precisa de regra própria (manter só `AT`).
+
+### 10.4-bis. Estado atual (2026-09-11)
+- **Branch de trabalho corrente:** `feat/upload-shp` (backend e frontend), em cima da
+  `sprint-1` já com a modelagem (`LIZARDS-2`) mesclada. Ainda sem PR aberto.
+
 ---
 
 ## 10. Git — branches, commits e fluxo de PR — **[DECIDIDO, padrão da equipe LizardsDBA]**

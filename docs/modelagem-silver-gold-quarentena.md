@@ -141,6 +141,16 @@ O Bronze acumulou 3× o mesmo circuito só porque a ingestão rodou 3× durante 
    "inventa" nem escolhe sozinho qual valor é o certo).
 4. Chave natural repetida **dentro do mesmo lote** → `CHAVE_NATURAL_DUPLICADA`.
 
+**Atualização — `LIZARDS-3`, 2026-09-11:** achado ao vivo testando o Shapefile bulk do
+CAR (`docs/upload-shapefile-car.md` §5.3): o mesmo `cod_imovel` pode aparecer mais de
+uma vez **dentro do mesmo lote**, por desenho da própria fonte — 1 cópia
+`situacao_imovel=AT` (vigente) + N cópias `CA` (`"Cancelado por duplicidade"`,
+histórico que o próprio CAR mantém). **Isso não é `CHAVE_NATURAL_DUPLICADA`** (não é
+erro, não vai pra quarentena) — é um caso à parte: a transformação deve manter só a
+linha `AT` como o imóvel "oficial" pra `imovel_rural`, e decidir separadamente o que
+fazer com as `CA` (descartar, ou tabela de histórico se um dia for preciso auditar
+cancelamento).
+
 ---
 
 ## 4. Camada Quarentena
