@@ -15,6 +15,9 @@ public record FonteDadoResponse(
         String campoGeometriaLon,
         Boolean ativo,
         LocalDateTime ultimaExecucaoEm,
+        Long ultimaDuracaoMs,
+        String ultimoStatusExecucao,
+        String ultimoErroMensagem,
         LocalDateTime dataAdd) {
 
     public static FonteDadoResponse de(FonteDado fonte) {
@@ -30,6 +33,9 @@ public record FonteDadoResponse(
                 fonte.getCampoGeometriaLon(),
                 fonte.getAtivo(),
                 fonte.getUltimaExecucaoEm(),
+                fonte.getUltimaDuracaoMs(),
+                fonte.getUltimoStatusExecucao(),
+                fonte.getUltimoErroMensagem(),
                 fonte.getDataAdd());
     }
 }
