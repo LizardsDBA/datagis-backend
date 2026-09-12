@@ -43,7 +43,7 @@ class IngestaoGeoJsonExecutorTest {
         corpoAmostra = Files.readString(
                 new ClassPathResource("fixtures/car-pr-amostra.json").getFile().toPath(),
                 StandardCharsets.UTF_8);
-        executor = new IngestaoGeoJsonExecutor(httpFetchClient, new GeoJsonWktMapper(), writer, new ObjectMapper());
+        executor = new IngestaoGeoJsonExecutor(httpFetchClient, new GeoJsonWktMapper(), writer, new ObjectMapper(), new ProgressoExecucaoRegistry());
         // Por padrão os testes exercitam o caminho "mudou" (é o que testam de verdade);
         // o teste dedicado a "sem mudança" sobrescreve isso. lenient() porque nem todo
         // teste desta classe chega a chamar executar() (ex.: suportarSoDependeDoFormatoEsperado).
@@ -63,7 +63,7 @@ class IngestaoGeoJsonExecutorTest {
         FonteDado fonte = FonteDado.builder().id(1L).urlOrigem("https://qualquer-fonte.gov.br/wfs").build();
         when(httpFetchClient.buscarCorpoBruto("https://qualquer-fonte.gov.br/wfs")).thenReturn(corpoAmostra);
         LoteIngestao loteEsperado = LoteIngestao.builder().id(10L).status("CONCLUIDO").build();
-        when(writer.gravar(eq(fonte), anyString(), any())).thenReturn(loteEsperado);
+        when(writer.gravarComHash(eq(fonte), anyString(), any())).thenReturn(loteEsperado);
 
         LoteIngestao resultado = executor.executar(fonte);
 
@@ -72,7 +72,7 @@ class IngestaoGeoJsonExecutorTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
-        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        verify(writer).gravarComHash(eq(fonte), anyString(), captor.capture());
 
         List<RegistroPreparado> registros = captor.getValue();
         assertThat(registros).hasSize(2);
@@ -99,7 +99,7 @@ class IngestaoGeoJsonExecutorTest {
                 .thenReturn(featureCollectionDePontos(113));
 
         LoteIngestao loteEsperado = LoteIngestao.builder().id(11L).status("CONCLUIDO").build();
-        when(writer.gravar(eq(fonte), anyString(), any())).thenReturn(loteEsperado);
+        when(writer.gravarComHash(eq(fonte), anyString(), any())).thenReturn(loteEsperado);
 
         LoteIngestao resultado = executor.executar(fonte);
 
@@ -109,7 +109,7 @@ class IngestaoGeoJsonExecutorTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
-        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        verify(writer).gravarComHash(eq(fonte), anyString(), captor.capture());
         assertThat(captor.getValue()).hasSize(tamanhoPagina + 113);
     }
 
@@ -127,7 +127,7 @@ class IngestaoGeoJsonExecutorTest {
         when(httpFetchClient.buscarCorpoBruto(anyString()))
                 .thenThrow(new IllegalStateException("curl falhou (exit 22): HTTP 500"))
                 .thenReturn(featureCollectionDePontos(443));
-        when(writer.gravar(eq(fonte), anyString(), any()))
+        when(writer.gravarComHash(eq(fonte), anyString(), any()))
                 .thenReturn(LoteIngestao.builder().id(15L).status("CONCLUIDO").build());
 
         executor.executar(fonte);
@@ -139,7 +139,7 @@ class IngestaoGeoJsonExecutorTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
-        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        verify(writer).gravarComHash(eq(fonte), anyString(), captor.capture());
         assertThat(captor.getValue()).hasSize(443);
     }
 
@@ -158,7 +158,7 @@ class IngestaoGeoJsonExecutorTest {
                 .thenThrow(new IllegalStateException("curl falhou (exit 22): HTTP 500"));
         when(httpFetchClient.buscarCorpoBruto(org.mockito.ArgumentMatchers.contains("resultRecordCount=500")))
                 .thenReturn(featureCollectionDePontos(399));
-        when(writer.gravar(eq(fonte), anyString(), any()))
+        when(writer.gravarComHash(eq(fonte), anyString(), any()))
                 .thenReturn(LoteIngestao.builder().id(13L).status("CONCLUIDO").build());
 
         executor.executar(fonte);
@@ -172,7 +172,7 @@ class IngestaoGeoJsonExecutorTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
-        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        verify(writer).gravarComHash(eq(fonte), anyString(), captor.capture());
         assertThat(captor.getValue()).hasSize(399);
     }
 
@@ -187,14 +187,14 @@ class IngestaoGeoJsonExecutorTest {
         String corpo = "{\"type\":\"FeatureCollection\",\"features\":["
                 + "{\"type\":\"Feature\",\"geometry\":null,\"properties\":{\"num_auto_infracao\":\"3938\"}}]}";
         when(httpFetchClient.buscarCorpoBruto(anyString())).thenReturn(corpo);
-        when(writer.gravar(eq(fonte), anyString(), any()))
+        when(writer.gravarComHash(eq(fonte), anyString(), any()))
                 .thenReturn(LoteIngestao.builder().id(14L).status("CONCLUIDO").build());
 
         executor.executar(fonte);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
-        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        verify(writer).gravarComHash(eq(fonte), anyString(), captor.capture());
         assertThat(captor.getValue()).hasSize(1);
         assertThat(captor.getValue().get(0).geometriaWkt()).isNull();
         assertThat(captor.getValue().get(0).payloadJson()).contains("3938");
@@ -214,14 +214,14 @@ class IngestaoGeoJsonExecutorTest {
                 + "\"geometry\":{\"type\":\"MultiPolygon\",\"coordinates\":[null]},"
                 + "\"properties\":{\"num_tad\":\"002458\"}}]}";
         when(httpFetchClient.buscarCorpoBruto(anyString())).thenReturn(corpo);
-        when(writer.gravar(eq(fonte), anyString(), any()))
+        when(writer.gravarComHash(eq(fonte), anyString(), any()))
                 .thenReturn(LoteIngestao.builder().id(16L).status("CONCLUIDO").build());
 
         executor.executar(fonte);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<RegistroPreparado>> captor = ArgumentCaptor.forClass(List.class);
-        verify(writer).gravar(eq(fonte), anyString(), captor.capture());
+        verify(writer).gravarComHash(eq(fonte), anyString(), captor.capture());
         assertThat(captor.getValue()).hasSize(1);
         assertThat(captor.getValue().get(0).geometriaWkt()).isNull();
         assertThat(captor.getValue().get(0).payloadJson()).contains("002458");
@@ -248,7 +248,7 @@ class IngestaoGeoJsonExecutorTest {
 
         assertThat(resultado).isSameAs(loteSemMudanca);
         verify(writer).gravarSemMudanca(eq(fonte), anyString());
-        verify(writer, org.mockito.Mockito.never()).gravar(any(), anyString(), any());
+        verify(writer, org.mockito.Mockito.never()).gravarComHash(any(), anyString(), any());
     }
 
     /** Fonte sem família de paginação reconhecida continua com uma chamada só, como sempre foi. */
@@ -257,7 +257,7 @@ class IngestaoGeoJsonExecutorTest {
         String url = "https://exemplo.gov.br/dados/arquivo.geojson";
         FonteDado fonte = FonteDado.builder().id(3L).urlOrigem(url).build();
         when(httpFetchClient.buscarCorpoBruto(url)).thenReturn(featureCollectionDePontos(5));
-        when(writer.gravar(eq(fonte), anyString(), any()))
+        when(writer.gravarComHash(eq(fonte), anyString(), any()))
                 .thenReturn(LoteIngestao.builder().id(12L).status("CONCLUIDO").build());
 
         executor.executar(fonte);
