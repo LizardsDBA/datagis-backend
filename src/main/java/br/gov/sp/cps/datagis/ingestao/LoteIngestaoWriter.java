@@ -57,6 +57,42 @@ public class LoteIngestaoWriter {
      *                         timestamp variável a cada chamada — ver RN018/§2.8).
      * @param registros        já prontos; calculado só se o hash indicar mudança.
      */
+    /**
+     * Decide se o conteúdo mudou desde o último lote da fonte, SEM gravar nada.
+     *
+     * <p>Existe pra quem tiver que converter cada registro antes de poder montar
+     * {@code conteudoParaHash} de verdade (ex.: {@link IngestaoGeoJsonExecutor}, que
+     * precisa serializar JSON e converter geometria pra WKT feature a feature) poder
+     * checar "mudou?" primeiro e pular esse trabalho inteiro quando a resposta for não —
+     * achado ao vivo com o circuito do CAR/PR: a conversão de ~4.590 features levava a
+     * maior parte do tempo de uma execução, mesmo quando o resultado era
+     * {@code SEM_MUDANCA} e nada daquilo era usado.
+     */
+    public boolean mudou(FonteDado fonte, String conteudoParaHash) {
+        String hash = sha256Hex(conteudoParaHash);
+        return loteIngestaoRepository
+                .findFirstByFonteDadoIdOrderByIdDesc(fonte.getId())
+                .map(anterior -> !hash.equals(anterior.getHashConteudo()))
+                .orElse(true);
+    }
+
+    /**
+     * Grava um lote {@code SEM_MUDANCA} direto, sem nenhum {@link RegistroPreparado} —
+     * usar depois de {@link #mudou} já ter confirmado que não há nada de novo.
+     */
+    @Transactional
+    public LoteIngestao gravarSemMudanca(FonteDado fonte, String conteudoParaHash) {
+        LoteIngestao loteSemMudanca = LoteIngestao.builder()
+                .fonteDado(fonte)
+                .origemReferencia(fonte.getUrlOrigem())
+                .hashConteudo(sha256Hex(conteudoParaHash))
+                .quantidadeRegistros(0)
+                .status(STATUS_SEM_MUDANCA)
+                .dataExecucao(LocalDateTime.now())
+                .build();
+        return loteIngestaoRepository.save(loteSemMudanca);
+    }
+
     @Transactional
     public LoteIngestao gravar(FonteDado fonte, String conteudoParaHash, List<RegistroPreparado> registros) {
         String hash = sha256Hex(conteudoParaHash);

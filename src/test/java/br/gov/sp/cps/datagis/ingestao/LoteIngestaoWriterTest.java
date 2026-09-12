@@ -86,6 +86,61 @@ class LoteIngestaoWriterTest {
     }
 
     /**
+     * {@link LoteIngestaoWriter#mudou} existe pra quem precisa converter registro a
+     * registro antes de montar o hash de verdade (ex.: {@link IngestaoGeoJsonExecutor})
+     * poder checar "mudou?" sem fazer esse trabalho primeiro — achado ao vivo no
+     * circuito do CAR/PR, ver LIZARDS-3.
+     */
+    @Test
+    void mudouDeveDizerVerdadeiroQuandoNuncaExecutouAntes() {
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        FonteDado fonte = FonteDado.builder().id(1L).build();
+        when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L)).thenReturn(Optional.empty());
+
+        assertThat(writer.mudou(fonte, "conteudo-qualquer")).isTrue();
+    }
+
+    @Test
+    void mudouDeveCompararComOHashDoUltimoLote() {
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        FonteDado fonte = FonteDado.builder().id(1L).build();
+
+        // Descobre o hash de "conteudo-igual" gravando uma vez, igual os outros
+        // testes desta classe já fazem.
+        when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L)).thenReturn(Optional.empty());
+        when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
+            LoteIngestao lote = chamada.getArgument(0);
+            lote.setId(30L);
+            return lote;
+        });
+        LoteIngestao loteAnterior = writer.gravar(fonte, "conteudo-igual", List.of());
+
+        when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L))
+                .thenReturn(Optional.of(loteAnterior));
+
+        assertThat(writer.mudou(fonte, "conteudo-igual")).isFalse();
+        assertThat(writer.mudou(fonte, "conteudo-diferente")).isTrue();
+    }
+
+    @Test
+    void gravarSemMudancaNaoDeveTocarNoRegistroBrutoRepository() {
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        FonteDado fonte = FonteDado.builder().id(1L).urlOrigem("https://x").build();
+        when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
+            LoteIngestao lote = chamada.getArgument(0);
+            lote.setId(31L);
+            return lote;
+        });
+
+        LoteIngestao resultado = writer.gravarSemMudanca(fonte, "conteudo-qualquer");
+
+        assertThat(resultado.getStatus()).isEqualTo("SEM_MUDANCA");
+        assertThat(resultado.getQuantidadeRegistros()).isEqualTo(0);
+        assertThat(resultado.getHashConteudo()).hasSize(64);
+        verify(registroBrutoRepository, times(0)).save(any(RegistroBruto.class));
+    }
+
+    /**
      * {@code gravarStreaming} (usado pelo Shapefile — LIZARDS-3 doc/upload-shapefile-
      * car.md §3.4): mesmo resultado do caminho baseado em {@code List}, mas
      * consumindo os registros um a um via {@link FornecedorRegistros}, sem nunca

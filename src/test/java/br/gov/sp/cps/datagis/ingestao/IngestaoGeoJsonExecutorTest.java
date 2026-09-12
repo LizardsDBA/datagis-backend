@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -43,6 +44,10 @@ class IngestaoGeoJsonExecutorTest {
                 new ClassPathResource("fixtures/car-pr-amostra.json").getFile().toPath(),
                 StandardCharsets.UTF_8);
         executor = new IngestaoGeoJsonExecutor(httpFetchClient, new GeoJsonWktMapper(), writer, new ObjectMapper());
+        // Por padrão os testes exercitam o caminho "mudou" (é o que testam de verdade);
+        // o teste dedicado a "sem mudança" sobrescreve isso. lenient() porque nem todo
+        // teste desta classe chega a chamar executar() (ex.: suportarSoDependeDoFormatoEsperado).
+        lenient().when(writer.mudou(any(), anyString())).thenReturn(true);
     }
 
     @Test
@@ -220,6 +225,30 @@ class IngestaoGeoJsonExecutorTest {
         assertThat(captor.getValue()).hasSize(1);
         assertThat(captor.getValue().get(0).geometriaWkt()).isNull();
         assertThat(captor.getValue().get(0).payloadJson()).contains("002458");
+    }
+
+    /**
+     * Achado ao vivo no circuito do CAR/PR (~4.590 features): quando nada mudou desde
+     * a última execução, a conversão feature-a-feature (JSON + geometria->WKT) era
+     * feita do mesmo jeito e depois jogada fora — era o gasto real de tempo da
+     * execução (~10s de ~12,5s totais). Este teste prova que, quando
+     * {@link LoteIngestaoWriter#mudou} diz que não mudou, o executor nem chega a
+     * montar os {@link RegistroPreparado} - só delega pro
+     * {@link LoteIngestaoWriter#gravarSemMudanca}.
+     */
+    @Test
+    void naoConverteFeatureAFeatureQuandoNadaMudou() {
+        FonteDado fonte = FonteDado.builder().id(8L).urlOrigem("https://qualquer-fonte.gov.br/wfs").build();
+        when(httpFetchClient.buscarCorpoBruto("https://qualquer-fonte.gov.br/wfs")).thenReturn(corpoAmostra);
+        when(writer.mudou(eq(fonte), anyString())).thenReturn(false);
+        LoteIngestao loteSemMudanca = LoteIngestao.builder().id(20L).status("SEM_MUDANCA").quantidadeRegistros(0).build();
+        when(writer.gravarSemMudanca(eq(fonte), anyString())).thenReturn(loteSemMudanca);
+
+        LoteIngestao resultado = executor.executar(fonte);
+
+        assertThat(resultado).isSameAs(loteSemMudanca);
+        verify(writer).gravarSemMudanca(eq(fonte), anyString());
+        verify(writer, org.mockito.Mockito.never()).gravar(any(), anyString(), any());
     }
 
     /** Fonte sem família de paginação reconhecida continua com uma chamada só, como sempre foi. */

@@ -76,6 +76,14 @@ public class IngestaoGeoJsonExecutor implements IngestaoExecutor {
         todasFeatures.forEach(featuresParaHash::add);
         String conteudoParaHash = escreverJson(featuresParaHash);
 
+        // Checa "mudou?" ANTES de converter feature a feature (JSON + geometria->WKT).
+        // Achado ao vivo no CAR/PR (~4.590 features): essa conversão era o gasto real
+        // de tempo de uma execução, mesmo quando o resultado dava SEM_MUDANCA e nada
+        // dela era usado - ver LoteIngestaoWriter#mudou.
+        if (!writer.mudou(fonte, conteudoParaHash)) {
+            return writer.gravarSemMudanca(fonte, conteudoParaHash);
+        }
+
         List<RegistroPreparado> registros = new ArrayList<>();
         for (JsonNode feature : todasFeatures) {
             registros.add(new RegistroPreparado(
