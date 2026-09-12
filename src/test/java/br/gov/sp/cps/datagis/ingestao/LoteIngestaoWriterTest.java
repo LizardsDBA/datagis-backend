@@ -35,7 +35,7 @@ class LoteIngestaoWriterTest {
 
     @Test
     void deveGravarLoteConcluidoComTodosOsRegistros() {
-        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager, new ProgressoExecucaoRegistry());
         FonteDado fonte = FonteDado.builder().id(1L).urlOrigem("https://x").build();
         when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L)).thenReturn(Optional.empty());
         when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
@@ -61,7 +61,7 @@ class LoteIngestaoWriterTest {
 
     @Test
     void naoDeveGravarRegistrosQuandoHashJaFoiIngeridoNoUltimoLote() {
-        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager, new ProgressoExecucaoRegistry());
         FonteDado fonte = FonteDado.builder().id(1L).urlOrigem("https://x").build();
 
         // Mesmo hash que "conteudo-de-teste" vai gerar - o teste so precisa que bata.
@@ -93,7 +93,7 @@ class LoteIngestaoWriterTest {
      */
     @Test
     void mudouDeveDizerVerdadeiroQuandoNuncaExecutouAntes() {
-        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager, new ProgressoExecucaoRegistry());
         FonteDado fonte = FonteDado.builder().id(1L).build();
         when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L)).thenReturn(Optional.empty());
 
@@ -102,42 +102,56 @@ class LoteIngestaoWriterTest {
 
     @Test
     void mudouDeveCompararComOHashDoUltimoLote() {
-        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager, new ProgressoExecucaoRegistry());
         FonteDado fonte = FonteDado.builder().id(1L).build();
 
-        // Descobre o hash de "conteudo-igual" gravando uma vez, igual os outros
-        // testes desta classe já fazem.
-        when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L)).thenReturn(Optional.empty());
-        when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
-            LoteIngestao lote = chamada.getArgument(0);
-            lote.setId(30L);
-            return lote;
-        });
-        LoteIngestao loteAnterior = writer.gravar(fonte, "conteudo-igual", List.of());
-
+        // mudou() recebe o hash já pronto (LoteIngestaoWriter#hashDePartes) - não hasheia
+        // conteúdo cru internamente, ao contrário de gravar(List).
+        String hashConhecido = LoteIngestaoWriter.hashDePartes(List.of("conteudo-igual"));
+        LoteIngestao loteAnterior = LoteIngestao.builder().id(30L).hashConteudo(hashConhecido).build();
         when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L))
                 .thenReturn(Optional.of(loteAnterior));
 
-        assertThat(writer.mudou(fonte, "conteudo-igual")).isFalse();
-        assertThat(writer.mudou(fonte, "conteudo-diferente")).isTrue();
+        assertThat(writer.mudou(fonte, hashConhecido)).isFalse();
+        assertThat(writer.mudou(fonte, LoteIngestaoWriter.hashDePartes(List.of("conteudo-diferente")))).isTrue();
     }
 
     @Test
     void gravarSemMudancaNaoDeveTocarNoRegistroBrutoRepository() {
-        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager, new ProgressoExecucaoRegistry());
         FonteDado fonte = FonteDado.builder().id(1L).urlOrigem("https://x").build();
         when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
             LoteIngestao lote = chamada.getArgument(0);
             lote.setId(31L);
             return lote;
         });
+        String hash = LoteIngestaoWriter.hashDePartes(List.of("conteudo-qualquer"));
 
-        LoteIngestao resultado = writer.gravarSemMudanca(fonte, "conteudo-qualquer");
+        LoteIngestao resultado = writer.gravarSemMudanca(fonte, hash);
 
         assertThat(resultado.getStatus()).isEqualTo("SEM_MUDANCA");
         assertThat(resultado.getQuantidadeRegistros()).isEqualTo(0);
-        assertThat(resultado.getHashConteudo()).hasSize(64);
+        assertThat(resultado.getHashConteudo()).isEqualTo(hash);
         verify(registroBrutoRepository, times(0)).save(any(RegistroBruto.class));
+    }
+
+    /**
+     * {@link LoteIngestaoWriter#hashDePartes} existe pra nunca precisar concatenar uma
+     * coleção inteira numa única String antes de hashear — achado ao vivo com o PRODES
+     * Mata Atlântica (~38 mil features): essa String única, sozinha, estourava o heap
+     * (o stack trace apontava direto pro serializador do Jackson). Aqui só confere que
+     * o resultado é determinístico e sensível ao conteúdo/ordem das partes.
+     */
+    @Test
+    void hashDePartesDeveSerDeterministicoESensivelAoConteudo() {
+        String hash1 = LoteIngestaoWriter.hashDePartes(List.of("a", "b", "c"));
+        String hash2 = LoteIngestaoWriter.hashDePartes(List.of("a", "b", "c"));
+        String hashOrdemDiferente = LoteIngestaoWriter.hashDePartes(List.of("c", "b", "a"));
+        String hashConteudoDiferente = LoteIngestaoWriter.hashDePartes(List.of("a", "b", "x"));
+
+        assertThat(hash1).hasSize(64).isEqualTo(hash2);
+        assertThat(hashOrdemDiferente).isNotEqualTo(hash1);
+        assertThat(hashConteudoDiferente).isNotEqualTo(hash1);
     }
 
     /**
@@ -148,7 +162,7 @@ class LoteIngestaoWriterTest {
      */
     @Test
     void gravarStreamingDeveConcluirComTodosOsRegistrosQuandoMudou() {
-        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager, new ProgressoExecucaoRegistry());
         FonteDado fonte = FonteDado.builder().id(1L).caminhoArquivoUpload("/tmp/x.zip").build();
         when(loteIngestaoRepository.findFirstByFonteDadoIdOrderByIdDesc(1L)).thenReturn(Optional.empty());
         when(loteIngestaoRepository.save(any(LoteIngestao.class))).thenAnswer(chamada -> {
@@ -176,7 +190,7 @@ class LoteIngestaoWriterTest {
 
     @Test
     void gravarStreamingDeveApagarRegistrosGravadosQuandoDescobreSemMudancaSoNoFim() {
-        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager);
+        writer = new LoteIngestaoWriter(loteIngestaoRepository, registroBrutoRepository, entityManager, new ProgressoExecucaoRegistry());
         FonteDado fonte = FonteDado.builder().id(1L).caminhoArquivoUpload("/tmp/x.zip").build();
 
         List<LoteIngestao> salvos = new ArrayList<>();
