@@ -27,16 +27,25 @@ public class IngestaoCsvExecutor implements IngestaoExecutor {
 
     private static final String FORMATO = "CSV";
 
+    /** A cada N linhas convertidas, reporta progresso. */
+    private static final int INTERVALO_PROGRESSO = 500;
+
     private final HttpFetchClient httpFetchClient;
     private final LoteIngestaoWriter writer;
     private final ObjectMapper objectMapper;
+    private final ProgressoExecucaoRegistry progresso;
     private final GeometryFactory geometryFactory = new GeometryFactory();
     private final WKTWriter wktWriter = new WKTWriter();
 
-    public IngestaoCsvExecutor(HttpFetchClient httpFetchClient, LoteIngestaoWriter writer, ObjectMapper objectMapper) {
+    public IngestaoCsvExecutor(
+            HttpFetchClient httpFetchClient,
+            LoteIngestaoWriter writer,
+            ObjectMapper objectMapper,
+            ProgressoExecucaoRegistry progresso) {
         this.httpFetchClient = httpFetchClient;
         this.writer = writer;
         this.objectMapper = objectMapper;
+        this.progresso = progresso;
     }
 
     @Override
@@ -46,6 +55,7 @@ public class IngestaoCsvExecutor implements IngestaoExecutor {
 
     @Override
     public LoteIngestao executar(FonteDado fonte) {
+        progresso.atualizar(fonte.getId(), FaseExecucao.BUSCANDO_DADOS, 0, null, null);
         String corpoBruto = httpFetchClient.buscarCorpoBruto(fonte.getUrlOrigem());
         List<String> linhas = corpoBruto.lines().filter(linha -> !linha.isBlank()).toList();
         if (linhas.isEmpty()) {
@@ -56,6 +66,7 @@ public class IngestaoCsvExecutor implements IngestaoExecutor {
         int indiceLat = indiceDaColuna(cabecalho, fonte.getCampoGeometriaLat());
         int indiceLon = indiceDaColuna(cabecalho, fonte.getCampoGeometriaLon());
 
+        long totalLinhas = linhas.size() - 1;
         List<RegistroPreparado> registros = new ArrayList<>();
         for (int i = 1; i < linhas.size(); i++) {
             List<String> campos = dividirLinhaCsv(linhas.get(i));
@@ -68,6 +79,10 @@ public class IngestaoCsvExecutor implements IngestaoExecutor {
             registros.add(new RegistroPreparado(
                     escreverJson(registro),
                     construirPontoWkt(campos, indiceLat, indiceLon)));
+
+            if (i % INTERVALO_PROGRESSO == 0 || i == linhas.size() - 1) {
+                progresso.atualizar(fonte.getId(), FaseExecucao.LENDO_REGISTROS, i, totalLinhas, null);
+            }
         }
 
         // Hash so das linhas de dado (sem o cabecalho — se um dia o CSV so reordenar
