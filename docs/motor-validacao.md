@@ -125,6 +125,61 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 
 **Testes:** `ValidadorCpfCnpjTest` — 18 cenários.
 
+### 4.3. `ValidadorDominio` — [FEITO, 2026-09-13, Fase 2.3]
+
+**Ativa quando** `tabelaReferencia` está configurada em `mapeamento_coluna` (não nula e não em branco).
+
+**Mecanismo de funcionamento:**
+1. `null` ou string em branco → `sucesso(null)` (responsabilidade do `SanitizadorEntrada`).
+2. Sanitiza o nome da tabela (remove prefixo `silver.` se fornecido e valida contra `^[a-zA-Z0-9_]+$` para proteção contra SQL Injection).
+3. Consulta o **cache thread-safe** em memória (`ConcurrentHashMap<String, Map<String, String>>`).
+4. **Lazy loading**: na primeira ocorrência da tabela, executa `SELECT codigo, descricao FROM {silverSchema}.{tabela} WHERE ativo = 1`.
+   - Se a tabela não possuir coluna `descricao`, aplica fallback para `SELECT codigo FROM {silverSchema}.{tabela} WHERE ativo = 1`.
+5. Mapeia em memória tanto códigos quanto descrições em maiúsculas apontando para o código canônico persistido na Silver.
+6. Se o valor recebido não existir no domínio ativo → erro `VALOR_FORA_DO_DOMINIO` com detalhes completos do campo, valor e tabela.
+7. Se existir → `sucesso(codigoCanonico)` (normaliza variações case-insensitive ou descrições para o código canônico).
+
+**Preparação para Ação do Analista / Revalidação:**
+- Métodos públicos de gestão de cache:
+  - `invalidarCache(String tabelaReferencia)`: remove o cache da tabela específica para recarregar do banco após o analista aprovar/cadastrar um novo código.
+  - `invalidarTodoCache()`: limpa o cache de todas as referências em memória.
+  - `isEmCache(String tabelaReferencia)` e `getQuantidadeTabelasEmCache()`: inspeção e monitoramento do cache.
+
+### 4.4. `ValidadorIntegridadeCruzada` — [FEITO, 2026-09-13, Fase 2.4]
+
+**Ativa quando** `referenciaEntidadeSilver` está configurada em `mapeamento_coluna` (não nula e não em branco).
+
+**Mecanismo de funcionamento:**
+1. `null` ou string em branco → `sucesso(null)` (responsabilidade do `SanitizadorEntrada`).
+2. Interpreta a referência configurada, suportando:
+   - Nome simples de entidade: `municipio`, `imovel_rural`, `area_protegida`, `auto_infracao`, `embargo_ambiental` (resolvendo a coluna canônica por convenção, ex.: `municipio` → `cod_ibge`).
+   - Prefixo de schema: `silver.municipio` → `municipio`.
+   - Especificação explícita de coluna: `municipio.cod_ibge` ou `outra_tabela.minha_coluna`.
+3. Mitiga SQL Injection validando identificadores de tabela e coluna via regex `^[a-zA-Z0-9_]+$`.
+4. **Estratégia híbrida de cache thread-safe:**
+   - **Tabelas dimensionais/estáticas** (`silver.municipio`): carga em lote sob demanda de todos os códigos cadastrados (`SELECT cod_ibge FROM silver.municipio`).
+   - **Tabelas dinâmicas volumosas** (`imovel_rural`, etc.): consulta pontual com cache de chaves já verificadas (`SELECT COUNT(1) ... WHERE chave = ?`).
+5. Se o registro referenciado não existir na Silver → erro `REFERENCIA_NAO_ENCONTRADA`.
+6. Se existir → `sucesso(valor)`.
+
+**Preparação para Ação do Analista / Revalidação:**
+- Métodos de gestão de cache: `invalidarCache(String referencia)` e `invalidarTodoCache()`.
+
+### 4.5. `ValidadorFaixaMinima` — [FEITO, 2026-09-13, Fase 2.5]
+
+**Ativa quando** `valorMinimo` está configurado em `mapeamento_coluna` (não nulo).
+
+**Mecanismo de funcionamento:**
+1. `null` ou string em branco → `sucesso(null)` (responsabilidade do `SanitizadorEntrada`).
+2. Converte com tolerância o valor de entrada para `Double`:
+   - Aceita tipos `Number` (Integer, Long, Double, BigDecimal, etc.).
+   - Suporta formatos de texto com ponto decimal (`"15.5"`), vírgula decimal brasileira (`"15,5"`), separadores de milhar (`"1.250,50"` e `"1,250.50"`) e símbolos de moeda (`"R$ 50,00"`).
+3. Se o valor textual não for conversível para número → erro `TIPO_DE_DADO_INVALIDO`.
+4. Se o valor numérico for estritamente menor que `valorMinimo` → erro `VALOR_ABAIXO_DO_MINIMO`.
+5. Se for maior ou igual → `sucesso(valorNumerico)` (normalizado para `Double`).
+
+**Testes:** `ValidadorFaixaMinimaTest` — 23 cenários.
+
 ---
 
 ## 5. Tipos de erro registrados na Quarentena
@@ -133,9 +188,12 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 |---|---|
 | `CAMPO_OBRIGATORIO_AUSENTE` | Campo `obrigatorio = true` com valor nulo ou falso nulo |
 | `CPF_CNPJ_INVALIDO` | CPF/CNPJ com DV errado, sequência trivial ou quantidade de dígitos inválida |
-| `VALOR_ABAIXO_DO_MINIMO` | Valor numérico < `valor_minimo` configurado *(a implementar — Fase 2.3)* |
+| `VALOR_FORA_DO_DOMINIO` | Valor informado não consta como código ativo na tabela de referência Silver |
+| `REFERENCIA_NAO_ENCONTRADA` | Chave informada não existe na entidade Silver de destino (ex.: `cod_ibge` em `silver.municipio`) |
+| `VALOR_ABAIXO_DO_MINIMO` | Valor numérico < `valor_minimo` configurado |
+| `TIPO_DE_DADO_INVALIDO` | Valor não conversível para o tipo esperado (ex.: texto não numérico em coluna com faixa mínima) |
 | `CAMPO_EM_BRANCO` | *(mapeado na V030; produzido pelo SanitizadorEntrada via CAMPO_OBRIGATORIO_AUSENTE)* |
-| `GEOMETRIA_TIPO_INCOMPATIVEL` | Primitivo geométrico inválido *(a implementar — Fase 2.x)* |
+| `GEOMETRIA_TIPO_INCOMPATIVEL` | Primitivo geométrico inválido *(a implementar)* |
 
 ---
 
@@ -145,9 +203,12 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 |---|---|---|
 | 2.1 | `SanitizadorEntrada` — falsos nulos e obrigatoriedade | ✅ FEITO |
 | 2.2 | `ValidadorCpfCnpj` — CPF/CNPJ com Módulo 11 | ✅ FEITO |
-| 2.3 | `ValidadorFaixaMinima` — valor numérico ≥ `valor_minimo` | 🔲 pendente |
-| 2.4 | `ValidadorDominio` — lookup em `tabela_referencia` da Silver | 🔲 pendente |
-| 2.5 | `ValidadorIntegridadeCruzada` — existe em `referencia_entidade_silver` | 🔲 pendente |
+| 2.3 | `ValidadorDominio` — lookup em cache de `tabela_referencia` da Silver + invalidação analista | ✅ FEITO |
+| 2.4 | `ValidadorIntegridadeCruzada` — integridade relacional em `referencia_entidade_silver` | ✅ FEITO |
+| 2.5 | `ValidadorFaixaMinima` — valor numérico ≥ `valor_minimo` | ✅ FEITO |
 | 2.6 | `ValidadorGeometria` — tipo primitivo + topologia + recorte PR | 🔲 pendente |
 | 2.7 | `ValidadorRegressao` — campo preenchido no snapshot anterior, veio null agora | 🔲 pendente |
 | 2.8 | `OrquestradorValidacao` — encadeia todos os validadores por campo | 🔲 pendente |
+
+
+

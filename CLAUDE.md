@@ -1191,9 +1191,45 @@ Implementado `ValidadorCpfCnpj` no pacote `br.gov.sp.cps.datagis.validacao`:
 - Helpers estáticos públicos: `isCpfValido(String)` e `isCnpjValido(String)` para reuso externo.
 - Testes: 18 cenários em `ValidadorCpfCnpjTest` cobrindo suporta(), CPF/CNPJ válidos e inválidos, casos de borda e helpers.
 
+### 9.17. Validador de Domínio e Tabelas de Referência — [FEITO, 2026-09-13, Fase 2.3]
+Implementado `ValidadorDominio` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Valida se o valor informado existe como registro ativo (`ativo = 1`) na tabela de referência da Silver parametrizada em `tabela_referencia` (ex.: `situacao_imovel`, `bioma`, `orgao`).
+- Utiliza **cache thread-safe em memória** (`ConcurrentHashMap<String, Map<String, String>>`) com carregamento sob demanda (*lazy loading*) via `JdbcTemplate`.
+- Suporta mapeamento tanto por código quanto por descrição (case-insensitive), normalizando o retorno para o código canônico persistido na Silver.
+- Possui mitigação de SQL Injection via regex `^[a-zA-Z0-9_]+$` e higienização de prefixos de schema (ex.: `silver.situacao_imovel` -> `situacao_imovel`).
+- Fallback automático para tabelas de referência que não possuem coluna `descricao` (consulta apenas `codigo`).
+- Se o valor não constar no domínio ativo, gera o erro `VALOR_FORA_DO_DOMINIO` com detalhes do campo, valor e tabela.
+- **Preparação para ação do analista / revalidação**: expõe métodos `invalidarCache(tabela)` e `invalidarTodoCache()` para que, quando um analista aprovar ou cadastrar um novo valor de domínio, a engine revalide os registros pendentes sem reiniciar a aplicação.
+- Testes: 24 cenários em `ValidadorDominioTest` cobrindo suporta(), códigos, descrições, case-insensitive, prefixo de schema, mitigação de SQLi, fallback, cache thread-safe e revalidação pós-aprovação do analista.
+
+### 9.18. Validador de Integridade Cruzada — [FEITO, 2026-09-13, Fase 2.4]
+Implementado `ValidadorIntegridadeCruzada` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Valida se a chave informada existe na tabela canônica da camada Silver parametrizada em `referencia_entidade_silver` (ex.: `silver.municipio`, `imovel_rural`, `area_protegida`, `auto_infracao`, `embargo_ambiental`).
+- Suporta mapeamento por convenção de chave natural (`municipio` -> `cod_ibge`, `imovel_rural` -> `cod_imovel`, etc.) e por especificação explícita de coluna (`municipio.cod_ibge` ou `tabela.coluna`).
+- Mitigação de SQL Injection via validação de identificadores com regex `^[a-zA-Z0-9_]+$`.
+- Estratégia híbrida de cache thread-safe (`ConcurrentHashMap<String, Set<String>>`):
+  - Tabelas dimensionais/estáticas (`municipio`): carga em lote sob demanda de todos os códigos (`SELECT cod_ibge FROM silver.municipio`).
+  - Tabelas volumosas: consulta pontual com cache das chaves já verificadas (`SELECT COUNT(1) ... WHERE coluna = ?`).
+- Se a referência não for encontrada na Silver, gera o erro `REFERENCIA_NAO_ENCONTRADA`.
+- Expõe `invalidarCache(entidade)` e `invalidarTodoCache()` para revalidação dinâmica.
+- Testes: 23 cenários em `ValidadorIntegridadeCruzadaTest` cobrindo entidades estáticas, consultas pontuais, formatos de referência, SQLi, cache e revalidação do analista.
+
+### 9.19. Validador de Faixa Mínima — [FEITO, 2026-09-13, Fase 2.5]
+Implementado `ValidadorFaixaMinima` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Valida se o valor informado respeita o limite numérico inferior parametrizado em `valor_minimo` (ex.: `area_ha >= 0.0`).
+- Conversão tolerante de tipos numéricos (`Number` ou `String`), suportando formatos decimais brasileiros (`15,5`) e internacionais (`15.5`), separadores de milhar (`1.250,50` e `1,250.50`) e símbolos monetários (`R$ 100,00`).
+- Se o valor textual não for conversível para número, gera erro `TIPO_DE_DADO_INVALIDO`.
+- Se o valor for menor que o piso configurado, gera erro `VALOR_ABAIXO_DO_MINIMO`.
+- Testes: 23 cenários em `ValidadorFaixaMinimaTest` cobrindo aprovações, limites exatos, conversões tolerantes, erros de tipo, rejeições abaixo do piso e casos de borda (nulos e vazios).
+
 ### 10.4-bis. Estado atual (2026-09-13)
 - **Branch de trabalho corrente:** evolução do backend para validação e quarentena (Bronze → Silver/Quarentena).
-- **Migrations V029 e V030 aplicadas**; **Fase 2.1 (SanitizadorEntrada) implementada e testada com 26 testes aprovados**; **Fase 2.2 (ValidadorCpfCnpj) implementada e testada com 18 cenários**.
+- **Migrations V029 e V030 aplicadas**.
+- **Fase 2.1 (SanitizadorEntrada) implementada e testada com 26 testes aprovados**.
+- **Fase 2.2 (ValidadorCpfCnpj) implementada e testada com 31 testes aprovados**.
+- **Fase 2.3 (ValidadorDominio) implementada e testada com 24 testes aprovados**.
+- **Fase 2.4 (ValidadorIntegridadeCruzada) implementada e testada com 23 testes aprovados**.
+- **Fase 2.5 (ValidadorFaixaMinima) implementada e testada com 23 testes aprovados (127 testes no total do pacote de validação)**.
 
 ---
 
