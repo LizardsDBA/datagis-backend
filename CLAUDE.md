@@ -192,18 +192,29 @@ de-para vira dado:
 
 ```sql
 CREATE TABLE controle.mapeamento_coluna (
-    id                 NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    fonte_dado_id      NUMBER NOT NULL REFERENCES controle.fonte_dado(id),
-    coluna_origem      VARCHAR2(100) NOT NULL,    -- ex: 'WKT_GEOM_AREA_EMBARGADA'
-    atributo_canonico  VARCHAR2(100) NOT NULL,    -- ex: 'geometria'
-    tipo_dado          VARCHAR2(30),              -- ex: 'geometry_wkt', 'date_ddmmyyyy_hhmmss', 'cpf_cnpj'
-    obrigatorio        NUMBER(1) DEFAULT 0
+    id                         NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    fonte_dado_id              NUMBER NOT NULL REFERENCES controle.fonte_dado(id),
+    coluna_origem              VARCHAR2(200) NOT NULL,    -- chave no payload do Bronze (ex: 'num_tad')
+    atributo_destino           VARCHAR2(100) NOT NULL,    -- coluna canonica da Silver (ex: 'numero_termo')
+    destino_tipo               VARCHAR2(20)  NOT NULL,    -- COLUNA | JSON | GEOMETRIA
+    tipo_dado                  VARCHAR2(30),              -- texto, numero, data_iso, epoch_millis, cpf_cnpj...
+    obrigatorio                NUMBER(1) DEFAULT 0 NOT NULL,
+    -- Regras de validacao (V029):
+    valor_minimo               NUMBER,                    -- limite inferior numerico (sem teto maximo)
+    tabela_referencia          VARCHAR2(60),              -- validacao de dominio/lookup (ex: 'situacao_imovel')
+    referencia_entidade_silver VARCHAR2(60),              -- integridade relacional cruzada (ex: 'municipio')
+    validar_cpf_cnpj           NUMBER(1) DEFAULT 0 NOT NULL, -- validacao algoritmica modulo 11
+    validar_geometria          NUMBER(1) DEFAULT 0 NOT NULL, -- validade topologica e tipo primitivo
+    validar_recorte_pr         NUMBER(1) DEFAULT 0 NOT NULL, -- coordenadas/poligono dentro do Parana
+    impedir_regressao          NUMBER(1) DEFAULT 1 NOT NULL, -- campo preenchido nao pode regredir pra nulo
+    regras_extras              JSON,                      -- regras customizadas de fontes desconhecidas
+    data_add                   TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
 );
 ```
 
 O pipeline Bronze→Silver lê essa tabela em runtime para saber como interpretar/converter
-cada coluna. Isola a variação de schema na tabela de mapeamento; a Silver continua com
-colunas fixas e tipadas.
+cada coluna e quais validações aplicar para desviar inconsistências para a Quarentena. Isola
+a variação de schema e regras na tabela de mapeamento; a Silver continua com colunas fixas e tipadas.
 
 ### 2.4. Quarentena
 ```sql
@@ -1140,9 +1151,49 @@ Branch `feat/upload-shp`. Detalhe completo, achados e itens em aberto em
   Refina a regra de dedup do §3.5 do doc de modelagem — duplicata **dentro do mesmo
   lote** (não entre lotes) precisa de regra própria (manter só `AT`).
 
-### 10.4-bis. Estado atual (2026-09-11)
-- **Branch de trabalho corrente:** `feat/upload-shp` (backend e frontend), em cima da
-  `sprint-1` já com a modelagem (`LIZARDS-2`) mesclada. Ainda sem PR aberto.
+### 9.13. Regras de validação em mapeamento_coluna — [FEITO, 2026-09-13, `V029`]
+Migration `V029__evoluir_mapeamento_coluna_regras_validacao.sql` adiciona suporte
+a regras de validação por coluna diretamente na tabela `controle.mapeamento_coluna`:
+- `valor_minimo` (NUMBER): limite numérico inferior (apenas mínimo, sem teto máximo).
+- `tabela_referencia` (VARCHAR2(60)): nome da tabela de referência na Silver para validação de domínio (ex.: `situacao_imovel`, `orgao`, `bioma`).
+- `referencia_entidade_silver` (VARCHAR2(60)): integridade relacional cruzada com Silver (ex.: `municipio`).
+- `validar_cpf_cnpj` (NUMBER(1)): flag para validação algorítmica de CPF/CNPJ (módulo 11).
+- `validar_geometria` (NUMBER(1)): flag para validação topológica (`isValid`) e tipo primitivo.
+- `validar_recorte_pr` (NUMBER(1)): flag para checagem de coordenadas dentro dos limites do Paraná.
+- `impedir_regressao` (NUMBER(1)): flag para checar se o campo existia preenchido e regrediu pra nulo.
+- `regras_extras` (JSON): campo flexível para fontes futuras desconhecidas.
+
+### 9.14. Novos tipos de erro na Quarentena — [FEITO, 2026-09-13, `V030`]
+Migration `V030__quarentena_novos_tipos_erro.sql` insere novos tipos em `quarentena.tipo_erro_quarentena`:
+- `CPF_CNPJ_INVALIDO`: dígitos verificadores ou formato de CPF/CNPJ inválido.
+- `VALOR_ABAIXO_DO_MINIMO`: valor numérico menor que o valor mínimo parametrizado.
+- `CAMPO_EM_BRANCO`: campo preenchido exclusivamente com espaços ou falso nulo (NULL, N/A, -).
+- `GEOMETRIA_TIPO_INCOMPATIVEL`: tipo primitivo de geometria incompatível com a entidade alvo.
+
+### 9.15. Sanitizador de Entrada & Falsos Nulos — [FEITO, 2026-09-13, Fase 2.1]
+Criada a base do motor de validações no pacote `br.gov.sp.cps.datagis.validacao`:
+- `ResultadoValidacao`: record imutável com resultado de sucesso (valor tratado) ou erro detalhado para a Quarentena.
+- `ContextoValidacaoCampo`: metadados e regras da coluna oriundos de `mapeamento_coluna`.
+- `ValidadorCampo`: interface para encadeamento Strategy / Chain of Responsibility.
+- `SanitizadorEntrada`: intercepta valores, limpa espaços, converte falsos nulos (`"NULL"`, `"null"`, `"N/A"`, `"n/a"`, `"-"`, `""` e espaços) para `null` real, e valida obrigatoriedade gerando erro `CAMPO_OBRIGATORIO_AUSENTE` se `obrigatorio = true`.
+- Testes: 26 cenários em `SanitizadorEntradaTest`, 100% de sucesso.
+
+### 9.16. Validador de CPF / CNPJ — [FEITO, 2026-09-13, Fase 2.2]
+Implementado `ValidadorCpfCnpj` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Remove todos os caracteres não numéricos (`replaceAll("\\D", "")`) antes de qualquer checagem.
+- Determina o tipo pelo comprimento: 11 dígitos → CPF · 14 dígitos → CNPJ · outro → erro imediato.
+- Rejeita sequências triviais de dígitos repetidos (ex.: `111.111.111-11`, `00.000.000/0000-00`) via regex `(\d)\1{10/13}`.
+- Aplica o algoritmo de Dígito Verificador (Módulo 11) oficial para CPF (dois passes) e CNPJ (pesos `PESOS_CNPJ_DIGITO1/2`).
+- Em caso de falha retorna `ResultadoValidacao.erro(CPF_CNPJ_INVALIDO, ...)` com `campoProblema`, `valorRecebido` e `motivoRejeicao`.
+- Sucesso retorna apenas os dígitos normalizados em `valorTransformado` (persistência limpa).
+- Valor `null` ou string vazia é devolvido como `sucesso(null)` — responsabilidade do `SanitizadorEntrada`.
+- `suporta()` ativa pela flag `validarCpfCnpj = true` **ou** por `tipoDado` igual a `cpf`, `cnpj` ou `cpf_cnpj` (case-insensitive).
+- Helpers estáticos públicos: `isCpfValido(String)` e `isCnpjValido(String)` para reuso externo.
+- Testes: 18 cenários em `ValidadorCpfCnpjTest` cobrindo suporta(), CPF/CNPJ válidos e inválidos, casos de borda e helpers.
+
+### 10.4-bis. Estado atual (2026-09-13)
+- **Branch de trabalho corrente:** evolução do backend para validação e quarentena (Bronze → Silver/Quarentena).
+- **Migrations V029 e V030 aplicadas**; **Fase 2.1 (SanitizadorEntrada) implementada e testada com 26 testes aprovados**; **Fase 2.2 (ValidadorCpfCnpj) implementada e testada com 18 cenários**.
 
 ---
 
