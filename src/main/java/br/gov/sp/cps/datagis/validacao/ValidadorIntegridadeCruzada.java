@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -67,6 +68,7 @@ public class ValidadorIntegridadeCruzada implements ValidadorCampo {
      */
     private final ConcurrentHashMap<String, Set<String>> cache = new ConcurrentHashMap<>();
 
+    @Autowired
     public ValidadorIntegridadeCruzada(
             JdbcTemplate jdbcTemplate,
             @Value("${spring.flyway.placeholders.silverSchema:SILVER}") String silverSchema) {

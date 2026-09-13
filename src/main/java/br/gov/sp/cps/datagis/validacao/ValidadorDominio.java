@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -23,14 +24,11 @@ import org.springframework.stereotype.Component;
  *   <li>Consultar apenas registros ativos ({@code WHERE ativo = 1});</li>
  *   <li>Permitir correspondência de domínio tanto por código quanto por descrição (case-insensitive);</li>
  *   <li>Normalizar e retornar o código canônico para persistência íntegra na Silver;</li>
- *   <li>Retornar o erro {@code VALOR_FORA_DO_DOMINIO} caso o valor não exista na referência;</li>
- *   <li>Disponibilizar métodos de invalidação de cache ({@link #invalidarCache(String)})
- *       para quando o analista cadastrar ou aprovar novos valores, permitindo que a engine
- *       revalide os registros pendentes sem reiniciar a aplicação.</li>
+ *   <li>Gerar o erro {@code VALOR_FORA_DO_DOMINIO} quando não houver correspondência;</li>
+ *   <li>Disponibilizar método para invalidação/recarregamento do cache (quando o analista aprovar novo valor).</li>
  * </ul>
  *
- * <p>Valores {@code null} ou vazios são repassados como {@code sucesso(null)}
- * (a obrigatoriedade é responsabilidade do {@link SanitizadorEntrada}).
+ * <p>Valores {@code null} são ignorados por esta etapa (responsabilidade do {@link SanitizadorEntrada}).
  */
 @Component
 public class ValidadorDominio implements ValidadorCampo {
@@ -49,6 +47,7 @@ public class ValidadorDominio implements ValidadorCampo {
      */
     private final ConcurrentHashMap<String, Map<String, String>> cache = new ConcurrentHashMap<>();
 
+    @Autowired
     public ValidadorDominio(
             JdbcTemplate jdbcTemplate,
             @Value("${spring.flyway.placeholders.silverSchema:SILVER}") String silverSchema) {

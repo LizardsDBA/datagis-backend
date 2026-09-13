@@ -233,6 +233,27 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 
 **Testes:** `DeduplicadorRegistrosTest` — 7 cenários.
 
+### 4.9. `OrquestradorValidacao` — [FEITO, 2026-09-13, Fase 3]
+
+**Ativa durante** a execução do pipeline de processamento do lote Bronze → Silver / Quarentena.
+
+**Mecanismo de funcionamento:**
+1. Recebe a coleção de `RegistroBruto` do lote, o `fonteDadoId` e o `campoChaveNatural`.
+2. Executa a **Deduplicação de Snapshot** via `DeduplicadorRegistros`:
+   - Descarta duplicatas superadas e registra auditoria completa com link para o registro vencedor.
+3. Carrega em tempo de execução os mapeamentos de coluna cadastrados em `controle.mapeamento_coluna` para a fonte.
+4. Para cada registro vencedor deduplicado:
+   - Extrai e parseia o payload JSON original;
+   - Itera por todos os mapeamentos de coluna da entidade;
+   - Executa a cadeia completa:
+     - `SanitizadorEntrada` sempre roda primeiro (converte falsos nulos e checa obrigatoriedade);
+     - Executa validadores especializados que suportam o contexto (`ValidadorCpfCnpj`, `ValidadorDominio`, `ValidadorIntegridadeCruzada`, `ValidadorFaixaMinima`, `ValidadorGeometria`, `ValidadorRegressao`);
+     - Se ocorrer erro em qualquer campo: classifica o registro imediatamente como `RegistroRejeitadoQuarentena` (com `tipoErro`, `campoProblema`, `valorRecebido`, `motivoRejeicao`) e interrompe os demais campos (fail-fast por registro);
+     - Se todos os campos forem aprovados: classifica como `RegistroAprovadoSilver` com o mapa de atributos transformados e geometria padronizada.
+5. Retorna `ResultadoOrquestracao` com as listas estruturadas de aprovados, quarentena e duplicatas descartadas.
+
+**Testes:** `OrquestradorValidacaoTest` — 5 cenários.
+
 ---
 
 ## 5. Tipos de erro registrados na Quarentena
@@ -255,9 +276,9 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 
 ---
 
-## 6. Roadmap de próximos validadores
+## 6. Roadmap de validadores e esteira
 
-| Fase | Validador | Status |
+| Fase | Componente | Status |
 |---|---|---|
 | 2.1 | `SanitizadorEntrada` — falsos nulos e obrigatoriedade | ✅ FEITO |
 | 2.2 | `ValidadorCpfCnpj` — CPF/CNPJ com Módulo 11 | ✅ FEITO |
@@ -267,7 +288,9 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 | 2.6 | `ValidadorGeometria` — tipo primitivo + topologia + recorte PR | ✅ FEITO |
 | 2.7 | `ValidadorRegressao` — campo preenchido no snapshot anterior, veio null agora | ✅ FEITO |
 | 2.8 | `DeduplicadorRegistros` — deduplicação de chaves naturais e seleção do mais novo para Silver | ✅ FEITO |
-| 2.9 | `OrquestradorValidacao` — encadeia todos os validadores por campo e lote | 🔲 pendente |
+| 3.1 | `OrquestradorValidacao` — encadeia todos os validadores por campo e lote (Bronze → Silver/Quarentena) | ✅ FEITO |
+| 3.2 | `QuarentenaController` & `QuarentenaService` — APIs REST de auditoria e resolução de inconsistências | ✅ FEITO |
+| 3.3 | Frontend: Tela de Quarentena & Qualidade de Dados (`/quarentena`) | ✅ FEITO |
 
 
 

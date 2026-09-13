@@ -1256,17 +1256,34 @@ Implementado `DeduplicadorRegistros` no pacote `br.gov.sp.cps.datagis.validacao`
 - Suporte a deduplicação genérica tipada (`deduplicarGenerico`).
 - Testes: 7 cenários em `DeduplicadorRegistrosTest` (185 testes no total do pacote de validação).
 
+### 9.23. Orquestrador de Validação e Transição Bronze → Silver / Quarentena — [FEITO, 2026-09-13, Fase 3]
+Implementado `OrquestradorValidacao` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Conecta a leitura dos metadados de `controle.mapeamento_coluna`, a deduplicação temporal via `DeduplicadorRegistros`, e a execução da cadeia de `ValidadorCampo`.
+- Para cada registro vencedor, executa o `SanitizadorEntrada` e em seguida os validadores especializados suportados pelo campo.
+- Implementa estratégia fail-fast por registro: no primeiro campo com erro, interrompe a validação do registro e o classifica como `RegistroRejeitadoQuarentena` com o bloco completo de auditoria para a Quarentena.
+- Registros que passam em todos os campos são promovidos como `RegistroAprovadoSilver` contendo os atributos transformados e geometria padronizada.
+- Testes: 5 cenários em `OrquestradorValidacaoTest`.
+
+### 9.24. Módulo de Quarentena & Qualidade de Dados (Backend + Frontend) — [FEITO, 2026-09-13, Fase 3]
+- **Backend (`br.gov.sp.cps.datagis.quarentena` & `controle`):**
+  - Entidade e repositório `MapeamentoColuna` (`controle.mapeamento_coluna`) e `MapeamentoColunaController` (`/api/fontes/{id}/mapeamentos`).
+  - `QuarentenaService` e `QuarentenaController`: consultas dinâmicas às tabelas espelho `quarentena.q_*`, suporte a paginação, métricas agregadas por status/erro/entidade, e endpoints de ação do analista (`/descartar`, `/iniciar-analise`, `/reprocessar`).
+  - Testes: 6 cenários em `QuarentenaControllerTest`.
+- **Frontend (`datagis-frontend`):**
+  - Adicionada rota e item de menu em `Sidebar.vue`: **"Quarentena & Qualidade"** (`/quarentena`).
+  - Componente `QuarentenaView.vue`: cards de métricas (Total, Pendentes, Em Análise, Corrigidos, Descartados), filtros por entidade/status/erro/busca, e tabela de inconsistências com badges visuais.
+  - Componente `DetalheQuarentenaModal.vue`: drawer/modal de inspeção profunda com visualizador de payload JSON cru, campo com erro destacado e formulário de ação/correção manual do analista (RN007).
+  - Serviço `quarentenaService.js` com integração completa aos endpoints REST do backend.
+
 ### 10.4-bis. Estado atual (2026-09-13)
 - **Branch de trabalho corrente:** evolução do backend para validação e quarentena (Bronze → Silver/Quarentena).
 - **Migrations V029 e V030 aplicadas**.
-- **Fase 2.1 (SanitizadorEntrada) implementada e testada com 26 testes aprovados**.
-- **Fase 2.2 (ValidadorCpfCnpj) implementada e testada com 31 testes aprovados**.
-- **Fase 2.3 (ValidadorDominio) implementada e testada com 24 testes aprovados**.
-- **Fase 2.4 (ValidadorIntegridadeCruzada) implementada e testada com 23 testes aprovados**.
-- **Fase 2.5 (ValidadorFaixaMinima) implementada e testada com 23 testes aprovados**.
-- **Fase 2.6 (ValidadorGeometria) implementada e testada com 29 testes aprovados**.
-- **Fase 2.7 (ValidadorRegressao) implementada e testada com 22 testes aprovados**.
-- **Fase 2.8 (DeduplicadorRegistros) implementada e testada com 7 testes aprovados (185 testes no total do pacote de validação)**.
+- **Fases 2.1 a 2.8 concluídas** (Sanitizador, CPF/CNPJ, Domínio, Integridade Cruzada, Faixa Mínima, Geometria, Regressão, Deduplicação).
+- **Fase 3 concluída:**
+  - `OrquestradorValidacao` conectando toda a esteira de validação Bronze → Silver/Quarentena;
+  - APIs REST de Quarentena (`/api/quarentena`) e Mapeamento (`/api/fontes/{id}/mapeamentos`);
+  - Módulo completo de Quarentena no Frontend Vue 3 (`QuarentenaView.vue`, `DetalheQuarentenaModal.vue`, menu e rotas ativos);
+  - **196 testes unitários no backend aprovados** (100% de sucesso).
 
 ---
 

@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -37,6 +38,7 @@ public class DeduplicadorRegistros {
 
     private final ObjectMapper objectMapper;
 
+    @Autowired
     public DeduplicadorRegistros(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
