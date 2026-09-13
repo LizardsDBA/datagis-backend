@@ -176,8 +176,8 @@ Referências (schema `quarentena`):
 - `tipo_erro_quarentena`: `GEOMETRIA_NULA`, `GEOMETRIA_INVALIDA`, `GEOMETRIA_MALFORMADA`,
   `CAMPO_OBRIGATORIO_AUSENTE`, `TIPO_DE_DADO_INVALIDO`, `VALOR_FORA_DO_DOMINIO`,
   `CHAVE_NATURAL_DUPLICADA`, `REFERENCIA_NAO_ENCONTRADA`, `FORA_DO_RECORTE_TERRITORIAL`,
-  `REGRESSAO_DE_VALOR` (campo preenchido em lote anterior veio nulo no lote atual —
-  `V017`, ver §3.5).
+  `REGRESSAO_DE_VALOR` (`V017`),
+  `CPF_CNPJ_INVALIDO`, `VALOR_ABAIXO_DO_MINIMO`, `CAMPO_EM_BRANCO`, `GEOMETRIA_TIPO_INCOMPATIVEL` (`V030`).
 - `status_analise_quarentena`: `PENDENTE`, `EM_ANALISE`, `CORRIGIDO_REPROCESSADO`,
   `DESCARTADO`.
 
@@ -311,19 +311,29 @@ Pra uma fonte nova (mesmo tema) entrar sem criar tabela:
    §2.3, nunca construída) — de-para campo a campo:
 
    ```
-   fonte_dado_id     → qual fonte
-   coluna_origem     → 'num_tad'            (chave no payload do Bronze)
-   atributo_destino  → 'numero_termo'       (coluna canônica da Silver)
-   destino_tipo      → 'COLUNA' | 'JSON' | 'GEOMETRIA'
-   tipo_dado         → 'texto' | 'numero' | 'epoch_millis' | 'data_iso' |
-                       'cpf_cnpj' | 'graus2_para_ha' | 'wkt' ...
-   obrigatorio       → 0 | 1
+   fonte_dado_id              → qual fonte
+   coluna_origem              → 'num_tad'            (chave no payload do Bronze)
+   atributo_destino           → 'numero_termo'       (coluna canônica da Silver)
+   destino_tipo               → 'COLUNA' | 'JSON' | 'GEOMETRIA'
+   tipo_dado                  → 'texto' | 'numero' | 'epoch_millis' | 'data_iso' |
+                                'cpf_cnpj' | 'graus2_para_ha' | 'wkt' ...
+   obrigatorio                → 0 | 1
+   valor_minimo               → limite numérico inferior (sem teto máximo)
+   tabela_referencia          → 'situacao_imovel' | 'orgao' | 'bioma' ... (validação de domínio)
+   referencia_entidade_silver → 'municipio' (integridade relacional cruzada com Silver)
+   validar_cpf_cnpj           → 0 | 1 (validação algorítmica de CPF/CNPJ módulo 11)
+   validar_geometria          → 0 | 1 (validade topológica e tipo de primitiva)
+   validar_recorte_pr         → 0 | 1 (coordenadas/polígono dentro do Paraná)
+   impedir_regressao          → 0 | 1 (impede que campo preenchido regrida para nulo)
+   regras_extras              → JSON livre para regras futuras de fontes desconhecidas
    ```
 
 Cadastrar uma fonte nova = 1 linha em `fonte_dado` + N linhas em `mapeamento_coluna`.
-Nenhuma migration. **Tabela nova só pra fenômeno novo** (ex.: quando a API SICAR Temas
-destravar, "APP declarada" e "Reserva Legal declarada" são fenômeno novo →
-`area_declarada_car`).
+As regras de validação por coluna orientam a triagem automatizada da transição
+Bronze → Silver; qualquer quebra desvia o registro para as tabelas `quarentena.q_*`.
+Nenhuma migration é necessária para fontes que se enquadrem nos fenômenos existentes.
+**Tabela nova só pra fenômeno novo** (ex.: quando a API SICAR Temas destravar,
+"APP declarada" e "Reserva Legal declarada" são fenômeno novo → `area_declarada_car`).
 
 ---
 
