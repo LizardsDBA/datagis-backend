@@ -34,6 +34,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:oracle:thin:@oracle:1521/FREEPDB1
       SPRING_DATASOURCE_USERNAME: ${APP_USER}
       SPRING_DATASOURCE_PASSWORD: ${APP_USER_PASSWORD}
+      JAVA_TOOL_OPTIONS: "-Xmx8g"
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     volumes:

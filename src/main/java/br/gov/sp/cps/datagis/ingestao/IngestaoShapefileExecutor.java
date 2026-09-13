@@ -19,6 +19,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import org.geotools.api.data.DataStore;
 import org.geotools.api.data.DataStoreFinder;
+import org.geotools.api.data.Query;
 import org.geotools.api.data.SimpleFeatureSource;
 import org.geotools.api.feature.Property;
 import org.geotools.api.feature.simple.SimpleFeature;
@@ -60,13 +61,18 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
     private final ArmazenamentoArquivoBruto armazenamento;
     private final LoteIngestaoWriter writer;
     private final ObjectMapper objectMapper;
+    private final ProgressoExecucaoRegistry progresso;
     private final WKTWriter wktWriter = new WKTWriter();
 
     public IngestaoShapefileExecutor(
-            ArmazenamentoArquivoBruto armazenamento, LoteIngestaoWriter writer, ObjectMapper objectMapper) {
+            ArmazenamentoArquivoBruto armazenamento,
+            LoteIngestaoWriter writer,
+            ObjectMapper objectMapper,
+            ProgressoExecucaoRegistry progresso) {
         this.armazenamento = armazenamento;
         this.writer = writer;
         this.objectMapper = objectMapper;
+        this.progresso = progresso;
     }
 
     @Override
@@ -90,7 +96,9 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
         Path diretorioTemp = descompactar(fonte);
         try {
             List<Path> shapefiles = listarShapefiles(diretorioTemp, fonte);
-            return writer.gravarStreaming(fonte, consumidor -> lerShapefiles(shapefiles, consumidor));
+            Long totalEstimado = contarRegistrosTotais(shapefiles);
+            progresso.atualizar(fonte.getId(), FaseExecucao.LENDO_REGISTROS, 0, totalEstimado, null);
+            return writer.gravarStreaming(fonte, consumidor -> lerShapefiles(shapefiles, consumidor), totalEstimado);
         } finally {
             apagarRecursivo(diretorioTemp);
         }
@@ -98,6 +106,7 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
 
     /** Descompacta achatado (ignora subpastas do zip) — .shp/.dbf/.shx/.prj precisam ficar juntos. */
     private Path descompactar(FonteDado fonte) {
+        progresso.atualizar(fonte.getId(), FaseExecucao.DESCOMPACTANDO, 0, null, null);
         Path destino;
         try {
             destino = Files.createTempDirectory("datagis-shp-" + fonte.getId());
@@ -107,18 +116,48 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
         try (InputStream bruto = armazenamento.ler(fonte.getCaminhoArquivoUpload());
                 ZipInputStream zip = new ZipInputStream(bruto)) {
             ZipEntry entrada;
+            int extraidos = 0;
             while ((entrada = zip.getNextEntry()) != null) {
                 if (entrada.isDirectory()) {
                     continue;
                 }
                 String nomeArquivo = Path.of(entrada.getName()).getFileName().toString();
                 Files.copy(zip, destino.resolve(nomeArquivo), StandardCopyOption.REPLACE_EXISTING);
+                extraidos++;
+                progresso.atualizar(fonte.getId(), FaseExecucao.DESCOMPACTANDO, extraidos, null, nomeArquivo);
             }
         } catch (IOException e) {
             throw new IllegalStateException(
                     "Falha ao descompactar o arquivo enviado pra \"" + fonte.getNome() + "\" — é um .zip válido?", e);
         }
         return destino;
+    }
+
+    /**
+     * Soma a contagem de feições de cada {@code .shp} pelo cabeçalho do {@code .dbf}
+     * (via {@link SimpleFeatureSource#getCount}, que pra Shapefile é O(1) — não lê
+     * geometria nenhuma) pra dar um total real à barra de progresso. Se algum arquivo
+     * não souber informar (retorno negativo, ou falha ao abrir), desiste do total
+     * geral em vez de mostrar um percentual enganoso — a tela cai pra só contar.
+     */
+    private Long contarRegistrosTotais(List<Path> shapefiles) {
+        long total = 0;
+        for (Path shp : shapefiles) {
+            DataStore dataStore = abrir(shp);
+            try {
+                SimpleFeatureSource origem = dataStore.getFeatureSource(dataStore.getTypeNames()[0]);
+                int contagem = origem.getCount(Query.ALL);
+                if (contagem < 0) {
+                    return null;
+                }
+                total += contagem;
+            } catch (IOException e) {
+                return null;
+            } finally {
+                dataStore.dispose();
+            }
+        }
+        return total;
     }
 
     private List<Path> listarShapefiles(Path diretorio, FonteDado fonte) {

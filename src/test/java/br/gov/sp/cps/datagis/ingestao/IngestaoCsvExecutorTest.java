@@ -35,7 +35,7 @@ class IngestaoCsvExecutorTest {
 
     @BeforeEach
     void configurar() {
-        executor = new IngestaoCsvExecutor(httpFetchClient, writer, new ObjectMapper());
+        executor = new IngestaoCsvExecutor(httpFetchClient, writer, new ObjectMapper(), new ProgressoExecucaoRegistry());
     }
 
     @Test

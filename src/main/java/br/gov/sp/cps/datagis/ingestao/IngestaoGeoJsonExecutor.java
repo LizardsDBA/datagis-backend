@@ -7,7 +7,6 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ArrayNode;
 
 /**
  * Ingestão genérica pra qualquer fonte cujo {@code formatoEsperado} seja
@@ -44,20 +43,26 @@ public class IngestaoGeoJsonExecutor implements IngestaoExecutor {
 
     private static final String FORMATO = "GEOJSON";
 
+    /** A cada N features convertidas (hash ou JSON+WKT), reporta progresso. */
+    private static final int INTERVALO_PROGRESSO = 500;
+
     private final HttpFetchClient httpFetchClient;
     private final GeoJsonWktMapper wktMapper;
     private final LoteIngestaoWriter writer;
     private final ObjectMapper objectMapper;
+    private final ProgressoExecucaoRegistry progresso;
 
     public IngestaoGeoJsonExecutor(
             HttpFetchClient httpFetchClient,
             GeoJsonWktMapper wktMapper,
             LoteIngestaoWriter writer,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            ProgressoExecucaoRegistry progresso) {
         this.httpFetchClient = httpFetchClient;
         this.wktMapper = wktMapper;
         this.writer = writer;
         this.objectMapper = objectMapper;
+        this.progresso = progresso;
     }
 
     @Override
@@ -71,19 +76,44 @@ public class IngestaoGeoJsonExecutor implements IngestaoExecutor {
 
         // Hash só das features, não da resposta inteira — vários provedores mandam
         // timestamp/metadado que muda a cada chamada mesmo com o dado igual
-        // (CLAUDE.md, RN018).
-        ArrayNode featuresParaHash = objectMapper.createArrayNode();
-        todasFeatures.forEach(featuresParaHash::add);
-        String conteudoParaHash = escreverJson(featuresParaHash);
+        // (CLAUDE.md, RN018). Calculado feature a feature (LoteIngestaoWriter#hashDePartes),
+        // NUNCA concatenando tudo numa String só: foi exatamente essa String única, pro
+        // PRODES Mata Atlântica (~38 mil features), que estourou o heap - o stack trace
+        // mostrou o OutOfMemoryError dentro do próprio serializador do Jackson, não na
+        // lista de features nem nos registros convertidos.
+        int totalFeatures = todasFeatures.size();
+        List<String> featuresSerializadas = new ArrayList<>(totalFeatures);
+        int processadas = 0;
+        for (JsonNode feature : todasFeatures) {
+            featuresSerializadas.add(escreverJson(feature));
+            processadas++;
+            if (processadas % INTERVALO_PROGRESSO == 0 || processadas == totalFeatures) {
+                progresso.atualizar(fonte.getId(), FaseExecucao.LENDO_REGISTROS, processadas, (long) totalFeatures, null);
+            }
+        }
+        String hash = LoteIngestaoWriter.hashDePartes(featuresSerializadas);
+
+        // Checa "mudou?" ANTES de converter feature a feature (JSON + geometria->WKT).
+        // Achado ao vivo no CAR/PR (~4.590 features): essa conversão era o gasto real
+        // de tempo de uma execução, mesmo quando o resultado dava SEM_MUDANCA e nada
+        // dela era usado - ver LoteIngestaoWriter#mudou.
+        if (!writer.mudou(fonte, hash)) {
+            return writer.gravarSemMudanca(fonte, hash);
+        }
 
         List<RegistroPreparado> registros = new ArrayList<>();
+        processadas = 0;
         for (JsonNode feature : todasFeatures) {
             registros.add(new RegistroPreparado(
                     escreverJson(feature.path("properties")),
                     paraWktOuNulo(feature)));
+            processadas++;
+            if (processadas % INTERVALO_PROGRESSO == 0 || processadas == totalFeatures) {
+                progresso.atualizar(fonte.getId(), FaseExecucao.LENDO_REGISTROS, processadas, (long) totalFeatures, null);
+            }
         }
 
-        return writer.gravar(fonte, conteudoParaHash, registros);
+        return writer.gravarComHash(fonte, hash, registros);
     }
 
     /**
@@ -94,11 +124,19 @@ public class IngestaoGeoJsonExecutor implements IngestaoExecutor {
      * Mesmo princípio já usado pra geometria ausente (RN007: não inventamos dado, só
      * preservamos o que veio - aqui preservamos os atributos e deixamos a geometria
      * vazia em vez de rejeitar o registro inteiro).
+     *
+     * <p>Também pega {@code OutOfMemoryError}, não só {@code RuntimeException} — achado
+     * ao vivo no PRODES Mata Atlântica: uma única feição com polígono pesado demais
+     * (contorno de desmatamento com quantidade enorme de vértices, sem simplificação)
+     * estourava o heap dentro do próprio {@code WKTWriter} do JTS, derrubando a
+     * ingestão inteira por causa de 1 geometria - mesmo princípio de resiliência de
+     * antes, só que pro tipo de falha que é um {@code Error}, não uma
+     * {@code Exception}.
      */
     private String paraWktOuNulo(JsonNode feature) {
         try {
             return wktMapper.paraWkt(feature.path("geometry"));
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | OutOfMemoryError e) {
             return null;
         }
     }
@@ -117,6 +155,7 @@ public class IngestaoGeoJsonExecutor implements IngestaoExecutor {
             PaginaBuscada resultado = buscarPaginaComReducaoAutomatica(fonte, familia, offset, tamanhoPagina);
             todasFeatures.addAll(resultado.features());
             tamanhoPagina = resultado.tamanhoUsado();
+            progresso.atualizar(fonte.getId(), FaseExecucao.BUSCANDO_DADOS, todasFeatures.size(), null, "página " + pagina);
 
             boolean ultimaPagina = familia == PaginadorUrlGeoJson.Familia.DESCONHECIDA
                     || resultado.features().size() < tamanhoPagina;

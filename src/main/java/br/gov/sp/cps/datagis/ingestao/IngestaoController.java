@@ -3,6 +3,7 @@ package br.gov.sp.cps.datagis.ingestao;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
 import java.io.IOException;
 import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,15 +21,30 @@ import org.springframework.web.multipart.MultipartFile;
 public class IngestaoController {
 
     private final IngestaoExecucaoService execucaoService;
+    private final ProgressoExecucaoRegistry progressoRegistry;
 
-    public IngestaoController(IngestaoExecucaoService execucaoService) {
+    public IngestaoController(IngestaoExecucaoService execucaoService, ProgressoExecucaoRegistry progressoRegistry) {
         this.execucaoService = execucaoService;
+        this.progressoRegistry = progressoRegistry;
     }
 
     @PostMapping("/{id}/executar")
     public IngestaoResultado executar(@PathVariable Long id) {
         LoteIngestao lote = execucaoService.executar(id);
         return new IngestaoResultado(lote.getId(), lote.getQuantidadeRegistros(), lote.getStatus());
+    }
+
+    /**
+     * Progresso da execução em andamento (ou da última concluída) pra fonte, pra tela
+     * poder sondar (polling) enquanto {@code /executar}/{@code /upload} ainda estão
+     * pendentes — os dois rodam de forma síncrona (a resposta HTTP só volta no fim de
+     * tudo), então este é o único jeito de saber "em que fase está" antes disso.
+     */
+    @GetMapping("/{id}/progresso")
+    public ProgressoExecucaoResponse progresso(@PathVariable Long id) {
+        return progressoRegistry.obter(id)
+                .map(ProgressoExecucaoResponse::de)
+                .orElseGet(ProgressoExecucaoResponse::ocioso);
     }
 
     /**
