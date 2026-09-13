@@ -1222,6 +1222,40 @@ Implementado `ValidadorFaixaMinima` no pacote `br.gov.sp.cps.datagis.validacao`:
 - Se o valor for menor que o piso configurado, gera erro `VALOR_ABAIXO_DO_MINIMO`.
 - Testes: 23 cenários em `ValidadorFaixaMinimaTest` cobrindo aprovações, limites exatos, conversões tolerantes, erros de tipo, rejeições abaixo do piso e casos de borda (nulos e vazios).
 
+### 9.20. Validador de Geometria e Recorte PR — [FEITO, 2026-09-13, Fase 2.6]
+Implementado `ValidadorGeometria` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Validação completa de atributos espaciais utilizando a biblioteca JTS Topology Suite (`org.locationtech.jts`).
+- Suporta entradas em formato WKT e GeoJSON (via `ObjectMapper`).
+- Validação sintática: erros de formatação geram `GEOMETRIA_MALFORMADA`.
+- Validação topológica com `IsValidOp`: auto-interseções, anéis desconexos e laços geram `GEOMETRIA_INVALIDA` com o motivo e as coordenadas exatas da quebra topológica.
+- Validação de primitivo: garante que o tipo (ex.: `Polygon`, `MultiPolygon`, `Point`) respeite a configuração de `regras_extras` ou `tipo_dado`, gerando `GEOMETRIA_TIPO_INCOMPATIVEL` se divergente.
+- Validação de recorte territorial do Paraná (`validar_recorte_pr = 1`): verifica interseção com os limites oficiais do Paraná (SRID 4674: lon `[-55.00, -47.50]`, lat `[-27.20, -22.00]`), gerando `FORA_DO_RECORTE_TERRITORIAL` se fora.
+- Geometrias nulas obrigatórias geram `GEOMETRIA_NULA`.
+- Sucesso retorna WKT padronizado gerado por `WKTWriter`.
+- Testes: 29 cenários em `ValidadorGeometriaTest` cobrindo WKT, GeoJSON, auto-interseções, primitivos incompatíveis, recorte Paraná e nulidade.
+
+### 9.21. Validador de Regressão de Valor — [FEITO, 2026-09-13, Fase 2.7]
+Implementado `ValidadorRegressao` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Atua quando `impedir_regressao = 1` em `mapeamento_coluna` (padrão `DEFAULT 1`).
+- Identifica se um campo estava preenchido no snapshot/lote anterior da mesma chave natural e veio nulo, vazio ou falso nulo no lote mais recente.
+- Caso detectada perda de dados, gera o erro `REGRESSAO_DE_VALOR` com detalhamento do campo e valor anterior para a Quarentena.
+- Aprova atualizações legítimas (valor novo preenchido) ou permanência de estado (ambos nulos).
+- Adicionado campo opcional `Object valorAnterior` ao record `ContextoValidacaoCampo` com suporte a `toBuilder = true`.
+- Testes: 22 cenários em `ValidadorRegressaoTest` cobrindo perda de dados, falsos nulos, atualizações legítimas e flags desativadas.
+
+### 9.22. Deduplicação de Registros e Seleção do Mais Novo para a Silver — [FEITO, 2026-09-13, Fase 2.8]
+Implementado `DeduplicadorRegistros` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Agrupa registros pela chave natural de negócio (ex.: `cod_imovel`, `numero_termo`, etc.).
+- Quando houver duplicatas de chave natural (seja entre diferentes lotes/snapshots ou repetidas dentro do mesmo lote), seleciona o registro mais recente/relevante como vencedor para a Silver.
+- Critério de precedência e desempate:
+  1. Regra de negócio CAR: registros com `situacao_imovel = "AT"` (Ativo) têm precedência sobre históricos cancelados (`"CA"`) ou pendentes (`"PE"`);
+  2. Lote/snapshot mais recente: maior `loteIngestaoId`;
+  3. Sequência temporal mais recente: maior `dataIngestao` ou maior `id`.
+- Retorna `ResultadoDeduplicacao<T>` estruturado contendo a lista de promovidos únicos e o detalhamento de duplicatas descartadas (`DuplicataDescartada<T>`) com motivo, chave natural e referência ao vencedor.
+- Registros sem chave natural são preservados sem descarte indevido.
+- Suporte a deduplicação genérica tipada (`deduplicarGenerico`).
+- Testes: 7 cenários em `DeduplicadorRegistrosTest` (185 testes no total do pacote de validação).
+
 ### 10.4-bis. Estado atual (2026-09-13)
 - **Branch de trabalho corrente:** evolução do backend para validação e quarentena (Bronze → Silver/Quarentena).
 - **Migrations V029 e V030 aplicadas**.
@@ -1229,7 +1263,10 @@ Implementado `ValidadorFaixaMinima` no pacote `br.gov.sp.cps.datagis.validacao`:
 - **Fase 2.2 (ValidadorCpfCnpj) implementada e testada com 31 testes aprovados**.
 - **Fase 2.3 (ValidadorDominio) implementada e testada com 24 testes aprovados**.
 - **Fase 2.4 (ValidadorIntegridadeCruzada) implementada e testada com 23 testes aprovados**.
-- **Fase 2.5 (ValidadorFaixaMinima) implementada e testada com 23 testes aprovados (127 testes no total do pacote de validação)**.
+- **Fase 2.5 (ValidadorFaixaMinima) implementada e testada com 23 testes aprovados**.
+- **Fase 2.6 (ValidadorGeometria) implementada e testada com 29 testes aprovados**.
+- **Fase 2.7 (ValidadorRegressao) implementada e testada com 22 testes aprovados**.
+- **Fase 2.8 (DeduplicadorRegistros) implementada e testada com 7 testes aprovados (185 testes no total do pacote de validação)**.
 
 ---
 

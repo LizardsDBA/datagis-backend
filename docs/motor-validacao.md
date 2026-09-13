@@ -180,6 +180,59 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 
 **Testes:** `ValidadorFaixaMinimaTest` — 23 cenários.
 
+### 4.6. `ValidadorGeometria` — [FEITO, 2026-09-13, Fase 2.6]
+
+**Ativa quando** `validarGeometria = true`, `validarRecortePr = true`, `destinoTipo = 'GEOMETRIA'` ou `tipoDado` ∈ `{wkt, geojson}`.
+
+**Mecanismo de funcionamento:**
+1. `null` ou string em branco:
+   - Se `obrigatorio = true` → erro `GEOMETRIA_NULA`.
+   - Se opcional → `sucesso(null)`.
+2. **Parsing**: converte texto WKT ou GeoJSON para geometria JTS (`Geometry`).
+   - Se a sintaxe estiver corrompida → erro `GEOMETRIA_MALFORMADA`.
+3. **Validação Topológica (JTS `IsValidOp`)**:
+   - Analisa auto-interseções, auto-loops ou anéis desconexos.
+   - Se inválida → erro `GEOMETRIA_INVALIDA` com detalhamento da inconsistência e coordenada do erro.
+4. **Compatibilidade de Primitivo**:
+   - Compara o tipo real com a exigência configurada em `regrasExtras` ou `tipoDado` (ex.: `POLYGON`, `POINT`, `LINESTRING`).
+   - Se incompatível → erro `GEOMETRIA_TIPO_INCOMPATIVEL`.
+5. **Recorte Territorial do Paraná (`validarRecortePr = true`)**:
+   - Verifica se o envelope da geometria intercepta os limites oficiais do Paraná (SRID 4674 - Bounding Box `[-55.00, -47.50]` lon / `[-27.20, -22.00]` lat).
+   - Se estiver fora → erro `FORA_DO_RECORTE_TERRITORIAL`.
+6. Sucesso → `sucesso(wktPadronizado)`.
+
+### 4.7. `ValidadorRegressao` — [FEITO, 2026-09-13, Fase 2.7]
+
+**Ativa quando** `impedirRegressao = true` em `mapeamento_coluna` (padrão `DEFAULT 1`).
+
+**Mecanismo de funcionamento:**
+1. Compara o valor atual recebido no payload com o `valorAnterior` do mesmo campo no snapshot/lote anterior (carregado da Silver).
+2. Se o valor atual for nulo, vazio ou falso nulo (`"null"`, `"N/A"`, `"-"`), **E** o valor anterior estiver preenchido com um dado válido:
+   - Detecta perda indevida de dado entre lotes consecutivos.
+   - Gera o erro `REGRESSAO_DE_VALOR` com detalhes do campo e valor anterior para a Quarentena.
+3. Se o novo valor estiver preenchido (atualização legítima) ou se o campo já era nulo anteriormente:
+   - Aprova a operação (`sucesso(valor)`).
+
+**Testes:** `ValidadorRegressaoTest` — 22 cenários.
+
+### 4.8. `DeduplicadorRegistros` — [FEITO, 2026-09-13, Fase 2.8]
+
+**Ativa quando** múltiplos registros possuem a mesma chave natural de negócio (`campoChave`, ex.: `cod_imovel`, `numero_termo`) entre snapshots consecutivos ou repetidos no mesmo lote de ingestão.
+
+**Mecanismo de funcionamento:**
+1. Agrupa os registros brutos pela chave natural extraída do JSON do `payload`.
+2. Registros sem chave natural ou com chave em branco são preservados individualmente sem descarte por colisão.
+3. Para cada grupo com chaves coincidentes, determina o registro vencedor de acordo com a hierarquia de precedência:
+   - **Regra de Negócio do CAR:** Registros com `situacao_imovel = "AT"` (Ativo) têm precedência estrita sobre estados transitórios ou históricos (`"CA"`, `"PE"`).
+   - **Snapshot Mais Recente:** Maior `loteIngestaoId` vence (snapshot mais atualizado promovido à Silver).
+   - **Sequência Temporal de Ingestão:** Maior `dataIngestao` ou maior `id` do registro desempata.
+4. Retorna `ResultadoDeduplicacao<T>` com:
+   - `registrosPromovidos`: lista apenas dos registros vencedores para seguir para validação e carga na Silver.
+   - `duplicatasDescartadas`: registros superados, com `motivo`, `chaveNatural` e ponteiro para o `registroVencedor`.
+5. Fornece método genérico e tipado `deduplicarGenerico(itens, extratorChave, comparador)` para reuso em outras entidades do pipeline.
+
+**Testes:** `DeduplicadorRegistrosTest` — 7 cenários.
+
 ---
 
 ## 5. Tipos de erro registrados na Quarentena
@@ -191,9 +244,14 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 | `VALOR_FORA_DO_DOMINIO` | Valor informado não consta como código ativo na tabela de referência Silver |
 | `REFERENCIA_NAO_ENCONTRADA` | Chave informada não existe na entidade Silver de destino (ex.: `cod_ibge` em `silver.municipio`) |
 | `VALOR_ABAIXO_DO_MINIMO` | Valor numérico < `valor_minimo` configurado |
-| `TIPO_DE_DADO_INVALIDO` | Valor não conversível para o tipo esperado (ex.: texto não numérico em coluna com faixa mínima) |
+| `TIPO_DE_DADO_INVALIDO` | Valor não conversível para o tipo esperado |
+| `GEOMETRIA_NULA` | Geometria obrigatória ausente ou vazia |
+| `GEOMETRIA_MALFORMADA` | Sintaxe WKT ou GeoJSON corrompida |
+| `GEOMETRIA_INVALIDA` | Geometria presente mas topologicamente inválida (auto-interseção, etc.) |
+| `GEOMETRIA_TIPO_INCOMPATIVEL` | Primitivo geométrico incompatível com a entidade alvo |
+| `FORA_DO_RECORTE_TERRITORIAL` | Geometria localizada fora dos limites territoriais do Paraná |
+| `REGRESSAO_DE_VALOR` | Campo preenchido no snapshot anterior veio nulo/vazio no lote mais recente |
 | `CAMPO_EM_BRANCO` | *(mapeado na V030; produzido pelo SanitizadorEntrada via CAMPO_OBRIGATORIO_AUSENTE)* |
-| `GEOMETRIA_TIPO_INCOMPATIVEL` | Primitivo geométrico inválido *(a implementar)* |
 
 ---
 
@@ -206,9 +264,13 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 | 2.3 | `ValidadorDominio` — lookup em cache de `tabela_referencia` da Silver + invalidação analista | ✅ FEITO |
 | 2.4 | `ValidadorIntegridadeCruzada` — integridade relacional em `referencia_entidade_silver` | ✅ FEITO |
 | 2.5 | `ValidadorFaixaMinima` — valor numérico ≥ `valor_minimo` | ✅ FEITO |
-| 2.6 | `ValidadorGeometria` — tipo primitivo + topologia + recorte PR | 🔲 pendente |
-| 2.7 | `ValidadorRegressao` — campo preenchido no snapshot anterior, veio null agora | 🔲 pendente |
-| 2.8 | `OrquestradorValidacao` — encadeia todos os validadores por campo | 🔲 pendente |
+| 2.6 | `ValidadorGeometria` — tipo primitivo + topologia + recorte PR | ✅ FEITO |
+| 2.7 | `ValidadorRegressao` — campo preenchido no snapshot anterior, veio null agora | ✅ FEITO |
+| 2.8 | `DeduplicadorRegistros` — deduplicação de chaves naturais e seleção do mais novo para Silver | ✅ FEITO |
+| 2.9 | `OrquestradorValidacao` — encadeia todos os validadores por campo e lote | 🔲 pendente |
+
+
+
 
 
 

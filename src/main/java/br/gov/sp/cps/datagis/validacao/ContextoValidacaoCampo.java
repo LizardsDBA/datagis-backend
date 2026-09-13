@@ -6,7 +6,7 @@ import lombok.Builder;
  * Encapsula as regras e metadados de validação configurados para uma coluna
  * em {@code controle.mapeamento_coluna}.
  */
-@Builder
+@Builder(toBuilder = true)
 public record ContextoValidacaoCampo(
         String colunaOrigem,
         String atributoDestino,
@@ -20,7 +20,8 @@ public record ContextoValidacaoCampo(
         boolean validarGeometria,
         boolean validarRecortePr,
         boolean impedirRegressao,
-        String regrasExtras) {
+        String regrasExtras,
+        Object valorAnterior) {
 
     public static ContextoValidacaoCampo simples(String colunaOrigem, String atributoDestino, boolean obrigatorio) {
         return ContextoValidacaoCampo.builder()
