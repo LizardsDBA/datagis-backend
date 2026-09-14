@@ -2,13 +2,14 @@ package br.gov.sp.cps.datagis.validacao;
 
 import br.gov.sp.cps.datagis.bronze.RegistroBruto;
 import java.math.BigDecimal;
+import java.sql.Connection;
 import java.sql.Date;
 import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -16,11 +17,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
@@ -30,6 +33,13 @@ import tools.jackson.databind.ObjectMapper;
  * nas tabelas de fato da camada Silver (silver.*), resolvendo chaves estrangeiras,
  * convertendo geometrias para MDSYS.SDO_GEOMETRY (SRID 4674) e preservando
  * atributos originais e linhagem cross-schema.
+ *
+ * <p>Otimizado com:
+ * <ul>
+ *   <li>Cache em memória de tabelas de domínio e municípios (evitando milhares de roundtrips JDBC);</li>
+ *   <li>Reutilização de PreparedStatement pré-compilado para todo o lote com liberação imediata de CLOBs temporários;</li>
+ *   <li>Logs periódicos de progresso a cada 1.000 registros para visibilidade operacional.</li>
+ * </ul>
  */
 @Service
 public class PersistidorSilverService {
@@ -47,6 +57,14 @@ public class PersistidorSilverService {
      */
     private final ConcurrentHashMap<String, Map<String, Long>> refCache = new ConcurrentHashMap<>();
 
+    /**
+     * Cache thread-safe em memória para resolução ultrarrápida de municípios:
+     * Chave: cod_ibge numérico (ex: "4106902"), nome em maiúsculas (ex: "CURITIBA") ou normalizado sem acentos.
+     * Valor: ID primário numérico na tabela silver.municipio.
+     */
+    private final ConcurrentHashMap<String, Long> municipioCache = new ConcurrentHashMap<>();
+    private volatile boolean municipiosCarregados = false;
+
     @Autowired
     public PersistidorSilverService(
             JdbcTemplate jdbcTemplate,
@@ -62,7 +80,8 @@ public class PersistidorSilverService {
     }
 
     /**
-     * Persiste uma lista de registros aprovados na entidade Silver correspondente.
+     * Persiste uma lista de registros aprovados na entidade Silver correspondente,
+     * reutilizando um único PreparedStatement compilado para todo o lote.
      *
      * @param entidade nome canônico da entidade (ex: "imovel_rural", "municipio", "auto_infracao")
      * @param aprovados lista de registros aprovados pelo motor de validação
@@ -75,27 +94,40 @@ public class PersistidorSilverService {
         }
 
         String ent = normalizarNomeEntidade(entidade);
+        carregarCacheMunicipiosSeNecessario();
+
+        String sql = obterSqlMerge(ent);
         int inseridos = 0;
 
-        for (RegistroAprovadoSilver apr : aprovados) {
-            try {
-                switch (ent) {
-                    case "imovel_rural" -> persistirImovelRural(apr);
-                    case "municipio" -> persistirMunicipio(apr);
-                    case "area_protegida" -> persistirAreaProtegida(apr);
-                    case "auto_infracao" -> persistirAutoInfracao(apr);
-                    case "embargo_ambiental" -> persistirEmbargoAmbiental(apr);
-                    case "desmatamento" -> persistirDesmatamento(apr);
-                    case "foco_calor" -> persistirFocoCalor(apr);
-                    default -> persistirGenerico(ent, apr);
-                }
+        DataSource ds = jdbcTemplate != null ? jdbcTemplate.getDataSource() : null;
+        if (ds == null) {
+            // Fallback para ambientes de teste unitário onde JdbcTemplate foi mockado sem DataSource
+            for (RegistroAprovadoSilver apr : aprovados) {
+                Object[] params = extrairParametrosMerge(ent, apr);
+                executarMerge(sql, params);
                 inseridos++;
-            } catch (Exception e) {
-                log.error("Erro ao persistir registro bruto {} na Silver {}: {}",
-                        apr.registroBruto() != null ? apr.registroBruto().getId() : "null",
-                        ent, e.getMessage(), e);
-                throw new RuntimeException("Falha na persistência atômica da Silver para entidade " + ent + ": " + e.getMessage(), e);
             }
+            log.info("Persistidos com sucesso {} registros na camada Silver ({}.{}) [mock mode]", inseridos, silverSchema, ent);
+            return inseridos;
+        }
+
+        Connection con = DataSourceUtils.getConnection(ds);
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            for (RegistroAprovadoSilver apr : aprovados) {
+                Object[] params = extrairParametrosMerge(ent, apr);
+                vincularParametrosEExecutar(ps, params);
+                inseridos++;
+
+                if (inseridos % 1000 == 0 || inseridos == aprovados.size()) {
+                    log.info("Progresso de persistência Silver ({}.{}): {}/{} registros concluídos...",
+                            silverSchema, ent, inseridos, aprovados.size());
+                }
+            }
+        } catch (Exception e) {
+            log.error("Erro na persistência em lote da Silver ({}.{}): {}", silverSchema, ent, e.getMessage(), e);
+            throw new RuntimeException("Falha na persistência atômica da Silver para entidade " + ent + ": " + e.getMessage(), e);
+        } finally {
+            DataSourceUtils.releaseConnection(con, ds);
         }
 
         log.info("Persistidos com sucesso {} registros na camada Silver ({}.{})", inseridos, silverSchema, ent);
@@ -106,7 +138,57 @@ public class PersistidorSilverService {
     // Persistência Específica por Entidade Fato
     // -------------------------------------------------------------------------
 
-    private void persistirImovelRural(RegistroAprovadoSilver apr) {
+    public void persistirImovelRural(RegistroAprovadoSilver apr) {
+        executarMerge(obterSqlMerge("imovel_rural"), extrairParametrosImovelRural(apr));
+    }
+
+    public void persistirMunicipio(RegistroAprovadoSilver apr) {
+        executarMerge(obterSqlMerge("municipio"), extrairParametrosMunicipio(apr));
+    }
+
+    public void persistirAreaProtegida(RegistroAprovadoSilver apr) {
+        executarMerge(obterSqlMerge("area_protegida"), extrairParametrosAreaProtegida(apr));
+    }
+
+    public void persistirAutoInfracao(RegistroAprovadoSilver apr) {
+        executarMerge(obterSqlMerge("auto_infracao"), extrairParametrosAutoInfracao(apr));
+    }
+
+    public void persistirEmbargoAmbiental(RegistroAprovadoSilver apr) {
+        executarMerge(obterSqlMerge("embargo_ambiental"), extrairParametrosEmbargoAmbiental(apr));
+    }
+
+    public void persistirDesmatamento(RegistroAprovadoSilver apr) {
+        executarMerge(obterSqlMerge("desmatamento"), extrairParametrosDesmatamento(apr));
+    }
+
+    public void persistirFocoCalor(RegistroAprovadoSilver apr) {
+        executarMerge(obterSqlMerge("foco_calor"), extrairParametrosFocoCalor(apr));
+    }
+
+    public void persistirGenerico(String entidade, RegistroAprovadoSilver apr) {
+        log.warn("Entidade Silver '{}' não possui persistidor canônico especializado, delegando para imovel_rural.", entidade);
+        persistirImovelRural(apr);
+    }
+
+    // -------------------------------------------------------------------------
+    // Extração de Parâmetros por Entidade
+    // -------------------------------------------------------------------------
+
+    private Object[] extrairParametrosMerge(String entidade, RegistroAprovadoSilver apr) {
+        return switch (entidade) {
+            case "imovel_rural" -> extrairParametrosImovelRural(apr);
+            case "municipio" -> extrairParametrosMunicipio(apr);
+            case "area_protegida" -> extrairParametrosAreaProtegida(apr);
+            case "auto_infracao" -> extrairParametrosAutoInfracao(apr);
+            case "embargo_ambiental" -> extrairParametrosEmbargoAmbiental(apr);
+            case "desmatamento" -> extrairParametrosDesmatamento(apr);
+            case "foco_calor" -> extrairParametrosFocoCalor(apr);
+            default -> extrairParametrosImovelRural(apr);
+        };
+    }
+
+    private Object[] extrairParametrosImovelRural(RegistroAprovadoSilver apr) {
         Map<String, Object> attrs = apr.atributosTransformados();
         RegistroBruto reg = apr.registroBruto();
 
@@ -135,7 +217,233 @@ public class PersistidorSilverService {
         String geomWkt = apr.geometriaWkt();
         String atributosOrigem = extrairPayloadOuJson(reg, attrs);
 
-        String sql = """
+        return new Object[] {
+            codImovel,
+            situacaoId,
+            condicaoId,
+            tipoId,
+            municipioId,
+            dataRegistro,
+            areaHa,
+            modulosFiscais,
+            geomWkt,
+            atributosOrigem,
+            reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 1L,
+            reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
+            reg != null && reg.getId() != null ? reg.getId() : 1L,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
+    private Object[] extrairParametrosMunicipio(RegistroAprovadoSilver apr) {
+        Map<String, Object> attrs = apr.atributosTransformados();
+        RegistroBruto reg = apr.registroBruto();
+
+        Long codIbge = extrairLong(attrs, "cod_ibge", "cd_mun");
+        String nome = extrairString(attrs, "nome", "nm_mun");
+        Long ufId = resolverIdReferencia("unidade_federativa", attrs.get("uf"));
+        if (ufId == null) {
+            ufId = resolverIdReferencia("unidade_federativa", "PR");
+        }
+        Long biomaId = resolverIdReferencia("bioma", attrs.get("bioma"));
+        BigDecimal areaKm2 = extrairBigDecimal(attrs, "area_km2", "area");
+        String geomWkt = apr.geometriaWkt();
+        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
+
+        return new Object[] {
+            codIbge,
+            nome,
+            ufId,
+            biomaId,
+            areaKm2,
+            geomWkt,
+            atributosOrigem,
+            reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 7L,
+            reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
+            reg != null && reg.getId() != null ? reg.getId() : 1L,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
+    private Object[] extrairParametrosAreaProtegida(RegistroAprovadoSilver apr) {
+        Map<String, Object> attrs = apr.atributosTransformados();
+        RegistroBruto reg = apr.registroBruto();
+
+        String codigoOrigem = extrairString(attrs, "codigo_origem", "cnuc", "terrai_cod", "id");
+        String nome = extrairString(attrs, "nome", "nm_uc", "terrai_nom");
+        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "ICMBIO");
+        Long tipoAreaId = resolverIdReferencia("tipo_area_protegida", attrs.get("tipo_area_protegida"));
+        if (tipoAreaId == null) {
+            tipoAreaId = 1L;
+        }
+        Long biomaId = resolverIdReferencia("bioma", attrs.get("bioma"));
+        String atoLegal = extrairString(attrs, "ato_legal");
+        BigDecimal areaHa = extrairBigDecimal(attrs, "area_ha", "area");
+        String geomWkt = apr.geometriaWkt();
+        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
+
+        return new Object[] {
+            codigoOrigem,
+            orgaoId,
+            nome,
+            tipoAreaId,
+            biomaId,
+            atoLegal,
+            areaHa,
+            geomWkt,
+            atributosOrigem,
+            reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 3L,
+            reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
+            reg != null && reg.getId() != null ? reg.getId() : 1L,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
+    private Object[] extrairParametrosAutoInfracao(RegistroAprovadoSilver apr) {
+        Map<String, Object> attrs = apr.atributosTransformados();
+        RegistroBruto reg = apr.registroBruto();
+
+        String numeroAuto = extrairString(attrs, "numero_auto", "num_auto");
+        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "IBAMA");
+        Long municipioId = resolverIdMunicipio(attrs.get("municipio"), attrs.get("cod_municipio_ibge"));
+        String cpfCnpj = extrairString(attrs, "cpf_cnpj_infrator", "cpf_cnpj");
+        String nomeInfrator = extrairString(attrs, "nome_infrator", "infrator");
+        Date dataAuto = extrairData(attrs, "data_auto");
+        String numProcesso = extrairString(attrs, "num_processo");
+        BigDecimal valorMulta = extrairBigDecimal(attrs, "valor_multa", "multa");
+        String geomWkt = apr.geometriaWkt();
+        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
+
+        return new Object[] {
+            numeroAuto,
+            orgaoId,
+            municipioId,
+            cpfCnpj,
+            nomeInfrator,
+            dataAuto,
+            numProcesso,
+            valorMulta,
+            geomWkt,
+            atributosOrigem,
+            reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 10L,
+            reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
+            reg != null && reg.getId() != null ? reg.getId() : 1L,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
+    private Object[] extrairParametrosEmbargoAmbiental(RegistroAprovadoSilver apr) {
+        Map<String, Object> attrs = apr.atributosTransformados();
+        RegistroBruto reg = apr.registroBruto();
+
+        String numeroTermo = extrairString(attrs, "numero_termo", "num_tad", "numero_emb");
+        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "IBAMA");
+        Long municipioId = resolverIdMunicipio(attrs.get("municipio"), attrs.get("cod_municipio_ibge"));
+        String cpfCnpj = extrairString(attrs, "cpf_cnpj", "cpf_cnpj_infrator");
+        String nomeAutuado = extrairString(attrs, "nome_autuado", "autuado");
+        Date dataEmbargo = extrairData(attrs, "data_embargo", "data_termo");
+        BigDecimal areaEmbargadaHa = extrairBigDecimal(attrs, "area_embargada_ha", "area");
+        String geomWkt = apr.geometriaWkt();
+        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
+
+        return new Object[] {
+            numeroTermo,
+            orgaoId,
+            municipioId,
+            cpfCnpj,
+            nomeAutuado,
+            dataEmbargo,
+            areaEmbargadaHa,
+            geomWkt,
+            atributosOrigem,
+            reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 5L,
+            reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
+            reg != null && reg.getId() != null ? reg.getId() : 1L,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
+    private Object[] extrairParametrosDesmatamento(RegistroAprovadoSilver apr) {
+        Map<String, Object> attrs = apr.atributosTransformados();
+        RegistroBruto reg = apr.registroBruto();
+
+        Long fonteId = reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 4L;
+        String identificadorOrigem = extrairString(attrs, "identificador_origem", "uuid", "fid", "id");
+        if (identificadorOrigem == null && reg != null) {
+            identificadorOrigem = "DESM-" + reg.getId();
+        }
+        Integer ano = extrairInteger(attrs, "ano");
+        BigDecimal areaHa = extrairBigDecimal(attrs, "area_ha", "area");
+        Date dataImagem = extrairData(attrs, "data_imagem");
+        String geomWkt = apr.geometriaWkt();
+        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
+
+        return new Object[] {
+            fonteId,
+            identificadorOrigem,
+            ano,
+            areaHa,
+            dataImagem,
+            geomWkt,
+            atributosOrigem,
+            reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
+            reg != null && reg.getId() != null ? reg.getId() : 1L,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
+    private Object[] extrairParametrosFocoCalor(RegistroAprovadoSilver apr) {
+        Map<String, Object> attrs = apr.atributosTransformados();
+        RegistroBruto reg = apr.registroBruto();
+
+        Long fonteId = reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 6L;
+        String identificadorOrigem = extrairString(attrs, "identificador_origem", "id", "objectid");
+        if (identificadorOrigem == null && reg != null) {
+            identificadorOrigem = "FOCO-" + reg.getId();
+        }
+        Timestamp dataHora = extrairTimestamp(attrs, "data_hora", "data");
+        BigDecimal latitude = extrairBigDecimal(attrs, "latitude", "lat");
+        BigDecimal longitude = extrairBigDecimal(attrs, "longitude", "lon");
+        BigDecimal riscoFogo = extrairBigDecimal(attrs, "risco_fogo");
+        Long municipioId = resolverIdMunicipio(attrs.get("municipio"), attrs.get("cod_municipio_ibge"));
+        String geomWkt = apr.geometriaWkt();
+        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
+
+        return new Object[] {
+            fonteId,
+            identificadorOrigem,
+            dataHora,
+            municipioId,
+            latitude,
+            longitude,
+            riscoFogo,
+            geomWkt,
+            atributosOrigem,
+            reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
+            reg != null && reg.getId() != null ? reg.getId() : 1L,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // Comandos SQL MERGE por Entidade
+    // -------------------------------------------------------------------------
+
+    private String obterSqlMerge(String entidade) {
+        return switch (entidade) {
+            case "imovel_rural" -> obterSqlImovelRural();
+            case "municipio" -> obterSqlMunicipio();
+            case "area_protegida" -> obterSqlAreaProtegida();
+            case "auto_infracao" -> obterSqlAutoInfracao();
+            case "embargo_ambiental" -> obterSqlEmbargoAmbiental();
+            case "desmatamento" -> obterSqlDesmatamento();
+            case "foco_calor" -> obterSqlFocoCalor();
+            default -> obterSqlImovelRural();
+        };
+    }
+
+    private String obterSqlImovelRural() {
+        return """
             MERGE INTO %s.imovel_rural t
             USING (
                 SELECT
@@ -201,41 +509,10 @@ public class PersistidorSilverService {
                     s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
             """.formatted(silverSchema);
-
-        executarMerge(sql,
-                codImovel,
-                situacaoId,
-                condicaoId,
-                tipoId,
-                municipioId,
-                dataRegistro,
-                areaHa,
-                modulosFiscais,
-                geomWkt,
-                atributosOrigem,
-                reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 1L,
-                reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
-                reg != null && reg.getId() != null ? reg.getId() : 1L,
-                reg != null ? reg.getHashRegistro() : null
-        );
     }
 
-    private void persistirMunicipio(RegistroAprovadoSilver apr) {
-        Map<String, Object> attrs = apr.atributosTransformados();
-        RegistroBruto reg = apr.registroBruto();
-
-        Long codIbge = extrairLong(attrs, "cod_ibge", "cd_mun");
-        String nome = extrairString(attrs, "nome", "nm_mun");
-        Long ufId = resolverIdReferencia("unidade_federativa", attrs.get("uf"));
-        if (ufId == null) {
-            ufId = resolverIdReferencia("unidade_federativa", "PR");
-        }
-        Long biomaId = resolverIdReferencia("bioma", attrs.get("bioma"));
-        BigDecimal areaKm2 = extrairBigDecimal(attrs, "area_km2", "area");
-        String geomWkt = apr.geometriaWkt();
-        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
-
-        String sql = """
+    private String obterSqlMunicipio() {
+        return """
             MERGE INTO %s.municipio t
             USING (
                 SELECT
@@ -290,40 +567,10 @@ public class PersistidorSilverService {
                     s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
             """.formatted(silverSchema);
-
-        executarMerge(sql,
-                codIbge,
-                nome,
-                ufId,
-                biomaId,
-                areaKm2,
-                geomWkt,
-                atributosOrigem,
-                reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 7L,
-                reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
-                reg != null && reg.getId() != null ? reg.getId() : 1L,
-                reg != null ? reg.getHashRegistro() : null
-        );
     }
 
-    private void persistirAreaProtegida(RegistroAprovadoSilver apr) {
-        Map<String, Object> attrs = apr.atributosTransformados();
-        RegistroBruto reg = apr.registroBruto();
-
-        String codigoOrigem = extrairString(attrs, "codigo_origem", "cnuc", "terrai_cod", "id");
-        String nome = extrairString(attrs, "nome", "nm_uc", "terrai_nom");
-        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "ICMBIO");
-        Long tipoAreaId = resolverIdReferencia("tipo_area_protegida", attrs.get("tipo_area_protegida"));
-        if (tipoAreaId == null) {
-            tipoAreaId = 1L; // Fallback
-        }
-        Long biomaId = resolverIdReferencia("bioma", attrs.get("bioma"));
-        String atoLegal = extrairString(attrs, "ato_legal");
-        BigDecimal areaHa = extrairBigDecimal(attrs, "area_ha", "area");
-        String geomWkt = apr.geometriaWkt();
-        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
-
-        String sql = """
+    private String obterSqlAreaProtegida() {
+        return """
             MERGE INTO %s.area_protegida t
             USING (
                 SELECT
@@ -385,40 +632,10 @@ public class PersistidorSilverService {
                     s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
             """.formatted(silverSchema);
-
-        executarMerge(sql,
-                codigoOrigem,
-                orgaoId,
-                nome,
-                tipoAreaId,
-                biomaId,
-                atoLegal,
-                areaHa,
-                geomWkt,
-                atributosOrigem,
-                reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 3L,
-                reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
-                reg != null && reg.getId() != null ? reg.getId() : 1L,
-                reg != null ? reg.getHashRegistro() : null
-        );
     }
 
-    private void persistirAutoInfracao(RegistroAprovadoSilver apr) {
-        Map<String, Object> attrs = apr.atributosTransformados();
-        RegistroBruto reg = apr.registroBruto();
-
-        String numeroAuto = extrairString(attrs, "numero_auto", "num_auto");
-        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "IBAMA");
-        Long municipioId = resolverIdMunicipio(attrs.get("municipio"), attrs.get("cod_municipio_ibge"));
-        String cpfCnpj = extrairString(attrs, "cpf_cnpj_infrator", "cpf_cnpj");
-        String nomeInfrator = extrairString(attrs, "nome_infrator", "infrator");
-        Date dataAuto = extrairData(attrs, "data_auto");
-        String numProcesso = extrairString(attrs, "num_processo");
-        BigDecimal valorMulta = extrairBigDecimal(attrs, "valor_multa", "multa");
-        String geomWkt = apr.geometriaWkt();
-        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
-
-        String sql = """
+    private String obterSqlAutoInfracao() {
+        return """
             MERGE INTO %s.auto_infracao t
             USING (
                 SELECT
@@ -483,40 +700,10 @@ public class PersistidorSilverService {
                     s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
             """.formatted(silverSchema);
-
-        executarMerge(sql,
-                numeroAuto,
-                orgaoId,
-                municipioId,
-                cpfCnpj,
-                nomeInfrator,
-                dataAuto,
-                numProcesso,
-                valorMulta,
-                geomWkt,
-                atributosOrigem,
-                reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 10L,
-                reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
-                reg != null && reg.getId() != null ? reg.getId() : 1L,
-                reg != null ? reg.getHashRegistro() : null
-        );
     }
 
-    private void persistirEmbargoAmbiental(RegistroAprovadoSilver apr) {
-        Map<String, Object> attrs = apr.atributosTransformados();
-        RegistroBruto reg = apr.registroBruto();
-
-        String numeroTermo = extrairString(attrs, "numero_termo", "num_tad", "numero_emb");
-        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "IBAMA");
-        Long municipioId = resolverIdMunicipio(attrs.get("municipio"), attrs.get("cod_municipio_ibge"));
-        String cpfCnpj = extrairString(attrs, "cpf_cnpj", "cpf_cnpj_infrator");
-        String nomeAutuado = extrairString(attrs, "nome_autuado", "autuado");
-        Date dataEmbargo = extrairData(attrs, "data_embargo", "data_termo");
-        BigDecimal areaEmbargadaHa = extrairBigDecimal(attrs, "area_embargada_ha", "area");
-        String geomWkt = apr.geometriaWkt();
-        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
-
-        String sql = """
+    private String obterSqlEmbargoAmbiental() {
+        return """
             MERGE INTO %s.embargo_ambiental t
             USING (
                 SELECT
@@ -578,40 +765,10 @@ public class PersistidorSilverService {
                     s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
             """.formatted(silverSchema);
-
-        executarMerge(sql,
-                numeroTermo,
-                orgaoId,
-                municipioId,
-                cpfCnpj,
-                nomeAutuado,
-                dataEmbargo,
-                areaEmbargadaHa,
-                geomWkt,
-                atributosOrigem,
-                reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 5L,
-                reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
-                reg != null && reg.getId() != null ? reg.getId() : 1L,
-                reg != null ? reg.getHashRegistro() : null
-        );
     }
 
-    private void persistirDesmatamento(RegistroAprovadoSilver apr) {
-        Map<String, Object> attrs = apr.atributosTransformados();
-        RegistroBruto reg = apr.registroBruto();
-
-        Long fonteId = reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 4L;
-        String identificadorOrigem = extrairString(attrs, "identificador_origem", "uuid", "fid", "id");
-        if (identificadorOrigem == null && reg != null) {
-            identificadorOrigem = "DESM-" + reg.getId();
-        }
-        Integer ano = extrairInteger(attrs, "ano");
-        BigDecimal areaHa = extrairBigDecimal(attrs, "area_ha", "area");
-        Date dataImagem = extrairData(attrs, "data_imagem");
-        String geomWkt = apr.geometriaWkt();
-        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
-
-        String sql = """
+    private String obterSqlDesmatamento() {
+        return """
             MERGE INTO %s.desmatamento t
             USING (
                 SELECT
@@ -662,39 +819,10 @@ public class PersistidorSilverService {
                     s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
             """.formatted(silverSchema);
-
-        executarMerge(sql,
-                fonteId,
-                identificadorOrigem,
-                ano,
-                areaHa,
-                dataImagem,
-                geomWkt,
-                atributosOrigem,
-                reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
-                reg != null && reg.getId() != null ? reg.getId() : 1L,
-                reg != null ? reg.getHashRegistro() : null
-        );
     }
 
-    private void persistirFocoCalor(RegistroAprovadoSilver apr) {
-        Map<String, Object> attrs = apr.atributosTransformados();
-        RegistroBruto reg = apr.registroBruto();
-
-        Long fonteId = reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 6L;
-        String identificadorOrigem = extrairString(attrs, "identificador_origem", "id", "objectid");
-        if (identificadorOrigem == null && reg != null) {
-            identificadorOrigem = "FOCO-" + reg.getId();
-        }
-        Timestamp dataHora = extrairTimestamp(attrs, "data_hora", "data");
-        BigDecimal latitude = extrairBigDecimal(attrs, "latitude", "lat");
-        BigDecimal longitude = extrairBigDecimal(attrs, "longitude", "lon");
-        BigDecimal riscoFogo = extrairBigDecimal(attrs, "risco_fogo");
-        Long municipioId = resolverIdMunicipio(attrs.get("municipio"), attrs.get("cod_municipio_ibge"));
-        String geomWkt = apr.geometriaWkt();
-        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
-
-        String sql = """
+    private String obterSqlFocoCalor() {
+        return """
             MERGE INTO %s.foco_calor t
             USING (
                 SELECT
@@ -753,83 +881,72 @@ public class PersistidorSilverService {
                     SYSTIMESTAMP, s.hash_origem
                 )
             """.formatted(silverSchema);
-
-        executarMerge(sql,
-                fonteId,
-                identificadorOrigem,
-                dataHora,
-                municipioId,
-                latitude,
-                longitude,
-                riscoFogo,
-                geomWkt,
-                atributosOrigem,
-                reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
-                reg != null && reg.getId() != null ? reg.getId() : 1L,
-                reg != null ? reg.getHashRegistro() : null
-        );
-    }
-
-    private void persistirGenerico(String entidade, RegistroAprovadoSilver apr) {
-        log.warn("Entidade Silver '{}' não possui persistidor canônico especializado, delegando para imovel_rural.", entidade);
-        persistirImovelRural(apr);
     }
 
     /**
      * Executa comandos MERGE associando os parâmetros diretamente ao PreparedStatement.
-     * Evita que o Spring JDBC chame ps.getParameterMetaData() quando há parâmetros nulos,
-     * contornando uma falha (ArrayIndexOutOfBoundsException) do parser de metadados do driver Oracle 23ai
-     * em consultas MERGE contendo funções espaciais MDSYS.SDO_GEOMETRY.
      */
     private int executarMerge(String sql, Object... params) {
         return jdbcTemplate.execute(sql, (PreparedStatement ps) -> {
-            List<java.sql.Clob> clobsToFree = new ArrayList<>();
-            try {
-                for (int i = 0; i < params.length; i++) {
-                    Object val = params[i];
-                    int paramIdx = i + 1;
-                    if (val == null) {
-                        ps.setNull(paramIdx, Types.NULL);
-                    } else if (val instanceof java.sql.Date d) {
-                        ps.setDate(paramIdx, d);
-                    } else if (val instanceof java.sql.Timestamp ts) {
-                        ps.setTimestamp(paramIdx, ts);
-                    } else if (val instanceof java.math.BigDecimal bd) {
-                        ps.setBigDecimal(paramIdx, bd);
-                    } else if (val instanceof Long l) {
-                        ps.setLong(paramIdx, l);
-                    } else if (val instanceof Integer n) {
-                        ps.setInt(paramIdx, n);
-                    } else if (val instanceof Double d) {
-                        ps.setDouble(paramIdx, d);
-                    } else if (val instanceof java.sql.Clob c) {
-                        ps.setClob(paramIdx, c);
-                    } else if (val instanceof String s) {
-                        if (s.length() > 2000) {
-                            java.sql.Clob clob = ps.getConnection().createClob();
-                            clob.setString(1, s);
-                            clobsToFree.add(clob);
-                            ps.setClob(paramIdx, clob);
-                        } else {
-                            ps.setString(paramIdx, s);
-                        }
-                    } else {
-                        ps.setString(paramIdx, val.toString());
-                    }
-                }
-                return ps.executeUpdate();
-            } finally {
-                for (java.sql.Clob c : clobsToFree) {
-                    try {
-                        c.free();
-                    } catch (Exception ignored) {}
-                }
-            }
+            vincularParametrosEExecutar(ps, params);
+            return 1;
         });
     }
 
+    /**
+     * Vincula parâmetros ao PreparedStatement e executa o comando SQL.
+     * Cuida da instanciação de CLOBs para strings longas (> 2000 caracteres)
+     * e garante a liberação explícita de cada CLOB temporário para não sobrecarregar
+     * o espaço temporário do Oracle.
+     */
+    private void vincularParametrosEExecutar(PreparedStatement ps, Object[] params) throws SQLException {
+        List<java.sql.Clob> clobsToFree = new ArrayList<>();
+        try {
+            ps.clearParameters();
+            for (int i = 0; i < params.length; i++) {
+                Object val = params[i];
+                int paramIdx = i + 1;
+                if (val == null) {
+                    ps.setNull(paramIdx, Types.NULL);
+                } else if (val instanceof Date d) {
+                    ps.setDate(paramIdx, d);
+                } else if (val instanceof Timestamp ts) {
+                    ps.setTimestamp(paramIdx, ts);
+                } else if (val instanceof BigDecimal bd) {
+                    ps.setBigDecimal(paramIdx, bd);
+                } else if (val instanceof Long l) {
+                    ps.setLong(paramIdx, l);
+                } else if (val instanceof Integer n) {
+                    ps.setInt(paramIdx, n);
+                } else if (val instanceof Double d) {
+                    ps.setDouble(paramIdx, d);
+                } else if (val instanceof java.sql.Clob c) {
+                    ps.setClob(paramIdx, c);
+                } else if (val instanceof String s) {
+                    if (s.length() > 2000) {
+                        java.sql.Clob clob = ps.getConnection().createClob();
+                        clob.setString(1, s);
+                        clobsToFree.add(clob);
+                        ps.setClob(paramIdx, clob);
+                    } else {
+                        ps.setString(paramIdx, s);
+                    }
+                } else {
+                    ps.setString(paramIdx, val.toString());
+                }
+            }
+            ps.executeUpdate();
+        } finally {
+            for (java.sql.Clob c : clobsToFree) {
+                try {
+                    c.free();
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------
-    // Resolução de Referências e Lookups
+    // Resolução de Referências e Lookups Otimizados com Cache
     // -------------------------------------------------------------------------
 
     public Long resolverIdReferencia(String tabela, Object valor) {
@@ -923,25 +1040,81 @@ public class PersistidorSilverService {
         return resolverIdReferencia("orgao", fallbackCodigo);
     }
 
-    private Long resolverIdMunicipio(Object... valores) {
+    /**
+     * Inicializa em memória todo o catálogo dimensional de municípios
+     * (código IBGE numérico, nome em caixa alta e nome normalizado sem acentos),
+     * eliminando milhares de consultas repetidas ao banco durante a persistência em lote.
+     */
+    private void carregarCacheMunicipiosSeNecessario() {
+        if (municipiosCarregados) return;
+        synchronized (municipioCache) {
+            if (municipiosCarregados) return;
+            try {
+                String sql = "SELECT id, cod_ibge, nome FROM " + silverSchema + ".municipio";
+                jdbcTemplate.query(sql, rs -> {
+                    long id = rs.getLong("id");
+                    long codIbge = rs.getLong("cod_ibge");
+                    String nome = rs.getString("nome");
+                    if (codIbge > 0) {
+                        municipioCache.put(String.valueOf(codIbge), id);
+                    }
+                    if (nome != null && !nome.isBlank()) {
+                        String upper = nome.trim().toUpperCase(Locale.ROOT);
+                        municipioCache.put(upper, id);
+                        String norm = ValidadorDominio.normalizarTexto(nome);
+                        if (!norm.isBlank()) {
+                            municipioCache.put(norm, id);
+                        }
+                    }
+                });
+                municipiosCarregados = true;
+                log.info("Cache de municípios inicializado com sucesso ({} chaves indexadas em memória).", municipioCache.size());
+            } catch (Exception e) {
+                log.debug("Pré-carregamento de municípios ignorado ou indisponível: {}", e.getMessage());
+            }
+        }
+    }
+
+    public Long resolverIdMunicipio(Object... valores) {
+        carregarCacheMunicipiosSeNecessario();
         for (Object v : valores) {
             if (v == null) continue;
             String str = v.toString().trim();
             if (str.isEmpty()) continue;
+
+            // Se for no padrão "PR-4106902" ou "SP-3550308", remove o prefixo da UF
+            String limpo = str;
+            if (limpo.matches("^[A-Za-z]{2}-\\d+$")) {
+                limpo = limpo.substring(3);
+            }
+
+            // 1. Busca rápida no cache em memória
+            Long id = municipioCache.get(limpo.toUpperCase(Locale.ROOT));
+            if (id != null) return id;
+
+            String norm = ValidadorDominio.normalizarTexto(limpo);
+            id = municipioCache.get(norm);
+            if (id != null) return id;
+
+            // 2. Fallback pontual no banco de dados
             try {
-                // Tenta buscar por cod_ibge
-                long cod = Long.parseLong(str);
+                long cod = Long.parseLong(limpo);
                 String sql = "SELECT id FROM " + silverSchema + ".municipio WHERE cod_ibge = ?";
                 List<Long> ids = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getLong("id"), cod);
-                if (!ids.isEmpty()) return ids.get(0);
+                if (!ids.isEmpty()) {
+                    municipioCache.put(String.valueOf(cod), ids.get(0));
+                    return ids.get(0);
+                }
             } catch (Exception ignored) {
-                // Tenta por nome
                 try {
                     String sql = "SELECT id FROM " + silverSchema + ".municipio WHERE UPPER(nome) = ?";
-                    List<Long> ids = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getLong("id"), str.toUpperCase(Locale.ROOT));
-                    if (!ids.isEmpty()) return ids.get(0);
+                    List<Long> ids = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getLong("id"), limpo.toUpperCase(Locale.ROOT));
+                    if (!ids.isEmpty()) {
+                        municipioCache.put(limpo.toUpperCase(Locale.ROOT), ids.get(0));
+                        return ids.get(0);
+                    }
                 } catch (Exception e) {
-                    log.debug("Erro ao consultar município {}: {}", str, e.getMessage());
+                    log.debug("Erro ao consultar município {}: {}", limpo, e.getMessage());
                 }
             }
         }

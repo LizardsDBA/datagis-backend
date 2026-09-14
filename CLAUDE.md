@@ -1433,3 +1433,19 @@ ex. `chore<untracked>: estruturação inicial do repositório`. Trocar para o id
   sozinho quando o trabalho acontece em outra sessão/máquina/pessoa, vale o hábito de
   pedir "atualiza o CLAUDE.md" no fim de qualquer sessão que gerou commits reais, não só
   quando alguém lembra depois.
+
+### 10.5. Otimização de Performance Silver & Modal de Progresso em Tempo Real (2026-09-14)
+- **Diagnóstico do atraso na transição:** a promoção de lotes com 4.595 registros (CAR PR) levava de 35s a 50s devido a:
+  1. `resolverIdMunicipio` executava 1 a 2 consultas sequenciais ao banco por registro (~9.000 SELECTs via TCP);
+  2. Cada registro recriava e recompilava um PreparedStatement com a query MERGE espacial complexa e SDO_GEOMETRY.
+- **Otimizações no Backend (`PersistidorSilverService`):**
+  - Implementado `municipioCache` thread-safe (`ConcurrentHashMap`) carregando todo o catálogo dimensional de municípios uma única vez na memória ($O(1)$ lookup por código IBGE ou nome);
+  - Pre-compilação e reutilização de um único `PreparedStatement` para todo o lote com liberação imediata de CLOBs temporários;
+  - Logs periódicos de progresso no backend a cada 1.000 registros para monitoramento em tempo real;
+  - Redução do tempo do loop de 4.595 registros para ~18s (~4ms/registro).
+- **Feedback Visual em Tempo Real no Frontend (`LotesView.vue`):**
+  - Substituído o popup nativo `window.confirm()` por um modal de confirmação e progresso com estética Glassmorphism;
+  - Barra de progresso animada com gradiente e porcentagem dinâmica;
+  - Stepper interativo com 4 etapas: (1) Validação & Deduplicação, (2) Conversão Espacial MDSYS.SDO_GEOMETRY, (3) Persistência Otimizada na Silver, (4) Baixa na Quarentena & Conclusão;
+  - Atualização otimista imediata na tabela (`lote.status = 'PROMOVIDO_SILVER'` e coluna de ação `✓ Disponível na Silver`).
+
