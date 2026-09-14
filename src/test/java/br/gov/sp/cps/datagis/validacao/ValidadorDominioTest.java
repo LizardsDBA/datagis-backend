@@ -286,6 +286,80 @@ class ValidadorDominioTest {
     }
 
     // -------------------------------------------------------------------------
+    // Tolerância a Acentos, Separadores e Sub-estados Oficiais (CAR / SICAR)
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Deve aprovar variações com acento da condicao_imovel (ex.: 'Aguardando análise' -> AGUARDANDO_ANALISE)")
+    void deveAprovarCondicaoComAcento() {
+        configurarMockCondicaoImovel();
+        ContextoValidacaoCampo ctx = contextoComTabela("condicao", "condicao_imovel");
+
+        ResultadoValidacao res1 = validador.validar("Aguardando análise", ctx);
+        assertThat(res1.isValido()).isTrue();
+        assertThat(res1.valorTransformado()).isEqualTo("AGUARDANDO_ANALISE");
+
+        ResultadoValidacao res2 = validador.validar("Em análise", ctx);
+        assertThat(res2.isValido()).isTrue();
+        assertThat(res2.valorTransformado()).isEqualTo("EM_ANALISE");
+
+        ResultadoValidacao res3 = validador.validar("Cancelado por decisão administrativa", ctx);
+        assertThat(res3.isValido()).isTrue();
+        assertThat(res3.valorTransformado()).isEqualTo("CANCELADO_ADM");
+    }
+
+    @Test
+    @DisplayName("Deve aprovar descrições oficiais do SICAR sob a Lei 12.651/2012 mapeando para códigos canônicos")
+    void deveAprovarDescricoesOficiaisSicar() {
+        configurarMockCondicaoImovel();
+        ContextoValidacaoCampo ctx = contextoComTabela("condicao", "condicao_imovel");
+
+        // 1. Conformidade sem pendências
+        ResultadoValidacao r1 = validador.validar("Analisado, em conformidade com a Lei nº 12.651/2012", ctx);
+        assertThat(r1.isValido()).isTrue();
+        assertThat(r1.valorTransformado()).isEqualTo("ANALISADO_SEM_PENDENCIAS");
+
+        // 2. Conformidade com ativos ambientais
+        ResultadoValidacao r2 = validador.validar("Analisado, em conformidade com a Lei nº 12.651/2012, com ativos ambientais", ctx);
+        assertThat(r2.isValido()).isTrue();
+        assertThat(r2.valorTransformado()).isEqualTo("ANALISADO_SEM_PENDENCIAS");
+
+        // 3. Regularização ambiental (com pendências)
+        ResultadoValidacao r3 = validador.validar("Analisado, aguardando regularização ambiental (Lei nº 12.651/2012)", ctx);
+        assertThat(r3.isValido()).isTrue();
+        assertThat(r3.valorTransformado()).isEqualTo("ANALISADO_COM_PENDENCIAS");
+
+        // 4. Aguardando atendimento a notificação
+        ResultadoValidacao r4 = validador.validar("Analisado, aguardando atendimento a notificação", ctx);
+        assertThat(r4.isValido()).isTrue();
+        assertThat(r4.valorTransformado()).isEqualTo("ANALISADO_COM_PENDENCIAS");
+
+        // 5. Aguardando análise após revisão ou atendimento de notificação
+        ResultadoValidacao r5 = validador.validar("Aguardando análise, após revisão ou atendimento da notificação", ctx);
+        assertThat(r5.isValido()).isTrue();
+        assertThat(r5.valorTransformado()).isEqualTo("AGUARDANDO_ANALISE");
+    }
+
+    @Test
+    @DisplayName("Deve resolver tipo_imovel com acentos (ex.: 'Imóvel Rural' -> 'IRU')")
+    void deveResolverTipoImovelComAcento() {
+        configurarMockTipoImovel();
+        ContextoValidacaoCampo ctx = contextoComTabela("tipo_imovel", "tipo_imovel");
+
+        ResultadoValidacao r1 = validador.validar("Imóvel Rural", ctx);
+        assertThat(r1.isValido()).isTrue();
+        assertThat(r1.valorTransformado()).isEqualTo("IRU");
+
+        ResultadoValidacao r2 = validador.validar("Assentamento de Reforma Agrária", ctx);
+        assertThat(r2.isValido()).isTrue();
+        assertThat(r2.valorTransformado()).isEqualTo("AST");
+
+        ResultadoValidacao r3 = validador.validar("Território de Povos e Comunidades Tradicionais", ctx);
+        assertThat(r3.isValido()).isTrue();
+        assertThat(r3.valorTransformado()).isEqualTo("PCT");
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
@@ -296,6 +370,27 @@ class ValidadorDominioTest {
                         Map.of("CODIGO", "PE", "DESCRICAO", "Pendente"),
                         Map.of("CODIGO", "SU", "DESCRICAO", "Suspenso"),
                         Map.of("CODIGO", "CA", "DESCRICAO", "Cancelado")
+                ));
+    }
+
+    private void configurarMockCondicaoImovel() {
+        when(jdbcTemplate.queryForList("SELECT codigo, descricao FROM SILVER.condicao_imovel WHERE ativo = 1"))
+                .thenReturn(List.of(
+                        Map.of("CODIGO", "AGUARDANDO_ANALISE", "DESCRICAO", "Aguardando analise"),
+                        Map.of("CODIGO", "EM_ANALISE", "DESCRICAO", "Em analise"),
+                        Map.of("CODIGO", "ANALISADO_SEM_PENDENCIAS", "DESCRICAO", "Analisado sem pendencias"),
+                        Map.of("CODIGO", "ANALISADO_COM_PENDENCIAS", "DESCRICAO", "Analisado com pendencias"),
+                        Map.of("CODIGO", "CANCELADO_ADM", "DESCRICAO", "Cancelado por decisao administrativa"),
+                        Map.of("CODIGO", "CANCELADO_JUDICIAL", "DESCRICAO", "Cancelado por decisao judicial")
+                ));
+    }
+
+    private void configurarMockTipoImovel() {
+        when(jdbcTemplate.queryForList("SELECT codigo, descricao FROM SILVER.tipo_imovel WHERE ativo = 1"))
+                .thenReturn(List.of(
+                        Map.of("CODIGO", "IRU", "DESCRICAO", "Imovel Rural"),
+                        Map.of("CODIGO", "AST", "DESCRICAO", "Assentamento de Reforma Agraria"),
+                        Map.of("CODIGO", "PCT", "DESCRICAO", "Territorio de Povos e Comunidades Tradicionais")
                 ));
     }
 

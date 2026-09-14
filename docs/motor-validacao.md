@@ -125,7 +125,7 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 
 **Testes:** `ValidadorCpfCnpjTest` — 18 cenários.
 
-### 4.3. `ValidadorDominio` — [FEITO, 2026-09-13, Fase 2.3]
+### 4.3. `ValidadorDominio` — [FEITO, 2026-09-13, Fase 2.3 | EVOLUÍDO 2026-09-14]
 
 **Ativa quando** `tabelaReferencia` está configurada em `mapeamento_coluna` (não nula e não em branco).
 
@@ -135,9 +135,18 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 3. Consulta o **cache thread-safe** em memória (`ConcurrentHashMap<String, Map<String, String>>`).
 4. **Lazy loading**: na primeira ocorrência da tabela, executa `SELECT codigo, descricao FROM {silverSchema}.{tabela} WHERE ativo = 1`.
    - Se a tabela não possuir coluna `descricao`, aplica fallback para `SELECT codigo FROM {silverSchema}.{tabela} WHERE ativo = 1`.
-5. Mapeia em memória tanto códigos quanto descrições em maiúsculas apontando para o código canônico persistido na Silver.
+5. Mapeia em memória tanto códigos quanto descrições apontando para o código canônico persistido na Silver, com indexação multi-chave tolerante:
+   - **Case-insensitive**: busca direta pelo texto original em maiúsculas (`toUpperCase(Locale.ROOT)`).
+   - **Insensibilidade a Acentos e Diacríticos**: normalização NFD (`\p{M}`) que casa automaticamente `"Aguardando análise"` com `'Aguardando analise'`.
+   - **Tolerância a Separadores**: equivalência fonética entre sublinhado, espaço e hífen (`_`, ` `, `-`).
+   - **Normalização Alfanumérica**: ignora pontuação, vírgulas, parênteses e caracteres como `º`.
+   - **Resolução Semântica de Sinônimos e Sub-estados Oficiais**: mapeia expressões oficiais da Lei 12.651/2012 do SICAR/CAR para códigos canônicos:
+     - `"Analisado, em conformidade com a Lei nº 12.651/2012"` $\to$ `ANALISADO_SEM_PENDENCIAS`
+     - `"Analisado, aguardando regularização ambiental..."` $\to$ `ANALISADO_COM_PENDENCIAS`
+     - `"Aguardando análise, após revisão ou atendimento..."` $\to$ `AGUARDANDO_ANALISE`
+     - `"Cancelado por decisão administrativa"` $\to$ `CANCELADO_ADM`
 6. Se o valor recebido não existir no domínio ativo → erro `VALOR_FORA_DO_DOMINIO` com detalhes completos do campo, valor e tabela.
-7. Se existir → `sucesso(codigoCanonico)` (normaliza variações case-insensitive ou descrições para o código canônico).
+7. Se existir → `sucesso(codigoCanonico)` (normaliza para o código canônico).
 
 **Preparação para Ação do Analista / Revalidação:**
 - Métodos públicos de gestão de cache:
@@ -254,6 +263,23 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 
 **Testes:** `OrquestradorValidacaoTest` — 5 cenários.
 
+### 4.10. `TransicaoBronzeSilverService` e `PersistidorSilverService` — [FEITO, 2026-09-13 | EVOLUÍDO 2026-09-14]
+
+Coordena a passagem segura dos dados aprovados para a Silver e a retenção de inconsistências na Quarentena.
+
+**Regra de Integridade Total (*All-or-Nothing*):**
+1. Ao processar um lote de ingestão da Bronze:
+   - Se **100%** dos registros forem aprovados: o lote é persistido na Silver e marcado como `PROMOVIDO_SILVER`.
+   - Se **1 único registro** for para a Quarentena: **0 registros** desse lote entram na Silver. O lote é pausado com o status `RETIDO_QUARENTENA`.
+2. **Governança e Ações do Analista:**
+   - **Liberar para Silver** (`POST /api/quarentena/lotes/{id}/liberar`): reprocessa o lote, persiste os registros válidos na Silver (`PersistidorSilverService`), atualiza os registros de quarentena do lote para `CORRIGIDO_REPROCESSADO` (`status_analise_id = 3`) e define o lote como `PROMOVIDO_SILVER`.
+   - **Descartar Lote** (`POST /api/quarentena/lotes/{id}/descartar`): define os registros de quarentena como `DESCARTADO` (`status_analise_id = 4`), registra a justificativa em `motivo_rejeicao`, preenche `analista_responsavel_id` e marca o lote como `DESCARTADO` (nenhum dado vai para a Silver).
+
+**Persistência Silver com Oracle Spatial e LOBs Nativos:**
+- Em `PersistidorSilverService`, o comando SQL `MERGE INTO` de cada uma das 7 entidades canônicas (`imovel_rural`, `area_protegida`, `auto_infracao`, `embargo_ambiental`, `desmatamento`, `foco_calor`, `municipio`) utiliza `SDO_GEOMETRY(s.wkt, 4674)`.
+- Para evitar o erro `ORA-01461: The value at bind position exceeded the maximum VARCHAR2 length` com polígonos extensos (ex.: CAR com 20.000 a 100.000+ caracteres), strings maiores que 2.000 caracteres são convertidas explicitamente em `java.sql.Clob` de sessão via `ps.getConnection().createClob()` e liberadas no bloco `finally` com `clob.free()`.
+- O bind direto via `PreparedStatementCallback` contorna uma falha do parser client-side do driver Oracle JDBC 23ai (`ArrayIndexOutOfBoundsException` em `OracleParameterMetaDataParser`).
+
 ---
 
 ## 5. Tipos de erro registrados na Quarentena
@@ -282,15 +308,16 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 |---|---|---|
 | 2.1 | `SanitizadorEntrada` — falsos nulos e obrigatoriedade | ✅ FEITO |
 | 2.2 | `ValidadorCpfCnpj` — CPF/CNPJ com Módulo 11 | ✅ FEITO |
-| 2.3 | `ValidadorDominio` — lookup em cache de `tabela_referencia` da Silver + invalidação analista | ✅ FEITO |
+| 2.3 | `ValidadorDominio` — lookup em cache de `tabela_referencia` da Silver + normalização fonética + sinônimos | ✅ FEITO |
 | 2.4 | `ValidadorIntegridadeCruzada` — integridade relacional em `referencia_entidade_silver` | ✅ FEITO |
 | 2.5 | `ValidadorFaixaMinima` — valor numérico ≥ `valor_minimo` | ✅ FEITO |
 | 2.6 | `ValidadorGeometria` — tipo primitivo + topologia + recorte PR | ✅ FEITO |
 | 2.7 | `ValidadorRegressao` — campo preenchido no snapshot anterior, veio null agora | ✅ FEITO |
 | 2.8 | `DeduplicadorRegistros` — deduplicação de chaves naturais e seleção do mais novo para Silver | ✅ FEITO |
 | 3.1 | `OrquestradorValidacao` — encadeia todos os validadores por campo e lote (Bronze → Silver/Quarentena) | ✅ FEITO |
-| 3.2 | `QuarentenaController` & `QuarentenaService` — APIs REST de auditoria e resolução de inconsistências | ✅ FEITO |
-| 3.3 | Frontend: Tela de Quarentena & Qualidade de Dados (`/quarentena`) | ✅ FEITO |
+| 3.2 | `TransicaoBronzeSilverService` & `PersistidorSilverService` — All-or-Nothing, liberação/descarte e persistência Silver | ✅ FEITO |
+| 3.3 | `QuarentenaController` & `QuarentenaService` — APIs REST de auditoria, liberação de lote e resolução de inconsistências | ✅ FEITO |
+| 3.4 | Frontend: Telas de Quarentena (`/quarentena`) e Gestão de Lotes & Pipeline (`/lotes`) | ✅ FEITO |
 
 
 

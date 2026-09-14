@@ -106,7 +106,32 @@ public class OrquestradorValidacao {
             String geometriaWktFinal = reg.getGeometriaWkt();
             boolean falhou = false;
 
-            for (MapeamentoColuna mapCol : mapeamentos) {
+            if (mapeamentos.isEmpty()) {
+                // Fallback inteligente: quando mapeamento_coluna está vazia ou sem regras para esta fonte,
+                // inspeciona diretamente as chaves do payload JSON para preservar dados e permitir fluxo.
+                if (payloadNode != null) {
+                    try {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> map = objectMapper.convertValue(payloadNode, Map.class);
+                        if (map != null) {
+                            for (Map.Entry<String, Object> entry : map.entrySet()) {
+                                String k = entry.getKey();
+                                Object v = entry.getValue();
+                                if (k != null && ("geometry".equalsIgnoreCase(k) || "geom".equalsIgnoreCase(k) || "wkt".equalsIgnoreCase(k))) {
+                                    if (geometriaWktFinal == null && v != null) {
+                                        geometriaWktFinal = v.toString();
+                                    }
+                                } else if (k != null) {
+                                    atributosTransformados.put(k, v);
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.debug("Fallback de mapeamento vazio falhou ao ler payload: {}", e.getMessage());
+                    }
+                }
+            } else {
+                for (MapeamentoColuna mapCol : mapeamentos) {
                 String nomeColunaOrigem = mapCol.getColunaOrigem();
                 String atributoDestino = mapCol.getAtributoDestino();
                 Object valorBruto = extrairValor(payloadNode, reg, mapCol);
@@ -168,6 +193,7 @@ public class OrquestradorValidacao {
                     atributosTransformados.put(atributoDestino, valorCorrente);
                 }
             }
+        }
 
             if (!falhou) {
                 aprovados.add(new RegistroAprovadoSilver(reg, atributosTransformados, geometriaWktFinal));

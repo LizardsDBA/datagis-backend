@@ -21,6 +21,14 @@ public record ResultadoOrquestracao(
         return rejeitados != null && !rejeitados.isEmpty();
     }
 
+    public boolean temErros() {
+        return temInconsistencias();
+    }
+
+    public List<DeduplicadorRegistros.DuplicataDescartada<RegistroBruto>> descartadosDedup() {
+        return duplicatasDescartadas;
+    }
+
     public boolean temDuplicatas() {
         return duplicatasDescartadas != null && !duplicatasDescartadas.isEmpty();
     }

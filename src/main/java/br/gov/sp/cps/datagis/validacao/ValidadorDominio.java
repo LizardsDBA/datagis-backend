@@ -1,5 +1,6 @@
 package br.gov.sp.cps.datagis.validacao;
 
+import java.text.Normalizer;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -20,9 +21,11 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>Consultar em cache thread-safe se o valor recebido no payload existe na
  *       tabela de referência configurada em {@code controle.mapeamento_coluna.tabela_referencia}
- *       (ex.: {@code silver.situacao_imovel}, {@code silver.bioma}, {@code silver.orgao});</li>
+ *       (ex.: {@code silver.situacao_imovel}, {@code silver.condicao_imovel}, {@code silver.bioma}, {@code silver.orgao});</li>
  *   <li>Consultar apenas registros ativos ({@code WHERE ativo = 1});</li>
- *   <li>Permitir correspondência de domínio tanto por código quanto por descrição (case-insensitive);</li>
+ *   <li>Permitir correspondência de domínio tanto por código quanto por descrição de forma resiliente
+ *       (case-insensitive, acento-insensível e tolerante a pontuação e separadores como espaço ou underline);</li>
+ *   <li>Resolver variações semânticas e sub-estados oficiais conhecidos (ex.: variações da Lei 12.651/2012 do SICAR/CAR);</li>
  *   <li>Normalizar e retornar o código canônico para persistência íntegra na Silver;</li>
  *   <li>Gerar o erro {@code VALOR_FORA_DO_DOMINIO} quando não houver correspondência;</li>
  *   <li>Disponibilizar método para invalidação/recarregamento do cache (quando o analista aprovar novo valor).</li>
@@ -43,7 +46,7 @@ public class ValidadorDominio implements ValidadorCampo {
     /**
      * Cache thread-safe por tabela:
      * Chave externa: nome da tabela em minúsculas (ex: "situacao_imovel")
-     * Mapa interno: termo em maiúsculas (código ou descrição) -> código canônico cadastrado no banco.
+     * Mapa interno: termos normalizados (código, descrição, sinônimos) -> código canônico cadastrado no banco.
      */
     private final ConcurrentHashMap<String, Map<String, String>> cache = new ConcurrentHashMap<>();
 
@@ -89,8 +92,7 @@ public class ValidadorDominio implements ValidadorCampo {
                 t -> carregarDominio(nomeTabela)
         );
 
-        String chaveBusca = valorStr.toUpperCase(Locale.ROOT);
-        String codigoCanonico = dominio.get(chaveBusca);
+        String codigoCanonico = resolverCodigoCanonico(valorStr, nomeTabela, dominio);
 
         if (codigoCanonico == null) {
             String nomeCampo = (contexto != null && contexto.colunaOrigem() != null)
@@ -108,11 +110,126 @@ public class ValidadorDominio implements ValidadorCampo {
     }
 
     /**
+     * Resolve o código canônico a partir do valor recebido, aplicando buscas diretas,
+     * normalizações fonéticas (sem acentos), separadores alternativos e resolução semântica.
+     */
+    public String resolverCodigoCanonico(String valorStr, String nomeTabela, Map<String, String> dominio) {
+        if (valorStr == null || valorStr.isBlank()) {
+            return null;
+        }
+
+        // 1. Busca direta (case-insensitive)
+        String upper = valorStr.toUpperCase(Locale.ROOT);
+        String cod = dominio.get(upper);
+        if (cod != null) return cod;
+
+        // 2. Busca sem acentos
+        String norm = normalizarTexto(valorStr);
+        cod = dominio.get(norm);
+        if (cod != null) return cod;
+
+        // 3. Substituição de separadores (_ <-> espaço <-> hífen)
+        if (norm.contains("_")) {
+            cod = dominio.get(norm.replace('_', ' '));
+            if (cod != null) return cod;
+        }
+        if (norm.contains(" ")) {
+            cod = dominio.get(norm.replace(' ', '_'));
+            if (cod != null) return cod;
+        }
+        if (norm.contains("-")) {
+            cod = dominio.get(norm.replace('-', ' '));
+            if (cod != null) return cod;
+        }
+
+        // 4. Apenas alfanuméricos (elimina vírgulas, parênteses, pontos, graus, etc.)
+        String alnum = normalizarApenasAlfanumerico(valorStr);
+        cod = dominio.get(alnum);
+        if (cod != null) return cod;
+
+        // 5. Resolução Semântica de Sinônimos e Sub-estados de órgãos oficiais
+        return resolverSinonimosConhecidos(norm, nomeTabela);
+    }
+
+    /**
+     * Resolução de sinônimos e sub-estados conhecidos de órgãos públicos oficiais (ex: SICAR, MMA, IBAMA).
+     */
+    public String resolverSinonimosConhecidos(String norm, String nomeTabela) {
+        return resolverSinonimosConhecidosEstatico(norm, nomeTabela);
+    }
+
+    public static String resolverSinonimosConhecidosEstatico(String valor, String nomeTabela) {
+        if (valor == null || valor.isBlank() || nomeTabela == null) {
+            return null;
+        }
+        String norm = normalizarTexto(valor);
+        String tab = extrairNomeTabelaEstatico(nomeTabela).toLowerCase(Locale.ROOT);
+
+        if ("condicao_imovel".equals(tab)) {
+            // Variações do SICAR (Lei 12.651/2012):
+            if (norm.startsWith("AGUARDANDO ANALISE") || norm.startsWith("AGUARDANDO REVISAO") || norm.startsWith("AGUARDANDO RETIFICACAO")) {
+                return "AGUARDANDO_ANALISE";
+            }
+            if (norm.startsWith("EM ANALISE") || norm.startsWith("ANALISE INICIADA")) {
+                return "EM_ANALISE";
+            }
+            if (norm.contains("CONFORMIDADE") || norm.contains("SEM PENDENCIA")) {
+                return "ANALISADO_SEM_PENDENCIAS";
+            }
+            if (norm.contains("REGULARIZACAO") || norm.contains("COM PENDENCIA") || norm.contains("ATENDIMENTO A NOTIFICACAO") || norm.contains("NOTIFICACAO")) {
+                return "ANALISADO_COM_PENDENCIAS";
+            }
+            if (norm.contains("CANCELADO") && norm.contains("ADMINISTRATIV")) {
+                return "CANCELADO_ADM";
+            }
+            if (norm.contains("CANCELADO") && norm.contains("JUDICIAL")) {
+                return "CANCELADO_JUDICIAL";
+            }
+        } else if ("situacao_imovel".equals(tab)) {
+            if (norm.startsWith("ATIV") || norm.equals("AT")) {
+                return "AT";
+            }
+            if (norm.startsWith("PENDENT") || norm.equals("PE")) {
+                return "PE";
+            }
+            if (norm.startsWith("SUSPENS") || norm.equals("SU")) {
+                return "SU";
+            }
+            if (norm.startsWith("CANCELAD") || norm.equals("CA")) {
+                return "CA";
+            }
+        } else if ("tipo_imovel".equals(tab)) {
+            if (norm.contains("ASSENTAMENTO") || norm.contains("REFORMA AGRARIA") || norm.equals("AST")) {
+                return "AST";
+            }
+            if (norm.contains("TRADICIONAIS") || norm.contains("QUILOMB") || norm.contains("INDIGEN") || norm.equals("PCT")) {
+                return "PCT";
+            }
+            if (norm.contains("RURAL") || norm.equals("IRU")) {
+                return "IRU";
+            }
+        } else if ("tipo_pessoa".equals(tab)) {
+            if (norm.contains("FISIC") || norm.equals("PF")) {
+                return "PF";
+            }
+            if (norm.contains("JURIDIC") || norm.equals("PJ")) {
+                return "PJ";
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Sanitiza e extrai o nome simples da tabela de referência, removendo
      * eventuais prefixos de schema (ex.: "silver.situacao_imovel" -> "situacao_imovel")
      * e validando contra caracteres suspeitos (mitigação de SQL Injection).
      */
     public String extrairNomeTabela(String nomeTabelaConfigurada) {
+        return extrairNomeTabelaEstatico(nomeTabelaConfigurada);
+    }
+
+    public static String extrairNomeTabelaEstatico(String nomeTabelaConfigurada) {
         if (nomeTabelaConfigurada == null || nomeTabelaConfigurada.isBlank()) {
             throw new IllegalArgumentException("Nome da tabela de referência não pode ser nulo ou vazio");
         }
@@ -127,7 +244,8 @@ public class ValidadorDominio implements ValidadorCampo {
     }
 
     /**
-     * Carrega do banco de dados todos os registros ativos da tabela de referência informada.
+     * Carrega do banco de dados todos os registros ativos da tabela de referência informada,
+     * indexando variações ortográficas e normalizações para busca rápida em O(1).
      */
     private Map<String, String> carregarDominio(String nomeTabela) {
         Map<String, String> mapa = new HashMap<>();
@@ -138,13 +256,13 @@ public class ValidadorDominio implements ValidadorCampo {
                 Object codObj = obterValor(row, "codigo");
                 if (codObj != null) {
                     String codStr = codObj.toString().trim();
-                    mapa.put(codStr.toUpperCase(Locale.ROOT), codStr);
+                    registrarNoMapa(mapa, codStr, codStr);
 
                     Object descObj = obterValor(row, "descricao");
                     if (descObj != null) {
                         String descStr = descObj.toString().trim();
                         if (!descStr.isBlank()) {
-                            mapa.putIfAbsent(descStr.toUpperCase(Locale.ROOT), codStr);
+                            registrarNoMapa(mapa, descStr, codStr);
                         }
                     }
                 }
@@ -157,7 +275,7 @@ public class ValidadorDominio implements ValidadorCampo {
                 for (String cod : codigos) {
                     if (cod != null && !cod.isBlank()) {
                         String codStr = cod.trim();
-                        mapa.put(codStr.toUpperCase(Locale.ROOT), codStr);
+                        registrarNoMapa(mapa, codStr, codStr);
                     }
                 }
             } catch (DataAccessException fallbackEx) {
@@ -168,6 +286,54 @@ public class ValidadorDominio implements ValidadorCampo {
             }
         }
         return Collections.unmodifiableMap(mapa);
+    }
+
+    /**
+     * Registra no mapa a chave e suas formas normalizadas para correspondência flexível.
+     */
+    private void registrarNoMapa(Map<String, String> mapa, String chave, String codigoCanonico) {
+        if (chave == null || chave.isBlank()) return;
+
+        String upper = chave.trim().toUpperCase(Locale.ROOT);
+        mapa.putIfAbsent(upper, codigoCanonico);
+
+        String norm = normalizarTexto(chave);
+        mapa.putIfAbsent(norm, codigoCanonico);
+
+        if (norm.contains("_")) {
+            mapa.putIfAbsent(norm.replace('_', ' '), codigoCanonico);
+        }
+        if (norm.contains("-")) {
+            mapa.putIfAbsent(norm.replace('-', ' '), codigoCanonico);
+        }
+        if (norm.contains(" ")) {
+            mapa.putIfAbsent(norm.replace(' ', '_'), codigoCanonico);
+        }
+
+        String alnum = normalizarApenasAlfanumerico(chave);
+        if (!alnum.isBlank()) {
+            mapa.putIfAbsent(alnum, codigoCanonico);
+        }
+    }
+
+    /**
+     * Remove todos os acentos e diacríticos, substitui múltiplos espaços por um só e converte para maiúsculas.
+     */
+    public static String normalizarTexto(String texto) {
+        if (texto == null) {
+            return "";
+        }
+        String nfd = Normalizer.normalize(texto.trim(), Normalizer.Form.NFD);
+        String semAcento = nfd.replaceAll("\\p{M}", "");
+        return semAcento.replaceAll("\\s+", " ").toUpperCase(Locale.ROOT).trim();
+    }
+
+    /**
+     * Remove todos os caracteres não alfanuméricos de uma string normalizada.
+     */
+    public static String normalizarApenasAlfanumerico(String texto) {
+        String normalizado = normalizarTexto(texto);
+        return normalizado.replaceAll("[^A-Z0-9]", "");
     }
 
     private Object obterValor(Map<String, Object> row, String nomeColuna) {

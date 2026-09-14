@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import br.gov.sp.cps.datagis.validacao.TransicaoBronzeSilverService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +25,7 @@ public class QuarentenaService {
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final JdbcTemplate jdbcTemplate;
+    private final TransicaoBronzeSilverService transicaoService;
 
     // Mapeamento das tabelas espelho da Quarentena e suas respectivas chaves naturais
     private static final Map<String, TabelaEspelhoConfig> TABELAS_ESPELHO = new LinkedHashMap<>();
@@ -39,14 +42,38 @@ public class QuarentenaService {
 
     public record TabelaEspelhoConfig(String nomeTabela, String expressaoChave) {}
 
-    public QuarentenaService(JdbcTemplate jdbcTemplate) {
+    @Autowired
+    public QuarentenaService(JdbcTemplate jdbcTemplate, @Autowired(required = false) TransicaoBronzeSilverService transicaoService) {
         this.jdbcTemplate = jdbcTemplate;
+        this.transicaoService = transicaoService;
+    }
+
+    public QuarentenaService(JdbcTemplate jdbcTemplate) {
+        this(jdbcTemplate, null);
+    }
+
+    public boolean liberarLote(Long loteId, Long analistaId) {
+        if (transicaoService != null) {
+            return transicaoService.liberarLoteParaSilver(loteId, analistaId);
+        }
+        return false;
+    }
+
+    public boolean descartarLote(Long loteId, String motivo, Long analistaId) {
+        if (transicaoService != null) {
+            return transicaoService.descartarLote(loteId, motivo, analistaId);
+        }
+        return false;
+    }
+
+    public List<ItemQuarentenaDto> listarItens(String entidade, String status, String tipoErro, Long fonteDadoId, int offset, int limit) {
+        return listarItens(entidade, status, tipoErro, fonteDadoId, null, offset, limit);
     }
 
     /**
      * Lista os itens retidos em quarentena de acordo com filtros opcionais.
      */
-    public List<ItemQuarentenaDto> listarItens(String entidade, String status, String tipoErro, Long fonteDadoId, int offset, int limit) {
+    public List<ItemQuarentenaDto> listarItens(String entidade, String status, String tipoErro, Long fonteDadoId, Long loteIngestaoId, int offset, int limit) {
         List<String> entidadesParaConsultar = resolverEntidades(entidade);
         if (entidadesParaConsultar.isEmpty()) {
             return Collections.emptyList();
@@ -84,6 +111,10 @@ public class QuarentenaService {
             if (fonteDadoId != null) {
                 sb.append("AND q.fonte_dado_id = ? ");
                 params.add(fonteDadoId);
+            }
+            if (loteIngestaoId != null) {
+                sb.append("AND q.lote_ingestao_id = ? ");
+                params.add(loteIngestaoId);
             }
 
             subqueries.add(sb.toString());

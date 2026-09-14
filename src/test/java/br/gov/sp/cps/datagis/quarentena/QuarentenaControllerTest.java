@@ -38,10 +38,10 @@ class QuarentenaControllerTest {
                 "Dígitos inválidos", "PENDENTE", "Pendente de análise",
                 "2026-09-13 12:00:00", null, "{\"cpf\":\"111.111\"}"
         );
-        when(quarentenaService.listarItens(any(), any(), any(), any(), anyInt(), anyInt()))
+        when(quarentenaService.listarItens(any(), any(), any(), any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(item));
 
-        ResponseEntity<List<ItemQuarentenaDto>> response = controller.listar(null, null, null, null, 0, 20);
+        ResponseEntity<List<ItemQuarentenaDto>> response = controller.listar(null, null, null, null, null, 0, 20);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).hasSize(1);
@@ -115,5 +115,29 @@ class QuarentenaControllerTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
         verify(quarentenaService).marcarCorrigido(eq("imovel_rural"), eq(1L), eq(42L));
+    }
+
+    @Test
+    @DisplayName("Deve liberar lote de quarentena com sucesso")
+    void deveLiberarLote() {
+        when(quarentenaService.liberarLote(eq(100L), any())).thenReturn(true);
+
+        AcaoQuarentenaRequest req = new AcaoQuarentenaRequest(null, null, 1L);
+        ResponseEntity<Void> response = controller.liberarLote(100L, req);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        verify(quarentenaService).liberarLote(eq(100L), eq(1L));
+    }
+
+    @Test
+    @DisplayName("Deve descartar lote de quarentena com sucesso")
+    void deveDescartarLote() {
+        when(quarentenaService.descartarLote(eq(100L), any(), any())).thenReturn(true);
+
+        AcaoQuarentenaRequest req = new AcaoQuarentenaRequest("Lote inconsistente", null, 1L);
+        ResponseEntity<Void> response = controller.descartarLote(100L, req);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        verify(quarentenaService).descartarLote(eq(100L), eq("Lote inconsistente"), eq(1L));
     }
 }

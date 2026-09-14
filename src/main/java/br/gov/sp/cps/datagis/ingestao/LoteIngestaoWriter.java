@@ -12,6 +12,10 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.List;
+import br.gov.sp.cps.datagis.validacao.TransicaoBronzeSilverService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +28,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Component
 public class LoteIngestaoWriter {
+
+    private static final Logger log = LoggerFactory.getLogger(LoteIngestaoWriter.class);
 
     private static final String STATUS_CONCLUIDO = "CONCLUIDO";
     private static final String STATUS_SEM_MUDANCA = "SEM_MUDANCA";
@@ -45,16 +51,28 @@ public class LoteIngestaoWriter {
     private final RegistroBrutoRepository registroBrutoRepository;
     private final EntityManager entityManager;
     private final ProgressoExecucaoRegistry progresso;
+    private final TransicaoBronzeSilverService transicaoBronzeSilverService;
 
     public LoteIngestaoWriter(
             LoteIngestaoRepository loteIngestaoRepository,
             RegistroBrutoRepository registroBrutoRepository,
             EntityManager entityManager,
             ProgressoExecucaoRegistry progresso) {
+        this(loteIngestaoRepository, registroBrutoRepository, entityManager, progresso, null);
+    }
+
+    @Autowired
+    public LoteIngestaoWriter(
+            LoteIngestaoRepository loteIngestaoRepository,
+            RegistroBrutoRepository registroBrutoRepository,
+            EntityManager entityManager,
+            ProgressoExecucaoRegistry progresso,
+            @Autowired(required = false) TransicaoBronzeSilverService transicaoBronzeSilverService) {
         this.loteIngestaoRepository = loteIngestaoRepository;
         this.registroBrutoRepository = registroBrutoRepository;
         this.entityManager = entityManager;
         this.progresso = progresso;
+        this.transicaoBronzeSilverService = transicaoBronzeSilverService;
     }
 
     /**
@@ -153,7 +171,17 @@ public class LoteIngestaoWriter {
 
         lote.setQuantidadeRegistros(contador);
         lote.setStatus(STATUS_CONCLUIDO);
-        return loteIngestaoRepository.save(lote);
+        lote = loteIngestaoRepository.save(lote);
+
+        if (transicaoBronzeSilverService != null && lote.getId() != null) {
+            try {
+                transicaoBronzeSilverService.processarLote(lote.getId());
+                lote = loteIngestaoRepository.findById(lote.getId()).orElse(lote);
+            } catch (Exception e) {
+                log.error("Erro ao executar transição Bronze -> Silver/Quarentena para o lote {}: {}", lote.getId(), e.getMessage(), e);
+            }
+        }
+        return lote;
     }
 
     /**
@@ -265,7 +293,17 @@ public class LoteIngestaoWriter {
             lote.setStatus(STATUS_CONCLUIDO);
         }
         lote.setHashConteudo(hash);
-        return loteIngestaoRepository.save(lote);
+        lote = loteIngestaoRepository.save(lote);
+
+        if (!semMudanca && transicaoBronzeSilverService != null && lote.getId() != null) {
+            try {
+                transicaoBronzeSilverService.processarLote(lote.getId());
+                lote = loteIngestaoRepository.findById(lote.getId()).orElse(lote);
+            } catch (Exception e) {
+                log.error("Erro ao executar transição Bronze -> Silver/Quarentena para o lote {}: {}", lote.getId(), e.getMessage(), e);
+            }
+        }
+        return lote;
     }
 
     private static MessageDigest criarDigestSha256() {

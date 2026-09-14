@@ -26,11 +26,12 @@ public class QuarentenaController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String tipoErro,
             @RequestParam(required = false) Long fonteDadoId,
+            @RequestParam(required = false) Long loteIngestaoId,
             @RequestParam(defaultValue = "0") int pagina,
             @RequestParam(defaultValue = "20") int tamanho) {
 
         int offset = Math.max(0, pagina) * Math.max(1, tamanho);
-        List<ItemQuarentenaDto> itens = quarentenaService.listarItens(entidade, status, tipoErro, fonteDadoId, offset, tamanho);
+        List<ItemQuarentenaDto> itens = quarentenaService.listarItens(entidade, status, tipoErro, fonteDadoId, loteIngestaoId, offset, tamanho);
         return ResponseEntity.ok(itens);
     }
 
@@ -86,6 +87,25 @@ public class QuarentenaController {
             @RequestBody(required = false) AcaoQuarentenaRequest request) {
         Long analistaId = request != null ? request.analistaId() : null;
         boolean sucesso = quarentenaService.marcarCorrigido(entidade, id, analistaId);
+        return sucesso ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+    }
+
+    @PostMapping("/lotes/{loteId}/liberar")
+    public ResponseEntity<Void> liberarLote(
+            @PathVariable Long loteId,
+            @RequestBody(required = false) AcaoQuarentenaRequest request) {
+        Long analistaId = request != null ? request.analistaId() : null;
+        boolean sucesso = quarentenaService.liberarLote(loteId, analistaId);
+        return sucesso ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+    }
+
+    @PostMapping("/lotes/{loteId}/descartar")
+    public ResponseEntity<Void> descartarLote(
+            @PathVariable Long loteId,
+            @RequestBody(required = false) AcaoQuarentenaRequest request) {
+        Long analistaId = request != null ? request.analistaId() : null;
+        String motivo = request != null ? request.motivo() : null;
+        boolean sucesso = quarentenaService.descartarLote(loteId, motivo, analistaId);
         return sucesso ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 }
