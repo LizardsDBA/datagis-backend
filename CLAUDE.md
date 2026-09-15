@@ -192,18 +192,29 @@ de-para vira dado:
 
 ```sql
 CREATE TABLE controle.mapeamento_coluna (
-    id                 NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    fonte_dado_id      NUMBER NOT NULL REFERENCES controle.fonte_dado(id),
-    coluna_origem      VARCHAR2(100) NOT NULL,    -- ex: 'WKT_GEOM_AREA_EMBARGADA'
-    atributo_canonico  VARCHAR2(100) NOT NULL,    -- ex: 'geometria'
-    tipo_dado          VARCHAR2(30),              -- ex: 'geometry_wkt', 'date_ddmmyyyy_hhmmss', 'cpf_cnpj'
-    obrigatorio        NUMBER(1) DEFAULT 0
+    id                         NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    fonte_dado_id              NUMBER NOT NULL REFERENCES controle.fonte_dado(id),
+    coluna_origem              VARCHAR2(200) NOT NULL,    -- chave no payload do Bronze (ex: 'num_tad')
+    atributo_destino           VARCHAR2(100) NOT NULL,    -- coluna canonica da Silver (ex: 'numero_termo')
+    destino_tipo               VARCHAR2(20)  NOT NULL,    -- COLUNA | JSON | GEOMETRIA
+    tipo_dado                  VARCHAR2(30),              -- texto, numero, data_iso, epoch_millis, cpf_cnpj...
+    obrigatorio                NUMBER(1) DEFAULT 0 NOT NULL,
+    -- Regras de validacao (V029):
+    valor_minimo               NUMBER,                    -- limite inferior numerico (sem teto maximo)
+    tabela_referencia          VARCHAR2(60),              -- validacao de dominio/lookup (ex: 'situacao_imovel')
+    referencia_entidade_silver VARCHAR2(60),              -- integridade relacional cruzada (ex: 'municipio')
+    validar_cpf_cnpj           NUMBER(1) DEFAULT 0 NOT NULL, -- validacao algoritmica modulo 11
+    validar_geometria          NUMBER(1) DEFAULT 0 NOT NULL, -- validade topologica e tipo primitivo
+    validar_recorte_pr         NUMBER(1) DEFAULT 0 NOT NULL, -- coordenadas/poligono dentro do Parana
+    impedir_regressao          NUMBER(1) DEFAULT 1 NOT NULL, -- campo preenchido nao pode regredir pra nulo
+    regras_extras              JSON,                      -- regras customizadas de fontes desconhecidas
+    data_add                   TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
 );
 ```
 
 O pipeline Bronze→Silver lê essa tabela em runtime para saber como interpretar/converter
-cada coluna. Isola a variação de schema na tabela de mapeamento; a Silver continua com
-colunas fixas e tipadas.
+cada coluna e quais validações aplicar para desviar inconsistências para a Quarentena. Isola
+a variação de schema e regras na tabela de mapeamento; a Silver continua com colunas fixas e tipadas.
 
 ### 2.4. Quarentena
 ```sql
@@ -1140,9 +1151,201 @@ Branch `feat/upload-shp`. Detalhe completo, achados e itens em aberto em
   Refina a regra de dedup do §3.5 do doc de modelagem — duplicata **dentro do mesmo
   lote** (não entre lotes) precisa de regra própria (manter só `AT`).
 
-### 10.4-bis. Estado atual (2026-09-11)
-- **Branch de trabalho corrente:** `feat/upload-shp` (backend e frontend), em cima da
-  `sprint-1` já com a modelagem (`LIZARDS-2`) mesclada. Ainda sem PR aberto.
+### 9.13. Regras de validação em mapeamento_coluna — [FEITO, 2026-09-13, `V029`]
+Migration `V029__evoluir_mapeamento_coluna_regras_validacao.sql` adiciona suporte
+a regras de validação por coluna diretamente na tabela `controle.mapeamento_coluna`:
+- `valor_minimo` (NUMBER): limite numérico inferior (apenas mínimo, sem teto máximo).
+- `tabela_referencia` (VARCHAR2(60)): nome da tabela de referência na Silver para validação de domínio (ex.: `situacao_imovel`, `orgao`, `bioma`).
+- `referencia_entidade_silver` (VARCHAR2(60)): integridade relacional cruzada com Silver (ex.: `municipio`).
+- `validar_cpf_cnpj` (NUMBER(1)): flag para validação algorítmica de CPF/CNPJ (módulo 11).
+- `validar_geometria` (NUMBER(1)): flag para validação topológica (`isValid`) e tipo primitivo.
+- `validar_recorte_pr` (NUMBER(1)): flag para checagem de coordenadas dentro dos limites do Paraná.
+- `impedir_regressao` (NUMBER(1)): flag para checar se o campo existia preenchido e regrediu pra nulo.
+- `regras_extras` (JSON): campo flexível para fontes futuras desconhecidas.
+
+### 9.14. Novos tipos de erro na Quarentena — [FEITO, 2026-09-13, `V030`]
+Migration `V030__quarentena_novos_tipos_erro.sql` insere novos tipos em `quarentena.tipo_erro_quarentena`:
+- `CPF_CNPJ_INVALIDO`: dígitos verificadores ou formato de CPF/CNPJ inválido.
+- `VALOR_ABAIXO_DO_MINIMO`: valor numérico menor que o valor mínimo parametrizado.
+- `CAMPO_EM_BRANCO`: campo preenchido exclusivamente com espaços ou falso nulo (NULL, N/A, -).
+- `GEOMETRIA_TIPO_INCOMPATIVEL`: tipo primitivo de geometria incompatível com a entidade alvo.
+
+### 9.15. Sanitizador de Entrada & Falsos Nulos — [FEITO, 2026-09-13, Fase 2.1]
+Criada a base do motor de validações no pacote `br.gov.sp.cps.datagis.validacao`:
+- `ResultadoValidacao`: record imutável com resultado de sucesso (valor tratado) ou erro detalhado para a Quarentena.
+- `ContextoValidacaoCampo`: metadados e regras da coluna oriundos de `mapeamento_coluna`.
+- `ValidadorCampo`: interface para encadeamento Strategy / Chain of Responsibility.
+- `SanitizadorEntrada`: intercepta valores, limpa espaços, converte falsos nulos (`"NULL"`, `"null"`, `"N/A"`, `"n/a"`, `"-"`, `""` e espaços) para `null` real, e valida obrigatoriedade gerando erro `CAMPO_OBRIGATORIO_AUSENTE` se `obrigatorio = true`.
+- Testes: 26 cenários em `SanitizadorEntradaTest`, 100% de sucesso.
+
+### 9.16. Validador de CPF / CNPJ — [FEITO, 2026-09-13, Fase 2.2]
+Implementado `ValidadorCpfCnpj` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Remove todos os caracteres não numéricos (`replaceAll("\\D", "")`) antes de qualquer checagem.
+- Determina o tipo pelo comprimento: 11 dígitos → CPF · 14 dígitos → CNPJ · outro → erro imediato.
+- Rejeita sequências triviais de dígitos repetidos (ex.: `111.111.111-11`, `00.000.000/0000-00`) via regex `(\d)\1{10/13}`.
+- Aplica o algoritmo de Dígito Verificador (Módulo 11) oficial para CPF (dois passes) e CNPJ (pesos `PESOS_CNPJ_DIGITO1/2`).
+- Em caso de falha retorna `ResultadoValidacao.erro(CPF_CNPJ_INVALIDO, ...)` com `campoProblema`, `valorRecebido` e `motivoRejeicao`.
+- Sucesso retorna apenas os dígitos normalizados em `valorTransformado` (persistência limpa).
+- Valor `null` ou string vazia é devolvido como `sucesso(null)` — responsabilidade do `SanitizadorEntrada`.
+- `suporta()` ativa pela flag `validarCpfCnpj = true` **ou** por `tipoDado` igual a `cpf`, `cnpj` ou `cpf_cnpj` (case-insensitive).
+- Helpers estáticos públicos: `isCpfValido(String)` e `isCnpjValido(String)` para reuso externo.
+- Testes: 18 cenários em `ValidadorCpfCnpjTest` cobrindo suporta(), CPF/CNPJ válidos e inválidos, casos de borda e helpers.
+
+### 9.17. Validador de Domínio e Tabelas de Referência — [FEITO, 2026-09-13, Fase 2.3 | EVOLUÍDO 2026-09-14]
+Implementado `ValidadorDominio` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Valida se o valor informado existe como registro ativo (`ativo = 1`) na tabela de referência da Silver parametrizada em `tabela_referencia` (ex.: `condicao_imovel`, `situacao_imovel`, `bioma`, `orgao`, `tipo_imovel`).
+- Utiliza **cache thread-safe em memória** (`ConcurrentHashMap<String, Map<String, String>>`) com carregamento sob demanda (*lazy loading*) via `JdbcTemplate`.
+- Suporta mapeamento por código canônico, descrição oficial e variações ortográficas em $O(1)$:
+  - **Acento-insensível**: decomposição NFD (`\p{M}`) garante que `"Aguardando análise"` case com `'Aguardando analise'`.
+  - **Tolerância a separadores**: intercambiabilidade entre espaços, underlines e hífens (`_`, ` `, `-`).
+  - **Alfanumérico**: ignora pontuação, parênteses, vírgulas e caracteres como `º`.
+  - **Sinônimos e sub-estados oficiais**: resolução semântica automática para variações da Lei 12.651/2012 do SICAR/CAR (ex.: `"Analisado, em conformidade com a Lei nº 12.651/2012"` $\to$ `ANALISADO_SEM_PENDENCIAS`; `"Analisado, aguardando regularização ambiental..."` $\to$ `ANALISADO_COM_PENDENCIAS`; `"Cancelado por decisão administrativa"` $\to$ `CANCELADO_ADM`).
+- Replicado em `PersistidorSilverService.java` para garantir integridade e resolução exata de Foreign Keys numéricas (`condicao_imovel_id`, `situacao_imovel_id`, etc.) ao promover para a Silver.
+- Possui mitigação de SQL Injection via regex `^[a-zA-Z0-9_]+$` e higienização de prefixos de schema (ex.: `silver.situacao_imovel` -> `situacao_imovel`).
+- Fallback automático para tabelas de referência que não possuem coluna `descricao` (consulta apenas `codigo`).
+- Se o valor não constar no domínio ativo, gera o erro `VALOR_FORA_DO_DOMINIO` com detalhes do campo, valor e tabela.
+- **Preparação para ação do analista / revalidação**: expõe métodos `invalidarCache(tabela)` e `invalidarTodoCache()` para que, quando um analista aprovar ou cadastrar um novo valor de domínio, a engine revalide os registros pendentes sem reiniciar a aplicação.
+- Testes: 27 cenários em `ValidadorDominioTest` e 4 cenários em `PersistidorSilverServiceTest` cobrindo acentos, separadores, descrições do SICAR, códigos, descrições, case-insensitive, prefixo de schema, mitigação de SQLi, fallback, cache thread-safe e revalidação.
+
+### 9.18. Validador de Integridade Cruzada — [FEITO, 2026-09-13, Fase 2.4]
+Implementado `ValidadorIntegridadeCruzada` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Valida se a chave informada existe na tabela canônica da camada Silver parametrizada em `referencia_entidade_silver` (ex.: `silver.municipio`, `imovel_rural`, `area_protegida`, `auto_infracao`, `embargo_ambiental`).
+- Suporta mapeamento por convenção de chave natural (`municipio` -> `cod_ibge`, `imovel_rural` -> `cod_imovel`, etc.) e por especificação explícita de coluna (`municipio.cod_ibge` ou `tabela.coluna`).
+- Mitigação de SQL Injection via validação de identificadores com regex `^[a-zA-Z0-9_]+$`.
+- Estratégia híbrida de cache thread-safe (`ConcurrentHashMap<String, Set<String>>`):
+  - Tabelas dimensionais/estáticas (`municipio`): carga em lote sob demanda de todos os códigos (`SELECT cod_ibge FROM silver.municipio`).
+  - Tabelas volumosas: consulta pontual com cache das chaves já verificadas (`SELECT COUNT(1) ... WHERE coluna = ?`).
+- Se a referência não for encontrada na Silver, gera o erro `REFERENCIA_NAO_ENCONTRADA`.
+- Expõe `invalidarCache(entidade)` e `invalidarTodoCache()` para revalidação dinâmica.
+- Testes: 23 cenários em `ValidadorIntegridadeCruzadaTest` cobrindo entidades estáticas, consultas pontuais, formatos de referência, SQLi, cache e revalidação do analista.
+
+### 9.19. Validador de Faixa Mínima — [FEITO, 2026-09-13, Fase 2.5]
+Implementado `ValidadorFaixaMinima` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Valida se o valor informado respeita o limite numérico inferior parametrizado em `valor_minimo` (ex.: `area_ha >= 0.0`).
+- Conversão tolerante de tipos numéricos (`Number` ou `String`), suportando formatos decimais brasileiros (`15,5`) e internacionais (`15.5`), separadores de milhar (`1.250,50` e `1,250.50`) e símbolos monetários (`R$ 100,00`).
+- Se o valor textual não for conversível para número, gera erro `TIPO_DE_DADO_INVALIDO`.
+- Se o valor for menor que o piso configurado, gera erro `VALOR_ABAIXO_DO_MINIMO`.
+- Testes: 23 cenários em `ValidadorFaixaMinimaTest` cobrindo aprovações, limites exatos, conversões tolerantes, erros de tipo, rejeições abaixo do piso e casos de borda (nulos e vazios).
+
+### 9.20. Validador de Geometria e Recorte PR — [FEITO, 2026-09-13, Fase 2.6]
+Implementado `ValidadorGeometria` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Validação completa de atributos espaciais utilizando a biblioteca JTS Topology Suite (`org.locationtech.jts`).
+- Suporta entradas em formato WKT e GeoJSON (via `ObjectMapper`).
+- Validação sintática: erros de formatação geram `GEOMETRIA_MALFORMADA`.
+- Validação topológica com `IsValidOp`: auto-interseções, anéis desconexos e laços geram `GEOMETRIA_INVALIDA` com o motivo e as coordenadas exatas da quebra topológica.
+- Validação de primitivo: garante que o tipo (ex.: `Polygon`, `MultiPolygon`, `Point`) respeite a configuração de `regras_extras` ou `tipo_dado`, gerando `GEOMETRIA_TIPO_INCOMPATIVEL` se divergente.
+- Validação de recorte territorial do Paraná (`validar_recorte_pr = 1`): verifica interseção com os limites oficiais do Paraná (SRID 4674: lon `[-55.00, -47.50]`, lat `[-27.20, -22.00]`), gerando `FORA_DO_RECORTE_TERRITORIAL` se fora.
+- Geometrias nulas obrigatórias geram `GEOMETRIA_NULA`.
+- Sucesso retorna WKT padronizado gerado por `WKTWriter`.
+- Testes: 29 cenários em `ValidadorGeometriaTest` cobrindo WKT, GeoJSON, auto-interseções, primitivos incompatíveis, recorte Paraná e nulidade.
+
+### 9.21. Validador de Regressão de Valor — [FEITO, 2026-09-13, Fase 2.7]
+Implementado `ValidadorRegressao` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Atua quando `impedir_regressao = 1` em `mapeamento_coluna` (padrão `DEFAULT 1`).
+- Identifica se um campo estava preenchido no snapshot/lote anterior da mesma chave natural e veio nulo, vazio ou falso nulo no lote mais recente.
+- Caso detectada perda de dados, gera o erro `REGRESSAO_DE_VALOR` com detalhamento do campo e valor anterior para a Quarentena.
+- Aprova atualizações legítimas (valor novo preenchido) ou permanência de estado (ambos nulos).
+- Adicionado campo opcional `Object valorAnterior` ao record `ContextoValidacaoCampo` com suporte a `toBuilder = true`.
+- Testes: 22 cenários em `ValidadorRegressaoTest` cobrindo perda de dados, falsos nulos, atualizações legítimas e flags desativadas.
+
+### 9.22. Deduplicação de Registros e Seleção do Mais Novo para a Silver — [FEITO, 2026-09-13, Fase 2.8]
+Implementado `DeduplicadorRegistros` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Agrupa registros pela chave natural de negócio (ex.: `cod_imovel`, `numero_termo`, etc.).
+- Quando houver duplicatas de chave natural (seja entre diferentes lotes/snapshots ou repetidas dentro do mesmo lote), seleciona o registro mais recente/relevante como vencedor para a Silver.
+- Critério de precedência e desempate:
+  1. Regra de negócio CAR: registros com `situacao_imovel = "AT"` (Ativo) têm precedência sobre históricos cancelados (`"CA"`) ou pendentes (`"PE"`);
+  2. Lote/snapshot mais recente: maior `loteIngestaoId`;
+  3. Sequência temporal mais recente: maior `dataIngestao` ou maior `id`.
+- Retorna `ResultadoDeduplicacao<T>` estruturado contendo a lista de promovidos únicos e o detalhamento de duplicatas descartadas (`DuplicataDescartada<T>`) com motivo, chave natural e referência ao vencedor.
+- Registros sem chave natural são preservados sem descarte indevido.
+- Suporte a deduplicação genérica tipada (`deduplicarGenerico`).
+- Testes: 7 cenários em `DeduplicadorRegistrosTest` (185 testes no total do pacote de validação).
+
+### 9.23. Orquestrador de Validação e Transição Bronze → Silver / Quarentena — [FEITO, 2026-09-13, Fase 3]
+Implementado `OrquestradorValidacao` no pacote `br.gov.sp.cps.datagis.validacao`:
+- Conecta a leitura dos metadados de `controle.mapeamento_coluna`, a deduplicação temporal via `DeduplicadorRegistros`, e a execução da cadeia de `ValidadorCampo`.
+- Para cada registro vencedor, executa o `SanitizadorEntrada` e em seguida os validadores especializados suportados pelo campo.
+- Implementa estratégia fail-fast por registro: no primeiro campo com erro, interrompe a validação do registro e o classifica como `RegistroRejeitadoQuarentena` com o bloco completo de auditoria para a Quarentena.
+- Registros que passam em todos os campos são promovidos como `RegistroAprovadoSilver` contendo os atributos transformados e geometria padronizada.
+- Testes: 5 cenários em `OrquestradorValidacaoTest`.
+
+### 9.24. Módulo de Quarentena & Qualidade de Dados (Backend + Frontend) — [FEITO, 2026-09-13, Fase 3]
+- **Backend (`br.gov.sp.cps.datagis.quarentena` & `controle`):**
+  - Entidade e repositório `MapeamentoColuna` (`controle.mapeamento_coluna`) e `MapeamentoColunaController` (`/api/fontes/{id}/mapeamentos`).
+  - `QuarentenaService` e `QuarentenaController`: consultas dinâmicas às tabelas espelho `quarentena.q_*`, suporte a paginação, métricas agregadas por status/erro/entidade, e endpoints de ação do analista (`/descartar`, `/iniciar-analise`, `/reprocessar`).
+  - Testes: 6 cenários em `QuarentenaControllerTest`.
+- **Frontend (`datagis-frontend`):**
+  - Adicionada rota e item de menu em `Sidebar.vue`: **"Quarentena & Qualidade"** (`/quarentena`).
+  - Componente `QuarentenaView.vue`: cards de métricas (Total, Pendentes, Em Análise, Corrigidos, Descartados), filtros por entidade/status/erro/busca, e tabela de inconsistências com badges visuais.
+  - Componente `DetalheQuarentenaModal.vue`: drawer/modal de inspeção profunda com visualizador de payload JSON cru, campo com erro destacado e formulário de ação/correção manual do analista (RN007).
+  - Serviço `quarentenaService.js` com integração completa aos endpoints REST do backend.
+
+### 9.25. Transição Automática Bronze → Silver com Regra All-or-Nothing e Persistência Especializada — [FEITO, 2026-09-13, Fase 3]
+- **Regra de Negócio de Integridade Total (All-or-Nothing):**
+  - Se um único registro de um lote de ingestão falhar em qualquer validação e for para a Quarentena, **0 registros desse lote vão para a Silver**.
+  - O lote é retido no status `RETIDO_QUARENTENA` e todo o lote fica pausado até decisão do analista.
+  - Se 100% dos registros forem aprovados, o lote é automaticamente promovido com status `PROMOVIDO_SILVER`.
+  - Se o analista liberar o lote retido (`POST /api/quarentena/lotes/{id}/liberar`), os registros válidos são promovidos para a Silver e o lote passa a `PROMOVIDO_SILVER`.
+  - Se o analista descartar o lote (`POST /api/quarentena/lotes/{id}/descartar`), nenhum registro vai para a Silver e o lote passa a `DESCARTADO`.
+- **Persistência Especializada Silver & Quarentena:**
+  - `PersistidorSilverService`: mapeia `RegistroAprovadoSilver` para as entidades canônicas da camada Silver (`ImovelRural`, `AreaProtegida`, `EmbargoAmbiental`, `AutoInfracao`, `Desmatamento`, `FocoCalor`, `Municipio`) e converte WKT para JTS `Geometry` com SRID 4674.
+  - `PersistidorQuarentenaService`: persiste registros rejeitados nas tabelas espelho `quarentena.q_*` com rastreamento completo (`lote_ingestao_id`, `fonte_dado_id`, `registro_bruto_id`, `tipo_erro_id`, payload original, motivo e campo do erro).
+  - `TransicaoBronzeSilverService`: coordena a validação de cada lote, orquestração e a aplicação estrita do All-or-Nothing.
+  - `LoteIngestaoWriter`: integra automaticamente o disparo da transição ao final de cada gravação de lote na Bronze.
+  - `LoteIngestaoController` & `LoteDto`: endpoints `GET /api/lotes` e `GET /api/lotes/{id}` para auditoria e histórico de pipeline.
+  - Migration `V031__seed_mapeamentos_fontes_padrao.sql`: carga inicial de de-para para fontes padrão (`CAR_PR`, `IBAMA_EMBARGOS`, etc.) em `controle.mapeamento_coluna`.
+  - Testes: 6 cenários em `TransicaoBronzeSilverServiceTest` e 8 cenários em `QuarentenaControllerTest`.
+
+### 9.26. Frontend de Gestão de Lotes, Pipeline e De-Para de Mapeamento de Colunas — [FEITO, 2026-09-13, Fase 3]
+- **Módulo de Lotes & Pipeline (`LotesView.vue`):**
+  - Rota `/lotes` com item dedicado na `Sidebar.vue` (ícone de camadas de pipeline).
+  - Cards de métricas agregadas por status de lote: Total de Lotes, Promovidos para Silver, Retidos na Quarentena, Descartados e Sem Alterações.
+  - Filtro por status e busca rápida por Lote ID ou nome da fonte.
+  - Tabela com status semântico do lote e ações de governança:
+    - Para lotes em `RETIDO_QUARENTENA`: "Inspecionar Erros" (navega direto para a Quarentena com filtro pré-aplicado), "Liberar para Silver" e "Descartar" (com modal de justificativa obrigatória).
+- **Modal de Mapeamento de Colunas (`ModalMapeamentoColunas.vue`):**
+  - Permite visualizar o de-para de campos configurados para qualquer fonte de dados (`/api/fontes/{id}/mapeamentos`).
+  - Permite aos analistas cadastrar novos mapeamentos para fontes com estruturas desconhecidas, configurando destino (`COLUNA`, `JSON`, `GEOMETRIA`), tipo de dado e flags de validação (`obrigatorio`, `validarGeometria`, `validarCpfCnpj`, `validarRecortePr`, `impedirRegressao`).
+- **Integração na Tela de Cadastro de Fontes (`CadastroFontes.vue`):**
+  - Novo botão de ação em cada linha para abrir o modal de mapeamento de colunas.
+  - Linha de resultado após execução/upload atualizada para refletir a semântica de pipeline:
+    - Se `PROMOVIDO_SILVER`: feedback verde com atalho para o Pipeline.
+    - Se `RETIDO_QUARENTENA`: banner de alerta âmbar explicando que 0 registros foram para a Silver devido a inconsistências, com atalhos para inspecionar na Quarentena e gerenciar no Pipeline.
+- **Integração e Rastreabilidade na Quarentena (`QuarentenaView.vue`):**
+  - Leitura reativa de `?loteId=` via query params com campo de filtro dedicado e banner informativo de All-or-Nothing.
+  - Badge `#Lote {id}` clicável diretamente em cada linha da tabela da Quarentena para isolar os erros daquela carga específica.
+### 9.27. Resiliência do Pipeline de Transição, Oracle Spatial e Governança de Quarentena — [FEITO, 2026-09-14]
+- **Resolução de Domínio & Fonética (CAR / SICAR / Lei 12.651/2012):**
+  - `ValidadorDominio` e `PersistidorSilverService` ganharam normalização NFD sem acento (`\p{M}`), tolerância a separadores (`_`, ` `, `-`), remoção de pontuação e dicionário estático de sinônimos/sub-estados legais do SICAR.
+  - Elimina falsos positivos onde valores válidos da base do CAR (ex.: `"Aguardando análise"`, `"Analisado, em conformidade com a Lei nº 12.651/2012"`) eram rejeitados por pequenas divergências ortográficas em relação às tabelas de referência da Silver.
+- **Correção da Auditoria de Descarte na Quarentena (ORA-00904):**
+  - Em `TransicaoBronzeSilverService.java`, o comando de atualização foi corrigido para utilizar a coluna `analista_responsavel_id` em vez de `analista_id` em todas as 7 tabelas espelho (`q_imovel_rural`, `q_area_protegida`, `q_auto_infracao`, `q_embargo_ambiental`, `q_desmatamento`, `q_foco_calor`, `q_municipio`).
+  - Ao descartar um lote no pipeline (`POST /api/quarentena/lotes/{id}/descartar`), seus itens agora transitam corretamente de `PENDENTE` (`status_analise_id = 1`) para `DESCARTADO` (`status_analise_id = 4`), anexando o motivo do analista e saindo da fila principal de quarentena.
+- **Persistência Silver com LOBs Nativos e Oracle 23ai (ORA-01461 & Driver Bug):**
+  - Em `PersistidorSilverService.java`, comandos `MERGE INTO` usam `PreparedStatementCallback` direto para evitar que o Spring JDBC invoque `ps.getParameterMetaData()` com valores nulos (o que disparava `ArrayIndexOutOfBoundsException` no client parser do driver Oracle JDBC 23ai).
+  - Substituído `setCharacterStream` por `java.sql.Clob` temporário de conexão via `ps.getConnection().createClob()` e liberação explícita via `clob.free()` no bloco `finally` para strings maiores que 2.000 caracteres.
+  - Elimina o erro `ORA-01461: The value at bind position 9 exceeded the maximum VARCHAR2 length` em geometrias poligonais extensas (WKT com 20.000 a 100.000+ caracteres do CAR).
+- **Validação End-to-End no Banco Real:**
+  - **Lote #45 (CAR PR - 4.595 registros brutos):** promovido com sucesso para a Silver via `POST /api/quarentena/lotes/45/liberar`:
+    - **4.593 registros válidos** inseridos na tabela `SILVER.imovel_rural` com geometrias espaciais (`SDO_GEOMETRY`, SRID 4674).
+    - **2 registros retidos** por auto-interseção atualizados para `CORRIGIDO_REPROCESSADO` (`status_analise_id = 3`).
+    - Lote #45 atualizado para `PROMOVIDO_SILVER`.
+  - **Descarte de Lote:** testado e validado end-to-end com atualização simultânea do lote para `DESCARTADO` e dos itens de quarentena para `status_analise_id = 4`.
+- **Frontend Vite CSS Fix:**
+  - Corrigido fechamento de bloco CSS em `QuarentenaView.vue` (`.card-metrica--descarte .metrica-valor`).
+  - Build de produção (`npm run build`) validado com sucesso em 2.10s.
+
+### 10.4-bis. Estado atual (2026-09-14)
+- **Branch de trabalho corrente:** `feat/regras-para-vallidacao` (backend) e `sprint-1` (frontend).
+- **Migrations V029, V030 e V031 aplicadas**.
+- **Fase 3 100% concluída e estabilizada em produção local (Backend + Frontend + Oracle 23ai):**
+  - Esteira automatizada de transição Bronze → Silver / Quarentena com regra All-or-Nothing;
+  - Descarte e liberação manual de lotes pelo analista operando perfeitamente com auditoria cruzada;
+  - Resolução fonética e de sinônimos em domínios de referência;
+  - Persistência espacial nativa de geometrias complexas em Oracle Spatial SRID 4674;
+  - De-para dinâmico de colunas gerenciável pelo analista;
+  - **202 testes unitários no backend aprovados** (100% de sucesso).
+  - **Build frontend Vite concluído com sucesso** (`✓ built in 2.10s`).
 
 ---
 
@@ -1230,3 +1433,19 @@ ex. `chore<untracked>: estruturação inicial do repositório`. Trocar para o id
   sozinho quando o trabalho acontece em outra sessão/máquina/pessoa, vale o hábito de
   pedir "atualiza o CLAUDE.md" no fim de qualquer sessão que gerou commits reais, não só
   quando alguém lembra depois.
+
+### 10.5. Otimização de Performance Silver & Modal de Progresso em Tempo Real (2026-09-14)
+- **Diagnóstico do atraso na transição:** a promoção de lotes com 4.595 registros (CAR PR) levava de 35s a 50s devido a:
+  1. `resolverIdMunicipio` executava 1 a 2 consultas sequenciais ao banco por registro (~9.000 SELECTs via TCP);
+  2. Cada registro recriava e recompilava um PreparedStatement com a query MERGE espacial complexa e SDO_GEOMETRY.
+- **Otimizações no Backend (`PersistidorSilverService`):**
+  - Implementado `municipioCache` thread-safe (`ConcurrentHashMap`) carregando todo o catálogo dimensional de municípios uma única vez na memória ($O(1)$ lookup por código IBGE ou nome);
+  - Pre-compilação e reutilização de um único `PreparedStatement` para todo o lote com liberação imediata de CLOBs temporários;
+  - Logs periódicos de progresso no backend a cada 1.000 registros para monitoramento em tempo real;
+  - Redução do tempo do loop de 4.595 registros para ~18s (~4ms/registro).
+- **Feedback Visual em Tempo Real no Frontend (`LotesView.vue`):**
+  - Substituído o popup nativo `window.confirm()` por um modal de confirmação e progresso com estética Glassmorphism;
+  - Barra de progresso animada com gradiente e porcentagem dinâmica;
+  - Stepper interativo com 4 etapas: (1) Validação & Deduplicação, (2) Conversão Espacial MDSYS.SDO_GEOMETRY, (3) Persistência Otimizada na Silver, (4) Baixa na Quarentena & Conclusão;
+  - Atualização otimista imediata na tabela (`lote.status = 'PROMOVIDO_SILVER'` e coluna de ação `✓ Disponível na Silver`).
+

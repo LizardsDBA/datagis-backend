@@ -39,6 +39,10 @@ public class FonteDado {
     @Column(name = "tipo_aquisicao", nullable = false, length = 20)
     private String tipoAquisicao;
 
+    /** IMOVEL_RURAL | AREA_PROTEGIDA | EMBARGO_AMBIENTAL | AUTO_INFRACAO | DESMATAMENTO | FOCO_CALOR | MUNICIPIO */
+    @Column(name = "entidade_silver", length = 40)
+    private String entidadeSilver;
+
     /** URL final, já com todo filtro que a fonte precisar resolvido (CQL_FILTER,
      * outSR, bbox etc.) — expandir um circuito ou trocar um parâmetro é editar aqui,
      * não mexer em código. */
