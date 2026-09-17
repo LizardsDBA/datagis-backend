@@ -43,7 +43,7 @@ public class ConjuntoService {
                 .fonteDadoNome(conjunto.getFonteDado().getNome())
                 .competencia(conjunto.getCompetencia())
                 .statusCamada(conjunto.getStatusCamada())
-                .coberturaTerritorial(conjunto.getCoberturaTerritorial())
+                .coberturaTerritorial(CoberturaGeoJson.de(conjunto.getCoberturaTerritorial()))
                 .build();
     }
 }
