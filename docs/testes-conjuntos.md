@@ -33,24 +33,26 @@ docker compose exec -T -e DATAGIS_ORACLE_IT=true backend \
 do container, não aplica migrations, desliga agendamentos e faz rollback de cada
 teste. IDs de sequences podem ser consumidos mesmo com rollback.
 
-Resultado no Oracle local em 2026-09-16: **4 testes, 3 aprovados e 1 falha**.
+Resultado após a correção de GeoJSON: **4 testes Oracle aprovados**.
 
-- V032 registrada com sucesso e metadados de cobertura no SRID 4674: aprovado.
-  A migration já estava aplicada; não foi reaplicada em banco vazio neste teste.
-- Cadastro HTTP com cobertura nula (payload do formulário): aprovado.
-- Gravação JPA, flush, limpeza do contexto e releitura do polígono: aprovado,
-  com coordenadas/SRID preservados e validação Oracle Spatial retornando `TRUE`.
-- `GET /conjuntos` com polígono real: **falha**, HTTP 400 com
-  `{"erro":"Operation does not support GeometryCollection arguments"}`.
-  O contrato de resposta espacial ainda não entrega GeoJSON utilizável pelo mapa.
+- V032 registrada e metadados no SRID 4674.
+- Cadastro HTTP com cobertura nula.
+- Persistência e releitura de polígono, com coordenadas/SRID preservados e
+  validação Oracle Spatial retornando `TRUE`.
+- `GET /conjuntos` com polígono real retorna HTTP 200 e GeoJSON com coordenadas
+  numéricas aninhadas, compatível com a entrada do Leaflet.
 
-O teste que falha permanece como reprodução do problema; não foi alterado para
-aceitar o erro. Nenhuma correção no código de produção foi feita nesta rodada.
-A conversão de Geometry JTS para o JSON da API precisa ser investigada/corrigida.
-O recebimento de geometria não nula por POST também não foi validado nesta rodada.
+A falha anterior (`Operation does not support GeometryCollection arguments`)
+foi corrigida: `ConjuntoResponse` agora expõe uma estrutura GeoJSON produzida por
+`CoberturaGeoJson`, evitando a serialização automática dos getters internos de JTS.
+A entidade persistida permanece com Geometry JTS e SRID 4674.
 
-Após a execução, uma consulta independente confirmou os mesmos **2 conjuntos**
-preexistentes e **0 fontes de teste** persistidas.
+`CoberturaGeoJsonTest` adiciona 11 testes: pontos, linhas, polígonos com anel interno,
+múltiplas geometrias, coleções, coordenadas Z, geometrias vazias e cobertura nula.
+O frontend preserva o campo `geometries` das coleções.
+
+A aplicação da V032 em banco vazio e o POST com geometria não nula permanecem
+fora desta validação. Não houve teste visual em navegador real.
 
 Os testes complementares da tela e do serviço HTTP estão no repositório
 `datagis-frontend` (LIZARDS-9), em `src/components/ConjuntosView.test.js` e
