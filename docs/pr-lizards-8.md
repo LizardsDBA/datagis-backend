@@ -16,17 +16,25 @@ com competência, status e cobertura territorial opcional. Atende à tarefa
   as migrations continuam sob responsabilidade do Flyway.
 - Nove testes de serviço e contrato HTTP, com instruções em `docs/testes-conjuntos.md`.
 
-## Validação local — 2026-09-16
+## Validação após correção da resposta espacial
 
-- `./mvnw -Dtest=ConjuntoServiceTest,ConjuntoControllerTest test`: 9 testes aprovados.
-- `./mvnw '-Dtest=*Test' package`: 283 testes aprovados, sem falhas ou testes pulados;
-  JAR gerado com sucesso.
-- `git diff --check`: sem erros.
-- Integração `ConjuntoOracleIT` no Oracle local: 3 testes aprovados e 1 falha.
-  V032/metadados, cadastro sem geometria e persistência/releitura espacial passaram.
-  A listagem com geometria real retornou HTTP 400:
-  `Operation does not support GeometryCollection arguments`.
-  Rollback confirmado: 2 conjuntos preexistentes preservados e 0 fontes de teste.
+- Conversão explícita de Geometry JTS para GeoJSON na resposta da API.
+- 11 novos testes de conversão, preservando anéis internos, múltiplos polígonos,
+  coleções e coordenadas Z.
+- Integração `ConjuntoOracleIT`: 4 testes aprovados. A listagem com geometria real
+  agora retorna HTTP 200 e GeoJSON; a falha HTTP 400 anterior está resolvida.
+- Suíte combinada: 294 testes unitários/contrato e 4 testes Oracle (298 no total).
+- Frontend: 17 testes aprovados e build concluído, incluindo preservação de coleções.
+
+Para reproduzir no Oracle local:
+
+```sh
+docker compose exec -T -e DATAGIS_ORACLE_IT=true backend \
+  ./mvnw '-Dtest=*Test,ConjuntoOracleIT' package
+```
+
+O aprovador deve obter todos os testes aprovados e JAR gerado; o cenário de
+listagem verifica HTTP 200, tipo Polygon e coordenadas GeoJSON do polígono real.
 
 ## Impactos e pontos de atenção
 
@@ -34,12 +42,11 @@ com competência, status e cobertura territorial opcional. Atende à tarefa
   genérico não foi executado; o Oracle local foi exercitado por `ConjuntoOracleIT`.
 - V032 já aplicada e persistência espacial foram verificadas no Oracle real.
   Aplicação em banco vazio e entrada HTTP de geometria não nula não foram testadas.
-- **Pendência antes de aprovar:** corrigir a resposta JSON de geometria e fazer
-  passar o teste de listagem espacial. Os testes unitários aprovados não cobrem essa falha.
+- A resposta de cobertura agora usa GeoJSON; a entrada POST com geometria não nula
+  ainda não foi validada. O formulário atual envia cobertura nula.
 - A rota é `/conjuntos`, sem prefixo `/api`; o frontend configura proxy específico.
 - O status é informado no cadastro e ainda não é atualizado pelo pipeline.
 - `ddl-auto=none` desliga a conferência entre entidades e esquema para toda a aplicação.
 
 Antes de publicar: revisar o código, validar as integrações pendentes e conferir
-se a base está atualizada com a sprint remota. Este arquivo é apenas um rascunho
-local de descrição; nenhuma PR foi aberta.
+se a base está atualizada com a sprint remota. Esta descrição deve ser atualizada na PR existente após o envio da correção.
