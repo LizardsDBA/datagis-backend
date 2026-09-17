@@ -80,7 +80,8 @@ class ConjuntoServiceTest {
         var captor = ArgumentCaptor.forClass(Conjunto.class);
         verify(repository).save(captor.capture());
         assertThat(captor.getValue().getCoberturaTerritorial().equalsExact(geometria)).isTrue();
-        assertThat(response.getCoberturaTerritorial().getSRID()).isEqualTo(4674);
+        assertThat(captor.getValue().getCoberturaTerritorial().getSRID()).isEqualTo(4674);
+        assertThat(response.getCoberturaTerritorial()).containsEntry("type", "Polygon");
     }
 
     @Test
