@@ -1,5 +1,7 @@
 package br.gov.sp.cps.datagis.quarentena;
 
+import java.time.LocalDate;
+import org.springframework.format.annotation.DateTimeFormat;
 import java.util.List;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -59,6 +61,16 @@ public class QuarentenaController {
             return ResponseEntity.notFound().build();
         }
         return ResponseEntity.ok(item);
+    }
+
+    @GetMapping("/diagnostico")
+    public ResponseEntity<List<DiagnosticoErroDto>> obterDiagnostico(
+            @RequestParam(required = false) String dataset,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataInicio,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataFim) {
+
+        List<DiagnosticoErroDto> diagnostico = quarentenaService.obterDiagnosticoPorErro(dataset, dataInicio, dataFim);
+        return ResponseEntity.ok(diagnostico);
     }
 
     @PostMapping("/{entidade}/{id}/descartar")
