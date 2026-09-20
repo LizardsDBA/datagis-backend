@@ -12,5 +12,6 @@ public record FonteDadoRequest(
         String formatoEsperado,
         String campoGeometriaLat,
         String campoGeometriaLon,
+        String separadorCsv,
         Boolean ativo) {
 }
