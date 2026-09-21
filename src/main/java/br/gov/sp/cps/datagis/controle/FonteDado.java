@@ -65,6 +65,14 @@ public class FonteDado {
     @Column(name = "campo_geometria_lon", length = 100)
     private String campoGeometriaLon;
 
+    /** Separador de campo do CSV — "," | ";" | "|" | "\t". Só relevante pra
+     * formatoEsperado=CSV; fontes de outro formato ignoram. Nulo em fonte antiga vira
+     * "," (vírgula) por padrão — era o único separador suportado antes dessa coluna
+     * existir, então esse default preserva o comportamento de quem já estava cadastrado. */
+    @Column(name = "separador_csv", length = 5)
+    @Builder.Default
+    private String separadorCsv = ",";
+
     /** Endereço (devolvido por ArmazenamentoArquivoBruto.salvar) do último arquivo
      * enviado por upload — só relevante pra tipoAquisicao=UPLOAD_MANUAL. */
     @Column(name = "caminho_arquivo_upload", length = 500)

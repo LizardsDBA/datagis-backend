@@ -23,19 +23,43 @@ class FonteDadoServiceTest {
         when(repository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
 
         FonteDadoRequest dados = new FonteDadoRequest(
-                "IBAMA - Embargos", "IBAMA", "UPLOAD_MANUAL", null, null, "CSV", null, null, null);
+                "IBAMA - Embargos", "IBAMA", "UPLOAD_MANUAL", null, null, "CSV", null, null, null, null);
 
         FonteDado fonte = service.cadastrar(dados);
 
         assertThat(fonte.getNome()).isEqualTo("IBAMA - Embargos");
         assertThat(fonte.getAtivo()).isTrue(); // nao informado no request, entra como true
+        assertThat(fonte.getSeparadorCsv()).isEqualTo(","); // nao informado, entra como virgula
     }
 
     @Test
     void deveRecusarTipoDeAquisicaoDesconhecido() {
         FonteDadoService service = new FonteDadoService(repository);
         FonteDadoRequest dados = new FonteDadoRequest(
-                "Teste", null, "QUALQUER_COISA", null, null, null, null, null, null);
+                "Teste", null, "QUALQUER_COISA", null, null, null, null, null, null, null);
+
+        assertThatThrownBy(() -> service.cadastrar(dados))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void deveAceitarSeparadoresCsvSuportados() {
+        FonteDadoService service = new FonteDadoService(repository);
+        when(repository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
+
+        FonteDadoRequest dados = new FonteDadoRequest(
+                "INPE Queimadas", "INPE", "UPLOAD_MANUAL", null, null, "CSV", null, null, ";", null);
+
+        FonteDado fonte = service.cadastrar(dados);
+
+        assertThat(fonte.getSeparadorCsv()).isEqualTo(";");
+    }
+
+    @Test
+    void deveRecusarSeparadorCsvDesconhecido() {
+        FonteDadoService service = new FonteDadoService(repository);
+        FonteDadoRequest dados = new FonteDadoRequest(
+                "Teste", null, "UPLOAD_MANUAL", null, null, "CSV", null, null, "@", null);
 
         assertThatThrownBy(() -> service.cadastrar(dados))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -58,7 +82,7 @@ class FonteDadoServiceTest {
         when(repository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
 
         FonteDadoRequest dados = new FonteDadoRequest(
-                "Novo nome", "Órgão", "API_REST", "https://x", "0 0 3 * * ?", "GEOJSON", null, null, false);
+                "Novo nome", "Órgão", "API_REST", "https://x", "0 0 3 * * ?", "GEOJSON", null, null, null, false);
 
         FonteDado atualizado = service.atualizar(1L, dados);
 
