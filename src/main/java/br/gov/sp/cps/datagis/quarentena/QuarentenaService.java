@@ -93,7 +93,7 @@ public class QuarentenaService {
               .append("te.codigo AS tipo_erro_codigo, te.descricao AS tipo_erro_descricao, ")
               .append("q.campo_problema, q.valor_recebido, q.motivo_rejeicao, ")
               .append("sa.codigo AS status_analise_codigo, sa.descricao AS status_analise_descricao, ")
-              .append("q.data_quarentena, q.data_resolucao, CAST(q.payload_original AS VARCHAR2(4000)) AS payload_original ")
+              .append("q.data_quarentena, q.data_resolucao, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original ")
               .append("FROM QUARENTENA.").append(config.nomeTabela()).append(" q ")
               .append("LEFT JOIN QUARENTENA.tipo_erro_quarentena te ON te.id = q.tipo_erro_id ")
               .append("LEFT JOIN QUARENTENA.status_analise_quarentena sa ON sa.id = q.status_analise_id ")
@@ -131,8 +131,64 @@ public class QuarentenaService {
         try {
             return jdbcTemplate.query(sqlUnificada, (rs, rowNum) -> mapearItemDto(rs), params.toArray());
         } catch (Exception e) {
-            log.warn("Erro ao consultar quarentena com sintaxe FETCH: {}, tentando fallback LIMIT/OFFSET", e.getMessage());
-            return fallbackConsulta(subqueries, params, offset, limit);
+            log.error("Erro ao consultar quarentena com sintaxe FETCH: {}", e.getMessage(), e);
+            throw new RuntimeException("Falha ao consultar quarentena: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Conta a quantidade total de itens retidos de acordo com os filtros aplicados.
+     */
+    public long contarItens(String entidade, String status, String tipoErro, Long fonteDadoId, Long loteIngestaoId) {
+        List<String> entidadesParaConsultar = resolverEntidades(entidade);
+        if (entidadesParaConsultar.isEmpty()) {
+            return 0;
+        }
+
+        List<String> subqueries = new ArrayList<>();
+        List<Object> params = new ArrayList<>();
+
+        for (String ent : entidadesParaConsultar) {
+            TabelaEspelhoConfig config = TABELAS_ESPELHO.get(ent);
+            if (config == null) continue;
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("SELECT COUNT(1) AS qtd FROM QUARENTENA.").append(config.nomeTabela()).append(" q ")
+              .append("LEFT JOIN QUARENTENA.tipo_erro_quarentena te ON te.id = q.tipo_erro_id ")
+              .append("LEFT JOIN QUARENTENA.status_analise_quarentena sa ON sa.id = q.status_analise_id ")
+              .append("WHERE 1=1 ");
+
+            if (status != null && !status.isBlank() && !"todos".equalsIgnoreCase(status.trim()) && !"todas".equalsIgnoreCase(status.trim())) {
+                sb.append("AND sa.codigo = ? ");
+                params.add(status.trim().toUpperCase());
+            }
+            if (tipoErro != null && !tipoErro.isBlank() && !"todos".equalsIgnoreCase(tipoErro.trim()) && !"todas".equalsIgnoreCase(tipoErro.trim())) {
+                sb.append("AND te.codigo = ? ");
+                params.add(tipoErro.trim().toUpperCase());
+            }
+            if (fonteDadoId != null) {
+                sb.append("AND q.fonte_dado_id = ? ");
+                params.add(fonteDadoId);
+            }
+            if (loteIngestaoId != null) {
+                sb.append("AND q.lote_ingestao_id = ? ");
+                params.add(loteIngestaoId);
+            }
+
+            subqueries.add(sb.toString());
+        }
+
+        if (subqueries.isEmpty()) {
+            return 0;
+        }
+
+        String sql = "SELECT COALESCE(SUM(qtd), 0) FROM (" + String.join(" UNION ALL ", subqueries) + ")";
+        try {
+            Long total = jdbcTemplate.queryForObject(sql, Long.class, params.toArray());
+            return total != null ? total : 0;
+        } catch (Exception e) {
+            log.error("Erro ao contar itens da quarentena: {}", e.getMessage());
+            return 0;
         }
     }
 
@@ -229,7 +285,7 @@ public class QuarentenaService {
                      "te.codigo AS tipo_erro_codigo, te.descricao AS tipo_erro_descricao, " +
                      "q.campo_problema, q.valor_recebido, q.motivo_rejeicao, " +
                      "sa.codigo AS status_analise_codigo, sa.descricao AS status_analise_descricao, " +
-                     "q.data_quarentena, q.data_resolucao, CAST(q.payload_original AS VARCHAR2(4000)) AS payload_original " +
+                     "q.data_quarentena, q.data_resolucao, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original " +
                      "FROM QUARENTENA." + cfg.nomeTabela() + " q " +
                      "LEFT JOIN QUARENTENA.tipo_erro_quarentena te ON te.id = q.tipo_erro_id " +
                      "LEFT JOIN QUARENTENA.status_analise_quarentena sa ON sa.id = q.status_analise_id " +
@@ -330,6 +386,18 @@ public class QuarentenaService {
                 ? rs.getTimestamp("data_resolucao").toLocalDateTime()
                 : null;
 
+        String payload = null;
+        try {
+            java.sql.Clob clob = rs.getClob("payload_original");
+            if (clob != null) {
+                payload = clob.getSubString(1, (int) Math.min(clob.length(), Integer.MAX_VALUE));
+            }
+        } catch (Exception e) {
+            try {
+                payload = rs.getString("payload_original");
+            } catch (Exception ignored) {}
+        }
+
         return new ItemQuarentenaDto(
                 rs.getLong("id"),
                 rs.getString("entidade"),
@@ -347,17 +415,7 @@ public class QuarentenaService {
                 rs.getString("status_analise_descricao"),
                 dtQuarentena != null ? dtQuarentena.format(ISO_FORMATTER) : null,
                 dtResolucao != null ? dtResolucao.format(ISO_FORMATTER) : null,
-                rs.getString("payload_original")
+                payload
         );
-    }
-
-    private List<ItemQuarentenaDto> fallbackConsulta(List<String> subqueries, List<Object> params, int offset, int limit) {
-        // Fallback para ambientes com suporte básico
-        String sql = String.join(" UNION ALL ", subqueries);
-        List<Object> cleanParams = new ArrayList<>(params.subList(0, params.size() - 2));
-        List<ItemQuarentenaDto> todos = jdbcTemplate.query(sql, (rs, rowNum) -> mapearItemDto(rs), cleanParams.toArray());
-        int start = Math.min(Math.max(0, offset), todos.size());
-        int end = Math.min(start + Math.max(1, limit), todos.size());
-        return todos.subList(start, end);
     }
 }

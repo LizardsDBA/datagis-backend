@@ -28,11 +28,16 @@ public class QuarentenaController {
             @RequestParam(required = false) Long fonteDadoId,
             @RequestParam(required = false) Long loteIngestaoId,
             @RequestParam(defaultValue = "0") int pagina,
-            @RequestParam(defaultValue = "20") int tamanho) {
+            @RequestParam(defaultValue = "50") int tamanho) {
 
         int offset = Math.max(0, pagina) * Math.max(1, tamanho);
         List<ItemQuarentenaDto> itens = quarentenaService.listarItens(entidade, status, tipoErro, fonteDadoId, loteIngestaoId, offset, tamanho);
-        return ResponseEntity.ok(itens);
+        long total = quarentenaService.contarItens(entidade, status, tipoErro, fonteDadoId, loteIngestaoId);
+
+        return ResponseEntity.ok()
+                .header("X-Total-Count", String.valueOf(total))
+                .header("Access-Control-Expose-Headers", "X-Total-Count")
+                .body(itens);
     }
 
     @GetMapping("/metricas")
