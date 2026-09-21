@@ -200,10 +200,24 @@ public class DeduplicadorRegistros {
         try {
             JsonNode root = objectMapper.readTree(r.getPayload());
             JsonNode node = root.path(campo);
-            if (node.isMissingNode() || node.isNull()) {
-                return null;
+            if (!node.isMissingNode() && !node.isNull()) {
+                return node.asString();
             }
-            return node.asString();
+            String[] aliases = switch (campo) {
+                case "numero_auto" -> new String[]{"numero_ai", "num_auto_infracao", "num_auto", "numero"};
+                case "numero_termo" -> new String[]{"num_tad", "numero_emb", "num_termo", "termo"};
+                case "codigo_origem" -> new String[]{"cnuc", "terrai_cod", "codigo_uc", "cd_uc", "id"};
+                case "identificador_origem" -> new String[]{"uuid", "objectid", "id", "fid"};
+                case "cod_ibge" -> new String[]{"codibge", "cd_mun", "codigo_ibge"};
+                default -> new String[]{};
+            };
+            for (String alias : aliases) {
+                JsonNode aliasNode = root.path(alias);
+                if (!aliasNode.isMissingNode() && !aliasNode.isNull()) {
+                    return aliasNode.asString();
+                }
+            }
+            return null;
         } catch (Exception e) {
             return null;
         }
