@@ -286,8 +286,8 @@ CREATE TABLE controle.fonte_dado (
     tipo_aquisicao      VARCHAR2(20) NOT NULL, -- UPLOAD_MANUAL | API_REST | DOWNLOAD_URL
     url_origem          VARCHAR2(2000),        -- widened na V005; já leva todo filtro
                                                 -- resolvido (CQL_FILTER, outSR, bbox...)
-    cron_expressao      VARCHAR2(100),         -- só relevante se automatizado (Quartz
-                                                -- ainda não lê este campo — ver §3.2)
+    cron_expressao      VARCHAR2(100),         -- lido pelo Quartz na subida do backend
+                                                -- (AgendadorInicializacaoRunner — §3.2, §9.28)
     formato_esperado    VARCHAR2(30),          -- CSV | GEOJSON | SHAPEFILE | JSON
     campo_geometria_lat VARCHAR2(100),         -- só CSV com coordenada (ex.: focos de calor)
     campo_geometria_lon VARCHAR2(100),
@@ -304,8 +304,9 @@ CRUD completo já existe: `POST/GET/PUT /api/fontes`, `GET /api/fontes/{id}` —
 execução" — implementado via hash do conteúdo relevante da resposta (não do envelope
 inteiro — ver a pegadinha do `timeStamp` do WFS registrada em §9.5/§5.8) comparado ao
 hash do último `lote_ingestao` da mesma fonte. Funciona igual para `API_REST` e (em
-tese) `DOWNLOAD_URL`; `cron_expressao`/agendamento automático via Quartz **ainda não foi
-ligado** — hoje toda execução é disparo manual via `POST /api/fontes/{id}/executar`.
+tese) `DOWNLOAD_URL`; desde 2026-09-21 o `cron_expressao` é lido pelo Quartz (§3.2, §9.28): fonte ativa com
+cron preenchido roda sozinha; o disparo manual via `POST /api/fontes/{id}/executar`
+continua existindo.
 
 ---
 
@@ -323,7 +324,7 @@ Consequência prática: o próprio Spring Boot assume o papel de orquestrador �
 motor externo coordenando Bronze→Silver→Gold. A tabela `pipeline_execucao` é a fonte de
 verdade do estado do pipeline (não um espelho de metadados do Airflow).
 
-### 3.2. Agendamento dinâmico de ingestão — **[DECIDIDO: Quartz Scheduler]**
+### 3.2. Agendamento dinâmico de ingestão — **[DECIDIDO: Quartz Scheduler — IMPLEMENTADO 2026-09-21]**
 Necessidade: cron configurável **por fonte de dado**, editável pelo usuário em tela,
 sobrevivendo a restart da aplicação.
 
@@ -334,13 +335,14 @@ sobrevivendo a restart da aplicação.
   dinâmico (criar/atualizar/remover em runtime via `scheduler.rescheduleJob(...)`), com
   `JobStore` persistido em banco (`quartz-jobstore-jdbc`), sobrevivendo a restarts.
   Confirmar suporte oficial do Quartz JobStore para Oracle antes de gerar o schema dele.
-- **Status real em 2026-09-09: ainda não ligado.** A dependência está no `pom.xml` e o
-  contexto Spring sobe com ela sem conflito (confirmado contra o Oracle real), mas
-  nenhum `Job`/`Trigger` foi criado, o schema `quartz` (§2.1) segue vazio (sem as
-  migrations `tables_oracle.sql`) e `fonte_dado.cron_expressao` não é lido por
-  ninguém ainda. Toda execução de ingestão hoje é **disparo manual** via
-  `POST /api/fontes/{id}/executar` (§5.8). Ligar o Quartz de verdade é o próximo passo
-  óbvio de agendamento, não feito ainda.
+- **Suporte a Oracle confirmado** (item acima): funciona com `OracleDelegate`, mas as
+  colunas booleanas do schema precisam ser `VARCHAR2(5)`, não o `VARCHAR2(1)` do
+  `tables_oracle.sql` oficial — ver pegadinha em §9.28.
+- **Status em 2026-09-21: ligado** (§9.28) — substitui o status de 2026-09-09, quando
+  nada estava criado. JobStore JDBC no schema `QUARTZ` (tabelas pela `V034`); na subida,
+  o `AgendadorInicializacaoRunner` registra/atualiza um `CronTrigger` por fonte ativa com
+  `cron_expressao`. O disparo manual (`POST /api/fontes/{id}/executar`) continua.
+  Ainda **não** atende 100% o requisito "editável em tela" — ver itens em aberto do §9.28.
 
 ### 3.3. Orquestração do pipeline — **[DECIDIDO: Spring Batch]**
 Sem Airflow, o pipeline Bronze→Silver→Gold precisa de reinício-do-meio, processamento em
@@ -1334,6 +1336,58 @@ Implementado `OrquestradorValidacao` no pacote `br.gov.sp.cps.datagis.validacao`
 - **Frontend Vite CSS Fix:**
   - Corrigido fechamento de bloco CSS em `QuarentenaView.vue` (`.card-metrica--descarte .metrica-valor`).
   - Build de produção (`npm run build`) validado com sucesso em 2.10s.
+
+### 9.28. Agendamento automático de ingestão via Quartz — **[FEITO e testado contra o Oracle real, 2026-09-21, `LIZARDS-10`]**
+Branch `feat/servico-de-ingestao`. Liga de verdade a decisão do §3.2. Resumo:
+
+- **Peças novas:** `IngestaoAgendadaJob` (Job do Quartz — recebe `fonteId` pelo
+  `JobDataMap` e delega pro `IngestaoExecucaoService`, o mesmo caminho do disparo
+  manual); `AgendadorInicializacaoRunner` (`ApplicationRunner` — na subida lê
+  `findByAtivoTrueAndCronExpressaoIsNotNull()` e cria/atualiza o JobDetail
+  `ingestao-fonte-{id}` + CronTrigger `trigger-fonte-{id}`, grupo `ingestao`);
+  `AutowiringSpringBeanJobFactory` + `QuartzConfig`.
+- **JobStore JDBC no schema `QUARTZ`:** `V034__criar_tabelas_quartz.sql`,
+  `spring.quartz.job-store-type=jdbc`, `initialize-schema=never` (o schema vem do
+  Flyway, não do Spring).
+- **`V035__preencher_cron_expressao_fontes.sql`:** cron das 11 fontes automatizáveis. A
+  fonte 12 (CAR via Shapefile, `UPLOAD_MANUAL`) fica sem cron de propósito.
+- **Pegadinha 1 — colunas booleanas do Quartz precisam ser `VARCHAR2(5)`.** O ojdbc do
+  Oracle 23ai grava boolean como `"true"`/`"false"`; o `tables_oracle.sql` oficial usa
+  `VARCHAR2(1)` → `ORA-12899: value too large for column ... IS_DURABLE (actual: 4,
+  maximum: 1)`. A `V034` já vem corrigida (8 colunas); **regerar o schema a partir do
+  script oficial traz o bug de volta.**
+- **Pegadinha 2 — Job do Quartz não recebe `@Autowired` sozinho.** O Quartz instancia o
+  Job por reflexão, fora do Spring, então o `IngestaoExecucaoService` chegava `null`.
+  Resolvido com `AutowiringSpringBeanJobFactory` (sem `@Component`), registrado via
+  `SchedulerFactoryBeanCustomizer` no `QuartzConfig`.
+- **Testes:** `AgendadorInicializacaoRunnerTest` e `AutowiringSpringBeanJobFactoryTest`
+  (unitários) + `IngestaoAgendadaOracleIT` (integração, Oracle real): cria uma fonte CSV
+  falsa, o runner registra o trigger, o Quartz dispara, e o teste confere status
+  `SUCESSO`, 1 lote, 3 registros no Bronze com geometria e 3 na Silver (a promoção pra
+  Silver é a já existente do §9.25). Limpa tudo o que criou no final.
+- **Como rodar os `*OracleIT`:** só rodam com `DATAGIS_ORACLE_IT=true` (senão aparecem
+  como *skipped* — não quebram o `mvn test` de ninguém). Rodar **na máquina**, não no
+  container do backend (ele não tem Maven), com o Oracle do compose de pé:
+```powershell
+  $env:DATAGIS_ORACLE_IT="true"
+  $env:SPRING_DATASOURCE_URL="jdbc:oracle:thin:@localhost:1521/FREEPDB1"
+  $env:SPRING_DATASOURCE_USERNAME="<APP_USER do .env>"
+  $env:SPRING_DATASOURCE_PASSWORD="<APP_USER_PASSWORD do .env>"
+  .\mvnw.cmd test -Dtest=IngestaoAgendadaOracleIT
+```
+  Cuidado ao ler o `.env`: alguns valores têm comentário na mesma linha. O
+  `IngestaoAgendadaOracleIT` usa `spring.quartz.scheduler-name=datagisTesteIT` pra não
+  colidir com o scheduler do backend que estiver rodando (o `SCHED_NAME` faz parte da
+  chave de todas as tabelas `QRTZ_*`).
+- **[EM ABERTO]**
+  - Os triggers só são sincronizados **na subida do backend**: alterar `cron_expressao`
+    pela tela (`PUT /api/fontes/{id}`) só vale depois de reiniciar.
+  - Desativar a fonte (`ativo=0`) ou apagar o cron **não remove** o trigger já gravado —
+    o runner só cria/atualiza. Como o JobStore é persistido, a fonte **continuaria
+    disparando**. Falta remover o trigger nesses casos (no runner e/ou no
+    `FonteDadoService.atualizar`).
+  - `proxima_execucao_em` ainda não é preenchida (dá pra obter de
+    `trigger.getNextFireTime()`).
 
 ### 10.4-bis. Estado atual (2026-09-14)
 - **Branch de trabalho corrente:** `feat/regras-para-vallidacao` (backend) e `sprint-1` (frontend).
