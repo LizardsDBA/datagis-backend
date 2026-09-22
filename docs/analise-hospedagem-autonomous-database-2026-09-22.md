@@ -403,6 +403,62 @@ projeto aplicadas com sucesso e o backend completo rodando contra ela (§3.1, §
 §3.3, §3.5) — os itens de validação prática da seção 7 foram todos respondidos com
 teste real, não seguem mais como pendência.
 
+### 5.4. Publicar a aplicação (`backend`+`frontend`) numa VM Compute — caminho conceitual
+
+**Ainda não implementado nem provisionado — é o desenho de como fazer, não uma VM já
+criada** (diferente da §5.3, que já é real). Registrado aqui porque a dúvida surgiu em
+2026-09-22 na mesma sessão da conexão com a `datagis`, e o caminho técnico depende
+diretamente do que já foi validado nas seções 3.1-3.5.
+
+**Topologia recomendada**: 1 VM Ampere A1 Flex (§5.1) rodando só `backend`+`frontend`
+via o mesmo `docker-compose.yml` já existente, apontando o datasource pra `datagis` em
+vez de rodar um Oracle dentro da VM — evita o container `oracle` (que sozinho já usa
+~2 GB) competir pelos 12 GB do pool com a aplicação, e reaproveita 100% do trabalho de
+conexão cloud já feito e testado (§3.3, `feat/conexao-oracle`).
+
+**Passos, em ordem:**
+
+1. **Provisionar a VM** — Ampere A1 Flex, 2 OCPU / 12 GB (o pool inteiro pós-corte de
+   2026-06-15, §5.1), imagem Ubuntu ou Oracle Linux (as duas têm build ARM64), IP
+   público (incluso no Always Free).
+2. **Rede — dois níveis de firewall, os dois precisam ser abertos**:
+   - **Security List/NSG da VCN** (console OCI): liberar as portas que forem expostas
+     (`8080`/`5173` em modo dev, ou `80`/`443` se um proxy entrar na frente depois).
+   - **Firewall do próprio SO** (`firewalld` no Oracle Linux — vem ativo por padrão;
+     `iptables`/`ufw` no Ubuntu — as imagens OCI de Ubuntu costumam vir com regras
+     `iptables` restritivas pré-configuradas). **Esquecer este segundo nível é o erro
+     mais comum** — abrir só a Security List no console e continuar sem conectar.
+3. **Instalar Docker Engine + Compose plugin** na VM (pacotes ARM64 oficiais, mesmo
+   processo de instalação em Ubuntu/Oracle Linux normal).
+4. **Clonar o repositório** na VM (`git clone`, com chave SSH ou token configurado —
+   repositório é privado).
+5. **Levar a wallet e o `.env.cloud`** pra VM **por fora do git** (`scp`), mesmo
+   princípio do §5.2 — nunca commitar, nunca reaproveitar o `.env` local.
+6. **Subir com o perfil `cloud`** — o mesmo mecanismo de `docker-compose.override.yml`
+   sobrescrevendo `SPRING_DATASOURCE_URL/USERNAME/PASSWORD` e `SPRING_PROFILES_ACTIVE`
+   já desenhado (e testado localmente) pra rodar o backend em container contra a
+   `datagis`, só que agora a VM É o host, não o notebook de alguém do time.
+
+**Duas decisões em aberto, para a equipe avaliar antes de ir adiante:**
+
+- **Modo dev vs. build de produção.** O `docker-compose.yml` atual é modo dev de
+  propósito (`./mvnw spring-boot:run` direto do código montado, servidor dev do Vite —
+  CLAUDE.md §4.6 já registra "Dockerfile multi-stage fica para quando hospedagem
+  entrar" como pendência consciente). Rodar assim numa VM funciona, mas recompila do
+  fonte e usa mais RAM que um jar empacotado + build estático servido por algo como
+  nginx. Para uma demonstração/homologação da disciplina, modo dev provavelmente já
+  resolve; virar algo "no ar" de forma mais permanente pediria o Dockerfile de
+  produção que já está mapeado como trabalho futuro.
+- **Segurança.** `SecurityConfig` libera tudo (`permitAll()`, CLAUDE.md §5.3) — num
+  `localhost` isso é inofensivo, numa VM com IP público de verdade já é outra
+  exposição. Mitigação simples sem implementar RBAC: restringir a Security List da VCN
+  só aos IPs do time/professor em vez de liberar geral para a internet.
+
+**Imagens ARM64**: `eclipse-temurin:21-jdk-jammy` e `node:22-slim` (usadas em
+`Dockerfile.dev`/`datagis-frontend/Dockerfile.dev`) já publicam manifest multi-arch
+(amd64+arm64) — não é esperado bloqueio, mas só fica confirmado com um
+`docker compose up` de teste na própria VM Ampere.
+
 ---
 
 ## 6. Custo e conta de trial (Universal Credits) — Always Free não consome o saldo
