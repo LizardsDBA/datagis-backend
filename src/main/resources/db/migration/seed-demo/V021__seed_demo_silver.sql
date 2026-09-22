@@ -7,6 +7,20 @@
 -- Geometrias sao retangulos pequenos perto de coordenadas reais do PR - servem pro
 -- Leaflet desenhar algo, nao sao os limites de verdade.
 -- ============================================================================
+--
+-- [CORRIGIDO 2026-09-22, LIZARDS-3] Autonomous Database aplica parallel query
+-- automaticamente (Auto DOP) mesmo em tabelas minusculas como estas - causou
+-- ORA-12801/ORA-12860 (deadlock) no SELECT de area_protegida_uf, que le uma tabela
+-- que acabou de receber INSERT poucas linhas acima NA MESMA transacao (o commit so
+-- acontece no fim do script). Sem necessidade nenhuma de paralelismo pra volumes de
+-- poucas linhas (seed demo, no maximo dezenas de registros) - desligado pra sessao.
+-- Nao muda nada no Oracle local (Auto DOP nao e agressivo por padrao la).
+--
+-- ATENCAO time: mesma pegadinha de checksum da V013/V020 - quem ja tinha o volume
+-- Oracle local migrado precisa `docker compose down -v` ou `flyway repair` apos puxar
+-- esta mudanca (CLAUDE.md §9.6).
+ALTER SESSION DISABLE PARALLEL QUERY;
+ALTER SESSION DISABLE PARALLEL DML;
 
 -- ---------- municipio (circuito: Curitiba, Maringa, Ponta Grossa) ----------
 INSERT INTO ${silverSchema}.municipio (cod_ibge, nome, unidade_federativa_id, bioma_predominante_id, area_km2, geometria, fonte_dado_id, lote_ingestao_id, registro_bruto_id, data_competencia, hash_origem)

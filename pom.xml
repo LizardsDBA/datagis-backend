@@ -108,6 +108,32 @@
 			<artifactId>ojdbc17</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+		<!-- Suporte a conexao mTLS com Wallet no Autonomous Database (exigencia da FATEC
+		     para a fatia de conexao na nuvem - docs/analise-hospedagem-autonomous-database-
+		     2026-09-22.md §3.3). Mantido em cima do ojdbc17 ja existente (nao trocado pelo
+		     'ojdbc11-production' do tutorial de referencia, que e um driver mais antigo);
+		     versao 21.18.0.0 porque e a mais recente publicada de osdt_cert/osdt_core no
+		     Maven Central - nao existe linha 23.x desses dois (so oraclepki foi levado pra
+		     23.x). Confirmado com a documentacao oficial da Oracle (JDBC Thin com Wallet)
+		     que esses 3 jars sao os exigidos, independente da versao do driver JDBC em si. -->
+		<dependency>
+			<groupId>com.oracle.database.security</groupId>
+			<artifactId>oraclepki</artifactId>
+			<version>21.18.0.0</version>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.oracle.database.security</groupId>
+			<artifactId>osdt_cert</artifactId>
+			<version>21.18.0.0</version>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.oracle.database.security</groupId>
+			<artifactId>osdt_core</artifactId>
+			<version>21.18.0.0</version>
+			<scope>runtime</scope>
+		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>

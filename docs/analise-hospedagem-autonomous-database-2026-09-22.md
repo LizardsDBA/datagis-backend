@@ -166,7 +166,7 @@ si mesmo, e o Flyway rodaria uma instância por schema, sem precisar de nenhum p
 `ANY`. Mais trabalho de configuração, mas evita depender de um modelo de permissão que
 o serviço gerenciado pode não expor.
 
-### 3.3. Forma de conexão muda, não só o host
+### 3.3. Forma de conexão muda, não só o host — **[DECIDIDO 2026-09-22: mTLS com Wallet]**
 
 Hoje, dev local conecta assim (CLAUDE.md §4.6, via `docker-compose.yml`):
 ```
@@ -180,11 +180,30 @@ opções:
 | **mTLS (com wallet)** | Baixar o arquivo de wallet da instância, configurar `TNS_ADMIN` apontando pra ele (ou embutir no classpath/imagem) | Maior — mais um artefato pra gerenciar e manter fora do git (credencial) |
 | **TLS (sem wallet)** | Só usuário/senha + string de conexão `tcps://...` (suportado desde JDK 8u162+) | Menor — mais parecido com o padrão atual de "tudo via variável de ambiente" do compose |
 
-**Recomendação de caminho, se a equipe for adiante:** mirar em TLS sem wallet — é o mais
-compatível com o padrão já estabelecido (`SPRING_DATASOURCE_URL/USERNAME/PASSWORD` via
-`environment:` do compose, sem arquivo de config adicional, §4.6). De qualquer forma, o
-`SPRING_DATASOURCE_URL` muda de formato (não é só trocar o host `oracle` por um
-hostname da nuvem) — é uma mudança de configuração real, não *drop-in*.
+**Decisão revista:** esta análise recomendava originalmente TLS sem wallet, por ser mais
+simples e parecido com o padrão do compose. **A equipe optou por mTLS com Wallet**,
+porque é **pré-requisito explícito da FATEC** para esta entrega — não é uma escolha
+técnica livre. Implementado em `feat/conexao-oracle` (`LIZARDS-3`):
+
+- **Dependências novas no `pom.xml`**: `oraclepki`, `osdt_cert`, `osdt_core`
+  (`com.oracle.database.security`, versão `21.18.0.0` — é a mais recente que existe
+  desses dois últimos no Maven Central; `oraclepki` sozinho já tem linha `23.x`, mas os
+  três precisam existir juntos, então fixamos na versão em comum mais nova). O driver
+  em si continua sendo o `ojdbc17` já presente — **não** trocado pelo `ojdbc11-production`
+  de tutoriais mais antigos, que seria um driver mais velho que o que o projeto já usa.
+- **Wallet**: baixada do console OCI (`datagis` → Database Connection → Download
+  Wallet) e extraída em `wallet/` na raiz do repo — **gitignored** (chave privada +
+  keystores, é credencial real, mesmo princípio do §5.2). Caminho relativo `./wallet`
+  funciona rodando o Maven a partir da raiz do projeto.
+- **Novo perfil Spring `cloud`** (`application-cloud.properties`), separado dos perfis
+  `dev`/`docker` existentes — não substitui nenhum dos dois, é só mais uma opção de
+  datasource. Senha/nome do TNS entram via variáveis de ambiente
+  (`CLOUD_DB_PASSWORD`/`CLOUD_TNS_NAME`), seguindo `.env.cloud.example` (novo, rastreado)
+  → copiado para `.env.cloud` (gitignored) com os valores reais.
+- **Atenção que o tutorial de referência não cobria**: `spring.jpa.hibernate.ddl-auto`
+  continua `none` (herdado do `application.properties` base) — **não** seguir a sugestão
+  comum de tutorial de usar `update` aqui, porque quebraria a premissa do projeto de que
+  o Flyway é a única fonte de verdade do schema (CLAUDE.md §2.1.1).
 
 ### 3.4. Coisas a monitorar, não bloqueantes agora
 
@@ -344,9 +363,9 @@ não validado** (CLAUDE.md §5.5 — foi assim com hibernate-spatial/GeoTools/Sp
 no início do projeto). O mesmo raciocínio se aplica aqui, e é pouco custo: criar a
 instância Always Free, checar a versão do banco que veio (19c ou 26ai — §3.1), tentar
 recriar — só como teste, com 1-2 schemas, não o projeto inteiro — os grants que
-`01-criar-schemas.sh` faz hoje (§3.2), e testar uma conexão Spring Boot real via TLS
-sem wallet (§3.3). Isso responde as duas perguntas que mais importam antes de qualquer
-decisão de "vamos migrar para lá" virar compromisso.
+`01-criar-schemas.sh` faz hoje (§3.2), e testar uma conexão Spring Boot real via mTLS
+com Wallet (§3.3, caminho decidido). Isso responde as duas perguntas que mais importam
+antes de qualquer decisão de "vamos migrar para lá" virar compromisso.
 
 Se os grants `ANY` **não** passarem no Always Free, não é motivo pra descartar o
 Always Free como hospedagem — só confirma que o Plano B (§3.2, Flyway por schema) precisa

@@ -45,6 +45,15 @@ build/
 #.env.*
 #!.env.example
 
+### Wallet do Autonomous Database (Oracle Cloud) ###
+# Contem chave privada (ewallet.pem), keystores (.jks) e certificados - credencial real
+# de um recurso acessivel pela internet, ao contrario do .env local (esse sim rastreado
+# de proposito - ver CLAUDE.md §4.6). NUNCA versionar. Baixado do console OCI e
+# extraido em wallet/ na raiz do projeto (docs/analise-hospedagem-autonomous-database-
+# 2026-09-22.md §5.2/§5.3).
+wallet/
+.env.cloud
+
 ### Docker / dados locais ###
 /data/
 docker-compose.override.yml
