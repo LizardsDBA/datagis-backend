@@ -12,6 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.io.WKTReader;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -260,4 +262,93 @@ public class OrquestradorValidacao {
         JsonNode n = node.get(campoChave);
         return n != null && !n.isNull() ? n.asText().trim() : null;
     }
+
+    /**
+     * Transforma um RegistroBruto em RegistroAprovadoSilver aplicando todos os mapeamentos
+     * configurados para a fonte (sanitização, mapeamento de campos e extração de geometria).
+     * Garante que geometrias malformadas ou inválidas não quebrem o Oracle Spatial.
+     */
+    public RegistroAprovadoSilver transformarRegistro(Long fonteDadoId, RegistroBruto reg) {
+        if (reg == null) return null;
+        JsonNode payloadNode = parsearPayload(reg.getPayload());
+        List<MapeamentoColuna> mapeamentos = mapeamentoRepository != null && fonteDadoId != null
+                ? mapeamentoRepository.findByFonteDadoId(fonteDadoId)
+                : Collections.emptyList();
+
+        Map<String, Object> atributosTransformados = new LinkedHashMap<>();
+        String geometriaWktFinal = reg.getGeometriaWkt();
+
+        if (mapeamentos.isEmpty()) {
+            if (payloadNode != null) {
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> map = objectMapper.convertValue(payloadNode, Map.class);
+                    if (map != null) {
+                        for (Map.Entry<String, Object> entry : map.entrySet()) {
+                            String k = entry.getKey();
+                            Object v = entry.getValue();
+                            if (k != null && ("geometry".equalsIgnoreCase(k) || "geom".equalsIgnoreCase(k) || "wkt".equalsIgnoreCase(k))) {
+                                if (geometriaWktFinal == null && v != null) {
+                                    geometriaWktFinal = v.toString();
+                                }
+                            } else if (k != null) {
+                                atributosTransformados.put(k, v);
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+        } else {
+            for (MapeamentoColuna mapCol : mapeamentos) {
+                String atributoDestino = mapCol.getAtributoDestino();
+                Object valorBruto = extrairValor(payloadNode, reg, mapCol);
+                ContextoValidacaoCampo contexto = mapCol.toContextoValidacao(null);
+                ResultadoValidacao resSanitizacao = sanitizador.validar(valorBruto, contexto);
+                Object valorFinal = resSanitizacao.valorTransformado() != null ? resSanitizacao.valorTransformado() : valorBruto;
+
+                if ("GEOMETRIA".equalsIgnoreCase(mapCol.getDestinoTipo())) {
+                    if (valorFinal != null) {
+                        geometriaWktFinal = valorFinal.toString();
+                    }
+                } else {
+                    atributosTransformados.put(atributoDestino, valorFinal);
+                }
+            }
+        }
+
+        String geomSegura = sanitizarGeometria(geometriaWktFinal);
+        return new RegistroAprovadoSilver(reg, atributosTransformados, geomSegura);
+    }
+
+    /**
+     * Valida um único registro individualmente contra a esteira de regras da fonte.
+     * Devolve o resultado indicando se passou, com o objeto pronto para Silver ou erro de quarentena.
+     */
+    public ResultadoValidacaoRegistro validarRegistroIndividual(Long fonteDadoId, RegistroBruto reg) {
+        ResultadoOrquestracao res = orquestrarLote(fonteDadoId, List.of(reg), null);
+        if (!res.aprovados().isEmpty()) {
+            return new ResultadoValidacaoRegistro(true, res.aprovados().get(0), null);
+        } else {
+            RegistroRejeitadoQuarentena rej = !res.rejeitados().isEmpty() ? res.rejeitados().get(0) : null;
+            RegistroAprovadoSilver fallback = transformarRegistro(fonteDadoId, reg);
+            return new ResultadoValidacaoRegistro(false, fallback, rej);
+        }
+    }
+
+    public record ResultadoValidacaoRegistro(
+            boolean valido,
+            RegistroAprovadoSilver aprovado,
+            RegistroRejeitadoQuarentena rejeitado
+    ) {}
+
+    private String sanitizarGeometria(String wkt) {
+        if (wkt == null || wkt.isBlank()) return null;
+        try {
+            Geometry g = new WKTReader().read(wkt.trim());
+            return (g != null && !g.isEmpty() && g.isValid()) ? wkt.trim() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
 }
+

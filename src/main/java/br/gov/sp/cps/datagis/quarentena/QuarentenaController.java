@@ -90,8 +90,7 @@ public class QuarentenaController {
             @PathVariable String entidade,
             @PathVariable Long id,
             @RequestBody(required = false) AcaoQuarentenaRequest request) {
-        Long analistaId = request != null ? request.analistaId() : null;
-        boolean sucesso = quarentenaService.marcarCorrigido(entidade, id, analistaId);
+        boolean sucesso = quarentenaService.marcarCorrigido(entidade, id, request);
         return sucesso ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 

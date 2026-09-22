@@ -108,13 +108,13 @@ class QuarentenaControllerTest {
     @Test
     @DisplayName("Deve reprocessar item corrigido")
     void deveReprocessarItem() {
-        when(quarentenaService.marcarCorrigido(eq("imovel_rural"), eq(1L), any())).thenReturn(true);
+        when(quarentenaService.marcarCorrigido(eq("imovel_rural"), eq(1L), any(AcaoQuarentenaRequest.class))).thenReturn(true);
 
         AcaoQuarentenaRequest req = new AcaoQuarentenaRequest("Corrigido", "{\"cod_imovel\":\"PR-001\"}", 42L);
         ResponseEntity<Void> response = controller.reprocessar("imovel_rural", 1L, req);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
-        verify(quarentenaService).marcarCorrigido(eq("imovel_rural"), eq(1L), eq(42L));
+        verify(quarentenaService).marcarCorrigido(eq("imovel_rural"), eq(1L), eq(req));
     }
 
     @Test

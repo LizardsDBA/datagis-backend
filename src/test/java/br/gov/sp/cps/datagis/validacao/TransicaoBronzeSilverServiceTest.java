@@ -189,4 +189,64 @@ class TransicaoBronzeSilverServiceTest {
         verify(jdbcTemplate, atLeastOnce()).update(anyString(), eq("DESCARTADO"), eq(10L), eq("Dados corrompidos"), eq(loteId));
         verify(loteIngestaoRepository).save(lote);
     }
+
+    @Test
+    @DisplayName("Liberação manual de lote deve transformar e promover registros rejeitados para a Silver")
+    void devePromoverRejeitadosQuandoLoteForLiberado() {
+        Long loteId = 5L;
+        FonteDado fonte = FonteDado.builder().id(1L).nome("CAR Teste").entidadeSilver("imovel_rural").build();
+        LoteIngestao lote = LoteIngestao.builder().id(loteId).fonteDado(fonte).status("RETIDO_QUARENTENA").build();
+
+        RegistroBruto reg1 = RegistroBruto.builder().id(501L).loteIngestaoId(loteId).fonteDadoId(1L).payload("{\"cod_imovel\":\"PR-1\"}").build();
+        RegistroBruto reg2 = RegistroBruto.builder().id(502L).loteIngestaoId(loteId).fonteDadoId(1L).payload("{\"cod_imovel\":\"PR-2\"}").build();
+        when(loteIngestaoRepository.findById(loteId)).thenReturn(Optional.of(lote));
+        when(registroBrutoRepository.findByLoteIngestaoIdOrderByIdAsc(loteId)).thenReturn(List.of(reg1, reg2));
+
+        RegistroAprovadoSilver apr1 = new RegistroAprovadoSilver(reg1, Map.of("cod_imovel", "PR-1"), null);
+        RegistroRejeitadoQuarentena rej2 = new RegistroRejeitadoQuarentena(reg2, "VALOR_FORA_DO_DOMINIO", "tipo", "X", "Invalido");
+        when(orquestradorValidacao.orquestrarLote(eq(1L), anyList(), eq("cod_imovel")))
+                .thenReturn(new ResultadoOrquestracao(List.of(apr1), List.of(rej2), List.of(), 2, 1, 1, 0));
+
+        RegistroAprovadoSilver aprRej2 = new RegistroAprovadoSilver(reg2, Map.of("cod_imovel", "PR-2"), null);
+        when(orquestradorValidacao.transformarRegistro(eq(1L), eq(reg2))).thenReturn(aprRej2);
+
+        boolean sucesso = transicaoService.liberarLoteParaSilver(loteId, 10L);
+
+        assertThat(sucesso).isTrue();
+        assertThat(lote.getStatus()).isEqualTo(TransicaoBronzeSilverService.STATUS_PROMOVIDO_SILVER);
+        verify(persistidorSilverService).persistirAprovados(eq("imovel_rural"), eq(List.of(apr1, aprRej2)));
+        verify(jdbcTemplate, atLeastOnce()).update(anyString(), eq("CORRIGIDO_REPROCESSADO"), eq(10L), eq(loteId));
+    }
+
+    @Test
+    @DisplayName("Promover registro individual de quarentena deve transformar e persistir na Silver")
+    void devePromoverRegistroIndividualQuarentena() {
+        Long quarentenaId = 99L;
+        Long loteId = 6L;
+        Long regBrutoId = 601L;
+
+        Map<String, Object> row = Map.of(
+                "id", quarentenaId,
+                "fonte_dado_id", 1L,
+                "lote_ingestao_id", loteId,
+                "registro_bruto_id", regBrutoId,
+                "payload_original", "{\"cod_imovel\":\"PR-99\"}"
+        );
+        when(jdbcTemplate.queryForList(anyString(), eq(quarentenaId))).thenReturn(List.of(row));
+
+        RegistroBruto reg = RegistroBruto.builder().id(regBrutoId).loteIngestaoId(loteId).fonteDadoId(1L).payload("{\"cod_imovel\":\"PR-99\"}").build();
+        when(registroBrutoRepository.findById(regBrutoId)).thenReturn(Optional.of(reg));
+
+        RegistroAprovadoSilver apr = new RegistroAprovadoSilver(reg, Map.of("cod_imovel", "PR-99"), null);
+        when(orquestradorValidacao.transformarRegistro(eq(1L), any(RegistroBruto.class))).thenReturn(apr);
+
+        br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
+                new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest("Corrigido", "{\"cod_imovel\":\"PR-99-OK\"}", 7L);
+
+        boolean sucesso = transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req);
+
+        assertThat(sucesso).isTrue();
+        verify(persistidorSilverService).persistirAprovados(eq("imovel_rural"), eq(List.of(apr)));
+        verify(jdbcTemplate).update(anyString(), eq(7L), eq(quarentenaId));
+    }
 }

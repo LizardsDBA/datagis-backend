@@ -341,15 +341,20 @@ public class QuarentenaService {
     }
 
     /**
-     * Registra que o item foi corrigido e reprocessado.
+     * Registra que o item foi corrigido e promove-o para a camada Silver.
      */
     @Transactional
-    public boolean marcarCorrigido(String entidade, Long id, Long analistaId) {
+    public boolean marcarCorrigido(String entidade, Long id, AcaoQuarentenaRequest request) {
+        if (transicaoService != null) {
+            return transicaoService.promoverRegistroQuarentenaParaSilver(entidade, id, request);
+        }
+
         TabelaEspelhoConfig cfg = TABELAS_ESPELHO.get(normalizarEntidade(entidade));
         if (cfg == null) {
             throw new IllegalArgumentException("Entidade de quarentena desconhecida: " + entidade);
         }
 
+        Long analistaId = request != null ? request.analistaId() : null;
         String sql = "UPDATE QUARENTENA." + cfg.nomeTabela() + " SET " +
                      "status_analise_id = (SELECT id FROM QUARENTENA.status_analise_quarentena WHERE codigo = 'CORRIGIDO_REPROCESSADO'), " +
                      "analista_responsavel_id = ?, " +
@@ -357,6 +362,14 @@ public class QuarentenaService {
                      "WHERE id = ?";
 
         return jdbcTemplate.update(sql, analistaId, id) > 0;
+    }
+
+    /**
+     * Sobrecarga para compatibilidade com chamadas legadas passando apenas analistaId.
+     */
+    @Transactional
+    public boolean marcarCorrigido(String entidade, Long id, Long analistaId) {
+        return marcarCorrigido(entidade, id, new AcaoQuarentenaRequest(null, null, analistaId));
     }
 
     // -------------------------------------------------------------------------
