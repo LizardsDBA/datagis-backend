@@ -15,23 +15,38 @@
 > antes de decidir, porque tier gratuito de nuvem é a coisa que a Oracle mais reajusta
 > sem aviso (o próprio ajuste do Ampere A1 foi feito "silenciosamente", sem anúncio
 > público formal, segundo uma das fontes).
+>
+> **Atualização 2026-09-22 (mesmo dia, tarde) — deixou de ser só análise, foi testado
+> de verdade.** A instância Always Free `datagis` foi criada e o backend conectou nela
+> de ponta a ponta via mTLS/Wallet, branch `feat/conexao-oracle` (`LIZARDS-3`): as 36
+> migrations do projeto aplicaram e o backend subiu completo (Quartz inicializado, 11
+> fontes agendadas). Isso **confirma com teste real**, não mais suposição, as duas
+> perguntas em aberto do parágrafo "Resposta direta" abaixo — ver §3.1 e §3.2
+> atualizados, e a nova §3.5 com os 3 bugs reais encontrados (nenhum é dos que este
+> documento tinha previsto) e como cada um foi corrigido.
 
 ---
 
 ## Resposta direta
 
-**Sim, é tecnicamente viável** — e é exatamente o candidato que o CLAUDE.md já
-apontava como mais provável, só nunca testado na prática. O produto se chama hoje
-**"Autonomous AI Database"** (renomeado de "Autonomous Database" — mesmo motor, nome
-novo). Oracle Spatial (`SDO_GEOMETRY`) e PL/SQL são suportados sem downgrade. **Duas
-coisas não dá pra confirmar sem testar na prática**, e as duas têm plano B já mapeado
-neste documento se não funcionarem como o ambiente local espera:
-1. Se o modelo de privilégios do Always Free permite recriar exatamente os grants
-   "ANY" que sustentam a arquitetura de 1 usuário conectando + Flyway cross-schema
-   (§2.1 do CLAUDE.md) — §3.2 abaixo.
-2. Se a instância vem em Oracle 19c ou 26ai (depende da home region da tenancy — não
-   é escolha manual), porque isso muda se o tipo `JSON` nativo que a Bronze usa hoje
-   funciona como está ou precisa de DDL alternativa — §3.1 abaixo.
+**Sim, é tecnicamente viável — e agora confirmado com teste real, não só suposição.**
+O produto se chama hoje **"Autonomous AI Database"** (renomeado de "Autonomous
+Database" — mesmo motor, nome novo). Oracle Spatial (`SDO_GEOMETRY`) e PL/SQL são
+suportados sem downgrade. As duas perguntas que este documento originalmente não
+conseguia responder sem testar já foram testadas de verdade em 2026-09-22
+(`feat/conexao-oracle`, `LIZARDS-3`):
+1. **Modelo de privilégios**: o `ADMIN` do Always Free, **sem nenhum grant extra**,
+   já sustenta a arquitetura de 1 usuário + Flyway cross-schema — as 36 migrations do
+   projeto aplicaram limpo, incluindo `IDENTITY` cross-schema e FK cross-schema. Plano
+   B (Flyway por schema) **não é necessário** — §3.2 abaixo.
+2. **Versão do banco**: a instância `datagis` veio em **Oracle 23.26 (família 23ai)**,
+   não 19c nem 26ai como as fontes de documentação sugeriam por região — o tipo `JSON`
+   nativo da Bronze funciona exatamente como no ambiente local, sem precisar de DDL
+   alternativa — §3.1 abaixo.
+
+Três bugs reais apareceram no teste — nenhum dos dois pontos acima, mas específicos de
+como o Autonomous Database se comporta perante certas operações — corrigidos e
+documentados na nova §3.5.
 
 ---
 
@@ -81,41 +96,44 @@ pontual.
 
 ## 3. O que precisa de validação prática antes de comprometer
 
-### 3.1. Versão do banco (19c vs 26ai) — depende da região, e muda o tipo `JSON` nativo
+### 3.1. Versão do banco — **[CONFIRMADO 2026-09-22: Oracle 23.26, família 23ai]**
 
-**Achado novo, a partir da documentação oficial que a equipe trouxe (2026-09-22),
-que corrige uma suposição errada que eu tinha feito neste documento antes.** O Always
-Free Autonomous AI Database **não roda sempre a mesma versão**:
+**Histórico da dúvida:** a documentação oficial da Oracle (pesquisa web) dizia que o
+Always Free roda **Oracle Database 19c** em qualquer região, ou **Oracle AI Database
+26ai** só nas 8 home regions específicas (Phoenix, Ashburn, Londres, Paris, Sydney,
+Mumbai, Singapura, Tóquio). Isso tinha corrigido uma suposição anterior deste documento
+de que a nuvem rodaria "a mesma geração" que o ambiente local
+(`gvenzl/oracle-free:23.26.3-faststart`, Oracle 23ai).
 
-- **Oracle Database 19c** — disponível em qualquer região.
-- **Oracle AI Database 26ai** — só disponível se a **home region** da tenancy da
-  equipe for uma destas 8: Phoenix, Ashburn, Londres, Paris, Sydney, Mumbai, Singapura
-  ou Tóquio. Fora dessas regiões, o Always Free só oferece 19c. **A home region é
-  fixada no momento em que a conta OCI é criada e não dá pra trocar depois** — vale a
-  equipe checar isso antes de criar a conta, se quiser garantir acesso ao 26ai.
+**Teste real, 2026-09-22 (`feat/conexao-oracle`):** o log de boot do backend contra a
+instância `datagis` mostrou:
+```
+Database: jdbc:oracle:thin:@datagis_high (Oracle 23.26)
+...
+Database version: 23.26.3
+```
+**A instância veio em Oracle 23.26 (família 23ai) — exatamente a mesma geração do
+ambiente local**, não 19c nem 26ai. Isso **contradiz a pesquisa documental** que
+motivou esta seção originalmente (possivelmente porque a oferta mudou entre a
+documentação consultada e a data real de provisionamento, ou porque a home region da
+tenancy da equipe não é nenhuma das 8 listadas para 26ai e o "padrão fora dessas
+regiões" já deixou de ser 19c). **Vale registrar como lição**: para tier gratuito de
+nuvem, testar é mais confiável que documentação — a oferta muda rápido demais.
 
-**Por que isso importa para o projeto:** eu tinha assumido, sem confirmar, que o Always
-Free rodava "a mesma geração de banco" que o ambiente local
-(`gvenzl/oracle-free:23.26.3-faststart`, Oracle 23ai) — **isso não está confirmado, e a
-comparação certa agora é 19c/26ai, não 23ai**. Isso é relevante porque
-`bronze.registro_bruto.payload` é declarado como tipo **`JSON` nativo** na migration
-(`V004__criar_registro_bruto.sql`), mapeado no Java via `@JdbcTypeCode(SqlTypes.JSON)` —
-o tipo de coluna nativo `JSON` (armazenamento binário OSON) é recurso que só existe a
-partir do **Oracle 21c**. O Oracle 19c **não tem** esse tipo nativo (dá pra simular JSON
-em 19c com `CLOB CHECK (coluna IS JSON)`, mas é outra sintaxe de DDL, não
-`payload JSON NOT NULL` como a migration atual declara).
+**Consequência prática, positiva:** `bronze.registro_bruto.payload JSON` (tipo nativo,
+`@JdbcTypeCode(SqlTypes.JSON)`) **funcionou sem nenhuma alteração** — a migration
+`V004` aplicou igual ao ambiente local, confirmado no mesmo teste (36/36 migrations
+aplicadas). **A DDL alternativa com `CLOB CHECK (... IS JSON)` discutida abaixo não é
+necessária** — mantida só como registro histórico do raciocínio, caso uma home region
+diferente da equipe (ou uma mudança futura da oferta Oracle) volte a colocar 19c em
+jogo:
 
-**Consequência prática:** se a home region da equipe não estiver na lista do 26ai, a
-migration `V004` provavelmente **não aplica como está** contra um Always Free 19c — a
-equipe precisaria ou (a) confirmar/mudar a home region da tenancy antes de criar a conta
-(só é possível decidir uma vez, na criação), ou (b) ter uma migration alternativa para
-o schema Bronze usando `CLOB CHECK (... IS JSON)` em vez do tipo `JSON` nativo,
-condicional à versão do banco de destino. Isso também depende de confirmar se Oracle
-Spatial (`SDO_GEOMETRY`) tem a mesma cobertura em 19c — a fonte usada nesta análise fala
-de "Autonomous AI Database" de forma geral, sem detalhar por versão; vale checar
-especificamente para 19c antes de assumir.
+> Oracle 19c **não tem** o tipo `JSON` nativo (armazenamento binário OSON, só a partir
+> do 21c) — precisaria de `CLOB CHECK (coluna IS JSON)` como DDL alternativa,
+> condicional à versão do banco de destino. Como a instância real veio em 23ai, esse
+> caminho não precisou ser percorrido.
 
-### 3.2. Modelo de privilégios — o ponto mais importante, e o menos certo
+### 3.2. Modelo de privilégios — **[CONFIRMADO 2026-09-22: funciona sem grant extra nenhum]**
 
 A arquitetura atual (CLAUDE.md §2.1) depende de um único usuário conectando
 (`CONTROLE`, criado pela imagem `gvenzl/oracle-free`) com privilégios de sistema
@@ -134,10 +152,16 @@ No Autonomous AI Database, o usuário `ADMIN`:
   a outros), **não necessariamente idênticos** aos privilégios de sistema crus
   (`CREATE ANY TABLE`, `SELECT ANY SEQUENCE`) que o script local concede hoje.
 
-**Não encontrei confirmação direta, nas fontes pesquisadas, de que o `ADMIN` do
-Always Free consegue conceder exatamente os mesmos privilégios `... ANY ...` que o
-`SYS` local concede hoje ao `CONTROLE`.** Isso é uma lacuna real de informação, não uma
-certeza de que vai falhar — só não dá pra assumir que vai funcionar sem testar.
+**Teste real, 2026-09-22:** o `ADMIN` da instância `datagis`, **sem nenhum `GRANT`
+adicional rodado pela equipe** (usamos as credenciais de criação da instância, sem
+tocar em privilégios), aplicou as 36 migrations do projeto de ponta a ponta —
+incluindo as duas pegadinhas exatamente descritas abaixo (`IDENTITY` cross-schema e FK
+cross-schema). **O `ADMIN` do Always Free já vem, por padrão, com privilégios
+suficientes** para sustentar o mesmo modelo de "1 usuário com privilégios amplos" que o
+`CONTROLE` local tem via script — não foi preciso descobrir/replicar os `GRANT`s
+específicos do §2.1 do CLAUDE.md, o `ADMIN` gerenciado já cobre o equivalente. A lacuna
+de informação que motivou esta seção está resolvida: **funciona**, e o Plano B (Flyway
+por schema, mais abaixo) não precisa ser implementado.
 
 **Por que isso importa especificamente para este projeto** (não é só burocracia
 genérica de permissão): o CLAUDE.md já documentou **duas pegadinhas reais** descobertas
@@ -150,21 +174,17 @@ testando localmente, que dependem exatamente desses privilégios "ANY":
    projeto usa `IDENTITY` como PK** (Bronze, Silver, Gold, Quarentena, Controle — é o
    padrão do projeto inteiro).
 
-Se o Always Free não permitir conceder `SELECT ANY SEQUENCE` do jeito que o script
-local faz, **nenhuma tabela do projeto fora do schema owner consegue nem ser criada**
-pelo caminho atual — é literalmente o primeiro coisa a quebrar, não um detalhe
-secundário.
+**Confirmado que isso não quebrou**: as 36 migrations, incluindo toda tabela
+`IDENTITY` fora do schema `CONTROLE` (Bronze, Silver, Gold, Quarentena) e toda FK
+cross-schema, aplicaram sem nenhum `ORA-41900`/`ORA-00990` de privilégio.
 
-**Plano B, se o modelo "1 usuário com privilégios ANY" não passar no Always Free:** o
-CLAUDE.md já tinha essa alternativa desenhada e **conscientemente descartada** para o
-ambiente local por complexidade (§2.1.1): "um bean Flyway por schema... ~60 linhas de
-config e um conceito a mais... voltar a considerar só se a linha de versão global
-incomodar." Migrar pra nuvem no Always Free pode ser exatamente o gatilho que torna essa
-alternativa necessária — cada schema (`bronze`, `silver`, `gold`, `quarentena`,
-`quartz`, `batch`) ganharia seu próprio usuário/schema-owner com privilégios só sobre
-si mesmo, e o Flyway rodaria uma instância por schema, sem precisar de nenhum privilégio
-`ANY`. Mais trabalho de configuração, mas evita depender de um modelo de permissão que
-o serviço gerenciado pode não expor.
+**Plano B (Flyway por schema) — mantido só como registro histórico, não é mais
+necessário.** O CLAUDE.md já tinha essa alternativa desenhada e **conscientemente
+descartada** para o ambiente local por complexidade (§2.1.1): "um bean Flyway por
+schema... ~60 linhas de config e um conceito a mais... voltar a considerar só se a
+linha de versão global incomodar." A preocupação de que migrar pra nuvem forçaria essa
+alternativa **não se confirmou** — o modelo atual (1 usuário, privilégios amplos)
+funciona igual na nuvem.
 
 ### 3.3. Forma de conexão muda, não só o host — **[DECIDIDO 2026-09-22: mTLS com Wallet]**
 
@@ -204,6 +224,38 @@ técnica livre. Implementado em `feat/conexao-oracle` (`LIZARDS-3`):
   continua `none` (herdado do `application.properties` base) — **não** seguir a sugestão
   comum de tutorial de usar `update` aqui, porque quebraria a premissa do projeto de que
   o Flyway é a única fonte de verdade do schema (CLAUDE.md §2.1.1).
+- **Achado que nenhum tutorial cobre, específico deste projeto**: localmente o backend
+  conecta *como* o dono das tabelas (usuário `CONTROLE`), então toda referência SQL sem
+  prefixo de schema — tanto o JPA/Hibernate quanto as várias queries JDBC cruas do
+  projeto (`PersistidorSilverService`, `OrquestradorValidacao`, etc.) — resolve certo
+  por conta disso. Na nuvem conectamos como `ADMIN` (dono da conexão ≠ dono das
+  tabelas, que continuam em `CONTROLE`), e **qualquer SQL sem prefixo quebra com
+  `ORA-00942` mesmo a tabela existindo** — foi o que aconteceu no boot, no primeiro
+  `SELECT` que o `AgendadorInicializacaoRunner` faz em `fonte_dado`. Corrigido fixando
+  o schema padrão da sessão na própria conexão, sem tocar em nenhuma SQL do projeto:
+  ```properties
+  spring.datasource.hikari.connection-init-sql=ALTER SESSION SET CURRENT_SCHEMA=CONTROLE
+  ```
+  Já está em `application-cloud.properties`.
+
+**Como rodar o backend contra a nuvem (perfil `cloud`), testado e funcionando:**
+
+```powershell
+# Pré-requisitos: wallet extraída em wallet/ (raiz do projeto, gitignored) e
+# .env.cloud preenchido a partir de .env.cloud.example (também gitignored).
+$env:JAVA_HOME = "<caminho do seu JDK 21>"
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+Get-Content .env.cloud | ForEach-Object {
+    if ($_ -match '^\s*([^#=]+)=(.*)$') { Set-Item "Env:$($matches[1].Trim())" $matches[2].Trim() }
+}
+$env:SPRING_PROFILES_ACTIVE = "cloud"
+.\mvnw.cmd spring-boot:run
+```
+
+Isso **não mexe em nada do fluxo padrão** — `docker compose up` continua com o perfil
+`docker` e o Oracle local, sem alteração (`docker-compose.yml` fixa
+`SPRING_PROFILES_ACTIVE: docker` explicitamente). O perfil `cloud` só entra em ação
+quando alguém roda esse comando manualmente, fora do container.
 
 ### 3.4. Coisas a monitorar, não bloqueantes agora
 
@@ -217,6 +269,35 @@ técnica livre. Implementado em `feat/conexao-oracle` (`LIZARDS-3`):
   JDBC Thin via `SQL*Net`**, que é como o Spring Boot do projeto conecta hoje
   (`SPRING_DATASOURCE_URL`) e continuaria conectando. Não é uma preocupação real para
   este projeto, só vale não confundir os dois tipos de acesso.
+
+### 3.5. Bugs reais encontrados no teste (2026-09-22) e como foram corrigidos
+
+Nenhum destes 3 estava previsto nas seções acima — apareceram só rodando as 36
+migrations de verdade contra a `datagis`. Todos específicos do Autonomous Database
+(nenhum acontece no Oracle local); corrigidos em `feat/conexao-oracle` (`LIZARDS-3`),
+código e migrations já commitados.
+
+| # | Erro | Onde | Causa | Correção |
+|---|---|---|---|---|
+| 1 | `ORA-41900: missing INSERT privilege on MDSYS.SDO_GEOM_METADATA_TABLE` | `V013__silver_registrar_metadata_espacial.sql`, `V020__gold_registrar_metadata_espacial.sql` | `INSERT` direto em `MDSYS.SDO_GEOM_METADATA_TABLE` (funciona no Oracle local via `INSERT ANY TABLE`) nunca foi o caminho suportado pela Oracle — a própria documentação diz que é uma tabela global que usuário nunca deveria atualizar direto; o Autonomous Database é mais rígido sobre isso que o Oracle local. | Trocado por `SDO_UTIL.INSERT_SDO_GEOM_METADATA('SILVER', 'MUNICIPIO', 'GEOMETRIA', SDO_DIM_ARRAY(...), 4674)` — procedure oficial da Oracle pra registrar metadata espacial de tabela de outro schema, exige só `SELECT` na tabela alvo. Funciona igual no Oracle local. |
+| 2 | `ORA-12801`/`ORA-12860: deadlock detectado ao aguardar um bloqueio de linha` | `V021__seed_demo_silver.sql` (seed de demonstração da Silver) | Autonomous Database aplica paralelismo automático (**Auto DOP**) mesmo em tabelas minúsculas — um `INSERT ... SELECT` lendo `area_protegida` logo depois de a mesma transação ter inserido linhas ali (commit só no fim do script) fazia os processos paralelos colidirem entre si. | `ALTER SESSION DISABLE PARALLEL QUERY;` + `ALTER SESSION DISABLE PARALLEL DML;` no topo do script — sem necessidade nenhuma de paralelismo pra volumes de poucas linhas (seed demo). |
+| 3 | `ORA-00942: tabela ou view "ADMIN"."FONTE_DADO" não existe` | Boot do backend, primeira query do `AgendadorInicializacaoRunner` | Conectar como `ADMIN` (dono da conexão) em vez de `CONTROLE` (dono das tabelas) quebra toda referência SQL sem prefixo de schema — Oracle resolve pelo schema da sessão, não de quem criou o objeto. | `spring.datasource.hikari.connection-init-sql=ALTER SESSION SET CURRENT_SCHEMA=CONTROLE` em `application-cloud.properties` — resolve pra JPA e pra toda query JDBC crua do projeto, sem prefixar nada em código. |
+
+**Nota lateral, sem correção de código porque não é bug do projeto**: o DBeaver deu
+`ORA-12506: TNS: o listener rejeitou a conexão com base na filtragem da ACL de serviço`
+tentando conectar com a mesma wallet que o Maven usou com sucesso segundos antes —
+aparenta ser incompatibilidade do driver JDBC bundled do DBeaver com o handshake mTLS
+mais estrito do Autonomous Database, não um problema de conta/rede. Contornado usando
+o próprio classpath do projeto (JDBC via Maven) para tarefas administrativas pontuais,
+em vez de insistir no DBeaver.
+
+**O que isso significa pra decisão de ir pra nuvem**: nenhum dos 3 bugs é
+bloqueante — todos têm correção pequena e já aplicada. O padrão comum aos 3 é
+"Autonomous Database é mais estrito/diferente em comportamentos que o Oracle local
+tolera ou nem exercita" — vale a equipe ter isso em mente se outras migrations novas
+(ex.: as procedures PL/SQL do Silver→Gold, `docs/analise-fluxo-etl-2026-09-21.md`
+§5-8) também mexerem com `SDO_GEOM_METADATA_TABLE` ou rodarem `INSERT...SELECT` em
+tabela recém-escrita — os mesmos 2 primeiros padrões podem se repetir.
 
 ---
 
@@ -314,12 +395,13 @@ não vêm daqui"*. Vale deixar explícito, agora que a instância de nuvem já e
   equipe combinar isso antes que a primeira pessoa cole a senha do `ADMIN` num commit
   por reflexo do hábito já estabelecido com o `.env` local.
 
-### 5.3. Instância já provisionada
+### 5.3. Instância já provisionada e testada de ponta a ponta
 
 A equipe criou a instância Always Free **`datagis`** em 2026-09-22 (Autonomous AI
-Database, tier "Always Free"). Nesta análise ela ainda não tinha terminado de
-provisionar — os itens de validação prática recomendados na seção 7 (versão do banco,
-grants, conexão JDBC via TLS) seguem como próximo passo assim que ela estiver `AVAILABLE`.
+Database, tier "Always Free"). **Já está `AVAILABLE` e validada**: as 36 migrations do
+projeto aplicadas com sucesso e o backend completo rodando contra ela (§3.1, §3.2,
+§3.3, §3.5) — os itens de validação prática da seção 7 foram todos respondidos com
+teste real, não seguem mais como pendência.
 
 ---
 
@@ -356,22 +438,32 @@ crédito da faculdade sem querer" bem na hora de decidir hospedar:
 
 ---
 
-## 7. Recomendação prática
+## 7. Recomendação prática — **[SPIKE CONCLUÍDO, 2026-09-22]**
 
 A equipe já tem o hábito de fazer **spike descartável antes de construir em cima de algo
 não validado** (CLAUDE.md §5.5 — foi assim com hibernate-spatial/GeoTools/Spring Batch
-no início do projeto). O mesmo raciocínio se aplica aqui, e é pouco custo: criar a
-instância Always Free, checar a versão do banco que veio (19c ou 26ai — §3.1), tentar
-recriar — só como teste, com 1-2 schemas, não o projeto inteiro — os grants que
-`01-criar-schemas.sh` faz hoje (§3.2), e testar uma conexão Spring Boot real via mTLS
-com Wallet (§3.3, caminho decidido). Isso responde as duas perguntas que mais importam
-antes de qualquer decisão de "vamos migrar para lá" virar compromisso.
+no início do projeto). O mesmo raciocínio se aplicou aqui — spike feito, resultado
+positivo:
 
-Se os grants `ANY` **não** passarem no Always Free, não é motivo pra descartar o
-Always Free como hospedagem — só confirma que o Plano B (§3.2, Flyway por schema) precisa
-entrar em ação antes do deploy, não é um bloqueio do serviço em si. Da mesma forma, se
-a instância vier em 19c, o tipo `JSON` nativo da Bronze precisa de uma migration
-alternativa — também não inviabiliza o Always Free, só muda 1 arquivo de DDL.
+- ✅ Versão do banco confirmada (23.26/23ai — §3.1).
+- ✅ Grants `ANY` do `01-criar-schemas.sh` local replicados de fábrica pelo `ADMIN` do
+  Always Free, sem trabalho extra (§3.2).
+- ✅ Conexão Spring Boot real via mTLS com Wallet, funcionando (§3.3).
+- ✅ 3 bugs específicos do Autonomous Database encontrados e corrigidos (§3.5).
+
+**Recomendação atualizada: seguir com o Always Free como hospedagem de banco é viável
+e já está com o caminho técnico provado**, não é mais uma hipótese a validar. Os
+próximos passos práticos, se a equipe for adiante com deploy de verdade:
+
+1. Decidir a topologia final (§5) — VM Ampere A1 pra `backend`+`frontend`, ou manter
+   local/CI e só o banco na nuvem por enquanto.
+2. Resolver credenciais de nuvem sem repetir o padrão do `.env` local commitado (§5.2)
+   — já esboçado (`.env.cloud` gitignored), falta só a equipe usar na prática em CI/CD
+   se isso vier a existir.
+3. Abrir PR de `feat/conexao-oracle` pra `sprint-1` quando o time achar adequado —
+   inclui o aviso de que `V013`/`V020`/`V021` mudaram de checksum (§3.5), então quem
+   pegar a branch precisa resetar o Oracle local (`docker compose down -v`) ou rodar
+   `flyway repair`.
 
 **Item de processo, não técnico**: se a equipe seguir adiante com Always Free, vale
 combinar quem "cutuca" a instância periodicamente (mesmo só um `SELECT 1` via cron/
@@ -401,10 +493,9 @@ do banco.
 - [JDBC Thin Connections with a Wallet (mTLS)](https://docs.oracle.com/en/cloud/paas/autonomous-database/serverless/adbsb/connect-jdbc-thin-wallet.html)
 - [JDBC Thin Connections Without a Wallet (TLS)](https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/connect-jdbc-thin-tls.html)
 
-**Ainda não confirmado, candidato a próxima checagem:** cobertura do Oracle Spatial
-(`SDO_GEOMETRY`) especificamente em 19c (as fontes acima falam de "Autonomous AI
-Database" de forma geral, sem detalhar por versão de banco) — relevante só se a home
-region da equipe cair fora da lista do 26ai (§3.1).
+**Superado pelo teste real (§3.1):** a checagem de cobertura do Oracle Spatial em 19c
+deixou de ser relevante — a instância `datagis` veio em 23.26/23ai, não 19c, e Spatial
+funcionou sem ressalva (§2, confirmado na prática).
 
 ---
 
@@ -420,3 +511,6 @@ region da equipe cair fora da lista do 26ai (§3.1).
   `docker-compose.yml` (o padrão que a string de conexão TLS precisaria seguir).
 - `docs/analise-fluxo-etl-2026-09-21.md` §5-8 — desenho de procedures PL/SQL para
   Silver→Gold, que roda sem alteração em Autonomous AI Database (§2 acima).
+- Branch `feat/conexao-oracle` (`LIZARDS-3`) — implementação real da conexão mTLS/Wallet
+  (`application-cloud.properties`, `.env.cloud.example`, dependências de wallet no
+  `pom.xml`) e as correções de `V013`/`V020`/`V021` descritas em §3.5.
