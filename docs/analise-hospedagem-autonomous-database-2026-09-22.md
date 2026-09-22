@@ -459,6 +459,40 @@ conexão cloud já feito e testado (§3.3, `feat/conexao-oracle`).
 (amd64+arm64) — não é esperado bloqueio, mas só fica confirmado com um
 `docker compose up` de teste na própria VM Ampere.
 
+### 5.5. Achado real ao tentar provisionar (2026-09-22): `VM.Standard.A1.Flex` sem capacidade
+
+Ao seguir o passo a passo da §5.4 e clicar em **Create**, a equipe recebeu:
+
+```
+API Error
+Out of capacity for shape VM.Standard.A1.Flex in availability domain AD-1.
+Create the instance in a different availability domain or try again later.
+```
+
+**Não é erro de configuração — é falta de capacidade física da Oracle para esse shape
+naquele Availability Domain naquele momento.** É o problema mais reportado sobre o
+Always Free: o Ampere A1 Flex é o recurso mais disputado do tier gratuito (único ARM
+decente de graça), então a região fica sem estoque livre com frequência, principalmente
+em regiões menores como São Paulo (que tipicamente só tem 1 Availability Domain,
+eliminando a opção de simplesmente trocar de AD).
+
+**Mitigações, nenhuma delas é uma correção de configuração, são só formas de esperar a
+capacidade liberar:**
+- **Tentar de novo repetidas vezes** — clicar em Create de novo sem refazer o
+  formulário; capacidade libera e reaperta o tempo todo, às vezes só a 5ª-10ª
+  tentativa. Não incomum levar um dia ou dois de tentativas numa região menor.
+- **Trocar de Availability Domain**, se a região tiver mais de uma (verificar na etapa
+  "Placement" do formulário) — não se aplica a regiões com um único AD.
+- **Horários de menor disputa** — de madrugada/manhã cedo no horário local da região
+  costuma ter mais chance.
+- **Não vale a pena** trocar pra `VM.Standard.E2.1.Micro` (AMD) como atalho — 1 GB de
+  RAM não serve pra rodar `backend`+`frontend` (§5.1), só trocaria um bloqueio por
+  outro.
+
+**Status no momento deste registro: pendente** — a equipe segue tentando provisionar a
+VM; a instância `datagis` (banco, §5.3) não é afetada por isso, é um problema
+isolado à criação da VM Compute.
+
 ---
 
 ## 6. Custo e conta de trial (Universal Credits) — Always Free não consome o saldo
