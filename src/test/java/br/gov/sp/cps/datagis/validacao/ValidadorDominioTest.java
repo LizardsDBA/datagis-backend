@@ -360,38 +360,6 @@ class ValidadorDominioTest {
     }
 
     @Test
-    @DisplayName("Deve validar domínio de município (código IBGE, prefixo PR- ou nome) e rejeitar quando inexistente")
-    void deveValidarDominioMunicipio() {
-        when(jdbcTemplate.queryForList("SELECT CAST(cod_ibge AS VARCHAR2(20)) AS codigo, nome AS descricao FROM SILVER.municipio"))
-                .thenReturn(List.of(
-                        Map.of("CODIGO", "4106902", "DESCRICAO", "Curitiba"),
-                        Map.of("CODIGO", "4108304", "DESCRICAO", "Foz do Iguaçu")
-                ));
-
-        ContextoValidacaoCampo ctx = contextoComTabela("municipio", "municipio");
-
-        // 1. Por código IBGE
-        ResultadoValidacao r1 = validador.validar("4106902", ctx);
-        assertThat(r1.isValido()).isTrue();
-        assertThat(r1.valorTransformado()).isEqualTo("4106902");
-
-        // 2. Com prefixo PR-
-        ResultadoValidacao r2 = validador.validar("PR-4106902", ctx);
-        assertThat(r2.isValido()).isTrue();
-        assertThat(r2.valorTransformado()).isEqualTo("4106902");
-
-        // 3. Por nome com acento
-        ResultadoValidacao r3 = validador.validar("Foz do Iguaçu", ctx);
-        assertThat(r3.isValido()).isTrue();
-        assertThat(r3.valorTransformado()).isEqualTo("4108304");
-
-        // 4. Inexistente -> Rejeição
-        ResultadoValidacao r4 = validador.validar("9999999", ctx);
-        assertThat(r4.isValido()).isFalse();
-        assertThat(r4.tipoErro()).isEqualTo("VALOR_FORA_DO_DOMINIO");
-    }
-
-    @Test
     @DisplayName("Deve validar unidade_federativa e normalizar aliases (uf -> unidade_federativa)")
     void deveValidarUnidadeFederativaEAlias() {
         when(jdbcTemplate.queryForList("SELECT codigo, descricao, CAST(cod_ibge AS VARCHAR2(10)) AS cod_ibge FROM SILVER.unidade_federativa WHERE ativo = 1"))
@@ -417,25 +385,6 @@ class ValidadorDominioTest {
         ResultadoValidacao rInvalido = validador.validar("XX", ctx);
         assertThat(rInvalido.isValido()).isFalse();
         assertThat(rInvalido.tipoErro()).isEqualTo("VALOR_FORA_DO_DOMINIO");
-    }
-
-    @Test
-    @DisplayName("Deve validar auto_infracao existente e rejeitar inexistente")
-    void deveValidarAutoInfracao() {
-        when(jdbcTemplate.queryForList("SELECT numero_auto AS codigo, numero_auto AS descricao FROM SILVER.auto_infracao"))
-                .thenReturn(List.of(
-                        Map.of("CODIGO", "AUTO-12345", "DESCRICAO", "AUTO-12345")
-                ));
-
-        ContextoValidacaoCampo ctx = contextoComTabela("num_auto", "auto_infracao");
-
-        ResultadoValidacao r1 = validador.validar("AUTO-12345", ctx);
-        assertThat(r1.isValido()).isTrue();
-        assertThat(r1.valorTransformado()).isEqualTo("AUTO-12345");
-
-        ResultadoValidacao r2 = validador.validar("AUTO-99999", ctx);
-        assertThat(r2.isValido()).isFalse();
-        assertThat(r2.tipoErro()).isEqualTo("VALOR_FORA_DO_DOMINIO");
     }
 
     @Test

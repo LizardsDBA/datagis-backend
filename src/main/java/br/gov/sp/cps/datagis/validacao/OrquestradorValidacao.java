@@ -140,10 +140,35 @@ public class OrquestradorValidacao {
                 Object valorAnterior = snapshotAnterior != null ? snapshotAnterior.get(atributoDestino) : null;
 
                 ContextoValidacaoCampo contexto = mapCol.toContextoValidacao(valorAnterior);
+
+                // Defesa contra mapeamentos legados: municipio e auto_infracao pertencem a integridade cruzada Silver, nao a dominio
+                if (contexto.tabelaReferencia() != null && !contexto.tabelaReferencia().isBlank()) {
+                    String tabNorm = contexto.tabelaReferencia().trim().toLowerCase(java.util.Locale.ROOT);
+                    if (tabNorm.contains(".")) {
+                        tabNorm = tabNorm.substring(tabNorm.lastIndexOf('.') + 1);
+                    }
+                    if ("municipio".equals(tabNorm) || "auto_infracao".equals(tabNorm)) {
+                        String refSilver = (contexto.referenciaEntidadeSilver() != null && !contexto.referenciaEntidadeSilver().isBlank())
+                                ? contexto.referenciaEntidadeSilver()
+                                : tabNorm;
+                        contexto = contexto.toBuilder()
+                                .tabelaReferencia(null)
+                                .referenciaEntidadeSilver(refSilver)
+                                .build();
+                    }
+                }
+
                 if (contexto.tabelaReferencia() == null || contexto.tabelaReferencia().isBlank()) {
                     String tabInferida = inferirTabelaReferenciaCanonico(atributoDestino);
                     if (tabInferida != null) {
                         contexto = contexto.toBuilder().tabelaReferencia(tabInferida).build();
+                    }
+                }
+
+                if (contexto.referenciaEntidadeSilver() == null || contexto.referenciaEntidadeSilver().isBlank()) {
+                    String refSilverInferida = inferirReferenciaEntidadeSilverCanonico(atributoDestino);
+                    if (refSilverInferida != null) {
+                        contexto = contexto.toBuilder().referenciaEntidadeSilver(refSilverInferida).build();
                     }
                 }
 
@@ -309,10 +334,35 @@ public class OrquestradorValidacao {
                 String atributoDestino = mapCol.getAtributoDestino();
                 Object valorBruto = extrairValor(payloadNode, reg, mapCol);
                 ContextoValidacaoCampo contexto = mapCol.toContextoValidacao(null);
+
+                // Defesa contra mapeamentos legados: municipio e auto_infracao pertencem a integridade cruzada Silver, nao a dominio
+                if (contexto.tabelaReferencia() != null && !contexto.tabelaReferencia().isBlank()) {
+                    String tabNorm = contexto.tabelaReferencia().trim().toLowerCase(java.util.Locale.ROOT);
+                    if (tabNorm.contains(".")) {
+                        tabNorm = tabNorm.substring(tabNorm.lastIndexOf('.') + 1);
+                    }
+                    if ("municipio".equals(tabNorm) || "auto_infracao".equals(tabNorm)) {
+                        String refSilver = (contexto.referenciaEntidadeSilver() != null && !contexto.referenciaEntidadeSilver().isBlank())
+                                ? contexto.referenciaEntidadeSilver()
+                                : tabNorm;
+                        contexto = contexto.toBuilder()
+                                .tabelaReferencia(null)
+                                .referenciaEntidadeSilver(refSilver)
+                                .build();
+                    }
+                }
+
                 if (contexto.tabelaReferencia() == null || contexto.tabelaReferencia().isBlank()) {
                     String tabInferida = inferirTabelaReferenciaCanonico(atributoDestino);
                     if (tabInferida != null) {
                         contexto = contexto.toBuilder().tabelaReferencia(tabInferida).build();
+                    }
+                }
+
+                if (contexto.referenciaEntidadeSilver() == null || contexto.referenciaEntidadeSilver().isBlank()) {
+                    String refSilverInferida = inferirReferenciaEntidadeSilverCanonico(atributoDestino);
+                    if (refSilverInferida != null) {
+                        contexto = contexto.toBuilder().referenciaEntidadeSilver(refSilverInferida).build();
                     }
                 }
                 ResultadoValidacao resSanitizacao = sanitizador.validar(valorBruto, contexto);
@@ -343,8 +393,8 @@ public class OrquestradorValidacao {
     }
 
     /**
-     * Infere o nome canônico da tabela de referência a partir do nome do atributo de destino Silver.
-     * Permite validação automática de domínio mesmo quando tabelaReferencia não foi explicitamente informada.
+     * Infere o nome canônico da tabela de referência de domínio (lookup/enum) a partir do nome do atributo de destino Silver.
+     * OBS: Município e Auto de Infração NÃO pertencem a este método, pois são entidades canônicas validadas por Integridade Cruzada.
      */
     public static String inferirTabelaReferenciaCanonico(String atributoDestino) {
         if (atributoDestino == null || atributoDestino.isBlank()) {
@@ -355,7 +405,6 @@ public class OrquestradorValidacao {
             case "situacao_imovel", "status_imovel" -> "situacao_imovel";
             case "condicao_imovel", "condicao" -> "condicao_imovel";
             case "tipo_imovel" -> "tipo_imovel";
-            case "municipio", "cod_municipio_ibge", "municipio_id" -> "municipio";
             case "tipo_area_protegida" -> "tipo_area_protegida";
             case "categoria_area_protegida", "categoria_uc" -> "categoria_area_protegida";
             case "orgao" -> "orgao";
@@ -368,8 +417,23 @@ public class OrquestradorValidacao {
             case "satelite" -> "satelite";
             case "sensor" -> "sensor";
             case "tipo_area_embargo", "tipo_area_embrago" -> "tipo_area_embargo";
-            case "auto_infracao", "num_auto_infracao" -> "auto_infracao";
             case "unidade_federativa", "uf" -> "unidade_federativa";
+            default -> null;
+        };
+    }
+
+    /**
+     * Infere o nome canônico da entidade Silver para Integridade Cruzada
+     * a partir do nome do atributo de destino Silver (ex.: municipio, num_auto_infracao).
+     */
+    public static String inferirReferenciaEntidadeSilverCanonico(String atributoDestino) {
+        if (atributoDestino == null || atributoDestino.isBlank()) {
+            return null;
+        }
+        String a = atributoDestino.trim().toLowerCase(java.util.Locale.ROOT);
+        return switch (a) {
+            case "municipio", "cod_municipio_ibge", "municipio_id" -> "municipio";
+            case "auto_infracao", "num_auto_infracao", "auto_infracao_id" -> "auto_infracao";
             default -> null;
         };
     }

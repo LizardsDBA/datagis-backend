@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -109,6 +110,57 @@ class ValidadorIntegridadeCruzadaTest {
         validador.validar("4119905", ctx);
 
         verify(jdbcTemplate, times(1)).queryForList("SELECT cod_ibge FROM SILVER.municipio", String.class);
+    }
+
+    @Test
+    @DisplayName("Deve aprovar município com prefixo PR- ou por nome oficial e rejeitar inexistente")
+    void deveAprovarMunicipioComPrefixoOuNome() {
+        when(jdbcTemplate.queryForList("SELECT cod_ibge FROM SILVER.municipio", String.class))
+                .thenReturn(List.of("4106902", "4108304"));
+        when(jdbcTemplate.queryForList("SELECT nome FROM SILVER.municipio", String.class))
+                .thenReturn(List.of("Curitiba", "Foz do Iguaçu"));
+
+        validador.invalidarCache("municipio");
+        ContextoValidacaoCampo ctx = contextoComRef("municipio", "municipio");
+
+        // 1. Por código IBGE direto
+        ResultadoValidacao r1 = validador.validar("4106902", ctx);
+        assertThat(r1.isValido()).isTrue();
+
+        // 2. Com prefixo PR-
+        ResultadoValidacao r2 = validador.validar("PR-4106902", ctx);
+        assertThat(r2.isValido()).isTrue();
+
+        // 3. Por nome com acento
+        ResultadoValidacao r3 = validador.validar("Foz do Iguaçu", ctx);
+        assertThat(r3.isValido()).isTrue();
+
+        // 4. Inexistente -> Erro REFERENCIA_NAO_ENCONTRADA
+        ResultadoValidacao r4 = validador.validar("Municipio Fantasma", ctx);
+        assertThat(r4.isValido()).isFalse();
+        assertThat(r4.tipoErro()).isEqualTo("REFERENCIA_NAO_ENCONTRADA");
+    }
+
+    @Test
+    @DisplayName("Deve validar integridade cruzada de auto_infracao (numero_auto) via consulta pontual")
+    void deveValidarAutoInfracaoPontual() {
+        String sql = "SELECT COUNT(1) FROM SILVER.auto_infracao WHERE numero_auto = ?";
+        when(jdbcTemplate.queryForObject(eq(sql), eq(Integer.class), eq("AUTO-12345")))
+                .thenReturn(1);
+        when(jdbcTemplate.queryForObject(eq(sql), eq(Integer.class), eq("AUTO-99999")))
+                .thenReturn(0);
+
+        ContextoValidacaoCampo ctx = contextoComRef("num_auto_infracao", "auto_infracao");
+
+        // Existente
+        ResultadoValidacao r1 = validador.validar("AUTO-12345", ctx);
+        assertThat(r1.isValido()).isTrue();
+
+        // Inexistente
+        ResultadoValidacao r2 = validador.validar("AUTO-99999", ctx);
+        assertThat(r2.isValido()).isFalse();
+        assertThat(r2.tipoErro()).isEqualTo("REFERENCIA_NAO_ENCONTRADA");
+        assertThat(r2.motivoRejeicao()).contains("não encontrada na entidade Silver \"auto_infracao\"");
     }
 
     // -------------------------------------------------------------------------

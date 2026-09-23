@@ -122,8 +122,6 @@ public class ValidadorDominio implements ValidadorCampo {
             case "tipo_area_embrago", "tipo_area_embargo" -> "tipo_area_embargo";
             case "bioma_predominante", "bioma" -> "bioma";
             case "uf", "unidade_federativa" -> "unidade_federativa";
-            case "auto_infracao", "auto_infracoes", "auto_infracao_id", "auto_infracao_num" -> "auto_infracao";
-            case "municipio", "municipios", "cod_municipio_ibge" -> "municipio";
             default -> tab;
         };
     }
@@ -393,36 +391,12 @@ public class ValidadorDominio implements ValidadorCampo {
     /**
      * Carrega do banco de dados todos os registros ativos da tabela de referência informada,
      * indexando variações ortográficas e normalizações para busca rápida em O(1).
-     * Suporta esquemas polimórficos como silver.municipio, silver.unidade_federativa e silver.auto_infracao.
+     * Suporta tabelas de domínio ativas (WHERE ativo = 1) e esquemas específicos como silver.unidade_federativa.
+     * OBS: Município e Auto de Infração pertencem à Integridade Cruzada (ValidadorIntegridadeCruzada).
      */
     private Map<String, String> carregarDominio(String nomeTabela) {
         Map<String, String> mapa = new HashMap<>();
         String tab = normalizarAliasTabela(nomeTabela);
-
-        if ("municipio".equals(tab)) {
-            try {
-                String sql = "SELECT CAST(cod_ibge AS VARCHAR2(20)) AS codigo, nome AS descricao FROM " + silverSchema + ".municipio";
-                List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql);
-                for (Map<String, Object> row : rows) {
-                    Object codObj = obterValor(row, "codigo");
-                    Object descObj = obterValor(row, "descricao");
-                    if (codObj != null) {
-                        String codStr = codObj.toString().trim();
-                        registrarNoMapa(mapa, codStr, codStr);
-                        registrarNoMapa(mapa, "PR-" + codStr, codStr);
-                        if (descObj != null) {
-                            String descStr = descObj.toString().trim();
-                            if (!descStr.isBlank()) {
-                                registrarNoMapa(mapa, descStr, codStr);
-                            }
-                        }
-                    }
-                }
-            } catch (DataAccessException ex) {
-                throw new IllegalStateException("Erro ao carregar domínio da tabela silver.municipio: " + ex.getMessage(), ex);
-            }
-            return Collections.unmodifiableMap(mapa);
-        }
 
         if ("unidade_federativa".equals(tab)) {
             try {
@@ -451,23 +425,6 @@ public class ValidadorDominio implements ValidadorCampo {
                 }
             } catch (DataAccessException ex) {
                 throw new IllegalStateException("Erro ao carregar domínio da tabela silver.unidade_federativa: " + ex.getMessage(), ex);
-            }
-            return Collections.unmodifiableMap(mapa);
-        }
-
-        if ("auto_infracao".equals(tab)) {
-            try {
-                String sql = "SELECT numero_auto AS codigo, numero_auto AS descricao FROM " + silverSchema + ".auto_infracao";
-                List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql);
-                for (Map<String, Object> row : rows) {
-                    Object codObj = obterValor(row, "codigo");
-                    if (codObj != null) {
-                        String codStr = codObj.toString().trim();
-                        registrarNoMapa(mapa, codStr, codStr);
-                    }
-                }
-            } catch (DataAccessException ex) {
-                throw new IllegalStateException("Erro ao carregar domínio da tabela silver.auto_infracao: " + ex.getMessage(), ex);
             }
             return Collections.unmodifiableMap(mapa);
         }
