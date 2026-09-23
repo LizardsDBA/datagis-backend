@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
@@ -219,8 +220,8 @@ class TransicaoBronzeSilverServiceTest {
     }
 
     @Test
-    @DisplayName("Promover registro individual de quarentena deve transformar e persistir na Silver")
-    void devePromoverRegistroIndividualQuarentena() {
+    @DisplayName("Revalidar registro individual de quarentena atualiza status mas NÃO sobe sozinho para a Silver se houver pendências")
+    void deveRevalidarRegistroSemPersistirSozinhoNaSilver() {
         Long quarentenaId = 99L;
         Long loteId = 6L;
         Long regBrutoId = 601L;
@@ -238,7 +239,11 @@ class TransicaoBronzeSilverServiceTest {
         when(registroBrutoRepository.findById(regBrutoId)).thenReturn(Optional.of(reg));
 
         RegistroAprovadoSilver apr = new RegistroAprovadoSilver(reg, Map.of("cod_imovel", "PR-99"), null);
-        when(orquestradorValidacao.transformarRegistro(eq(1L), any(RegistroBruto.class))).thenReturn(apr);
+        when(orquestradorValidacao.validarRegistroIndividual(eq(1L), any(RegistroBruto.class)))
+                .thenReturn(new OrquestradorValidacao.ResultadoValidacaoRegistro(true, apr, null));
+
+        // Simula que ainda existe 1 registro pendente no lote
+        when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), eq(loteId))).thenReturn(1L);
 
         br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
                 new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest("Corrigido", "{\"cod_imovel\":\"PR-99-OK\"}", 7L);
@@ -246,7 +251,84 @@ class TransicaoBronzeSilverServiceTest {
         boolean sucesso = transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req);
 
         assertThat(sucesso).isTrue();
+        // REGRA ATÔMICA: NÃO deve persistir avulso na Silver
+        verify(persistidorSilverService, never()).persistirAprovados(anyString(), anyList());
+        // Deve atualizar status do registro na quarentena para CORRIGIDO_REPROCESSADO
+        verify(jdbcTemplate).update(contains("status_analise_id"), eq(7L), eq(quarentenaId));
+        // Deve atualizar o payload no registro bruto
+        verify(registroBrutoRepository).save(any(RegistroBruto.class));
+    }
+
+    @Test
+    @DisplayName("Ao revalidar o último registro pendente da quarentena, lote inteiro é liberado para a Silver")
+    void deveLiberarLoteQuandoUltimoRegistroForAprovado() {
+        Long quarentenaId = 99L;
+        Long loteId = 6L;
+        Long regBrutoId = 601L;
+
+        Map<String, Object> row = Map.of(
+                "id", quarentenaId,
+                "fonte_dado_id", 1L,
+                "lote_ingestao_id", loteId,
+                "registro_bruto_id", regBrutoId,
+                "payload_original", "{\"cod_imovel\":\"PR-99\"}"
+        );
+        when(jdbcTemplate.queryForList(anyString(), eq(quarentenaId))).thenReturn(List.of(row));
+
+        RegistroBruto reg = RegistroBruto.builder().id(regBrutoId).loteIngestaoId(loteId).fonteDadoId(1L).payload("{\"cod_imovel\":\"PR-99\"}").build();
+        when(registroBrutoRepository.findById(regBrutoId)).thenReturn(Optional.of(reg));
+
+        RegistroAprovadoSilver apr = new RegistroAprovadoSilver(reg, Map.of("cod_imovel", "PR-99"), null);
+        when(orquestradorValidacao.validarRegistroIndividual(eq(1L), any(RegistroBruto.class)))
+                .thenReturn(new OrquestradorValidacao.ResultadoValidacaoRegistro(true, apr, null));
+
+        // Simula que NÃO existem mais registros pendentes no lote (0 pendentes)
+        when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), eq(loteId))).thenReturn(0L);
+
+        // Mocks para liberarLoteParaSilver que será chamado automaticamente
+        FonteDado fonte = FonteDado.builder().id(1L).nome("CAR Teste").entidadeSilver("imovel_rural").build();
+        LoteIngestao lote = LoteIngestao.builder().id(loteId).fonteDado(fonte).status("RETIDO_QUARENTENA").build();
+        when(loteIngestaoRepository.findById(loteId)).thenReturn(Optional.of(lote));
+        when(registroBrutoRepository.findByLoteIngestaoIdOrderByIdAsc(loteId)).thenReturn(List.of(reg));
+        when(orquestradorValidacao.orquestrarLote(eq(1L), anyList(), eq("cod_imovel")))
+                .thenReturn(new ResultadoOrquestracao(List.of(apr), List.of(), List.of(), 1, 1, 0, 0));
+
+        br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
+                new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest("Corrigido", "{\"cod_imovel\":\"PR-99-OK\"}", 7L);
+
+        boolean sucesso = transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req);
+
+        assertThat(sucesso).isTrue();
+        // Lote inteiro liberado: agora sim os registros do lote sobem para a Silver!
         verify(persistidorSilverService).persistirAprovados(eq("imovel_rural"), eq(List.of(apr)));
-        verify(jdbcTemplate).update(anyString(), eq(7L), eq(quarentenaId));
+        assertThat(lote.getStatus()).isEqualTo(TransicaoBronzeSilverService.STATUS_PROMOVIDO_SILVER);
+    }
+
+    @Test
+    @DisplayName("Liberar lote deve excluir registros marcados como DESCARTADO na quarentena")
+    void deveExcluirRegistrosDescartadosAoLiberarLote() {
+        Long loteId = 7L;
+        FonteDado fonte = FonteDado.builder().id(1L).nome("CAR Teste").entidadeSilver("imovel_rural").build();
+        LoteIngestao lote = LoteIngestao.builder().id(loteId).fonteDado(fonte).status("RETIDO_QUARENTENA").build();
+
+        RegistroBruto regValido = RegistroBruto.builder().id(701L).loteIngestaoId(loteId).fonteDadoId(1L).payload("{\"cod_imovel\":\"PR-701\"}").build();
+        RegistroBruto regDescartado = RegistroBruto.builder().id(702L).loteIngestaoId(loteId).fonteDadoId(1L).payload("{\"cod_imovel\":\"PR-702\"}").build();
+
+        when(loteIngestaoRepository.findById(loteId)).thenReturn(Optional.of(lote));
+        when(registroBrutoRepository.findByLoteIngestaoIdOrderByIdAsc(loteId)).thenReturn(List.of(regValido, regDescartado));
+
+        // Simula que o registro 702L foi descartado na quarentena
+        when(jdbcTemplate.query(contains("DESCARTADO"), any(org.springframework.jdbc.core.RowMapper.class), eq(loteId)))
+                .thenReturn(List.of(702L));
+
+        RegistroAprovadoSilver aprValido = new RegistroAprovadoSilver(regValido, Map.of("cod_imovel", "PR-701"), null);
+        when(orquestradorValidacao.orquestrarLote(eq(1L), eq(List.of(regValido)), eq("cod_imovel")))
+                .thenReturn(new ResultadoOrquestracao(List.of(aprValido), List.of(), List.of(), 1, 1, 0, 0));
+
+        boolean sucesso = transicaoService.liberarLoteParaSilver(loteId, 10L);
+
+        assertThat(sucesso).isTrue();
+        // Apenas o registro válido (701L) é persistido na Silver, o 702L foi excluído
+        verify(persistidorSilverService).persistirAprovados(eq("imovel_rural"), eq(List.of(aprValido)));
     }
 }

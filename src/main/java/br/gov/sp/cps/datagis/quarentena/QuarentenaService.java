@@ -319,6 +319,19 @@ public class QuarentenaService {
 
         Long analistaId = request != null ? request.analistaId() : null;
         int rows = jdbcTemplate.update(sql, motivoDesc, analistaId, id);
+
+        if (rows > 0 && transicaoService != null) {
+            try {
+                String sqlLote = "SELECT lote_ingestao_id FROM QUARENTENA." + cfg.nomeTabela() + " WHERE id = ?";
+                List<Long> loteIds = jdbcTemplate.query(sqlLote, (rs, rowNum) -> rs.getLong(1), id);
+                if (!loteIds.isEmpty() && loteIds.get(0) != null) {
+                    transicaoService.verificarEAtualizarStatusLoteAposResolucao(loteIds.get(0), analistaId);
+                }
+            } catch (Exception e) {
+                log.debug("Aviso ao verificar status do lote após descarte: {}", e.getMessage());
+            }
+        }
+
         return rows > 0;
     }
 
