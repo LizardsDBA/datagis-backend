@@ -140,6 +140,12 @@ public class OrquestradorValidacao {
                 Object valorAnterior = snapshotAnterior != null ? snapshotAnterior.get(atributoDestino) : null;
 
                 ContextoValidacaoCampo contexto = mapCol.toContextoValidacao(valorAnterior);
+                if (contexto.tabelaReferencia() == null || contexto.tabelaReferencia().isBlank()) {
+                    String tabInferida = inferirTabelaReferenciaCanonico(atributoDestino);
+                    if (tabInferida != null) {
+                        contexto = contexto.toBuilder().tabelaReferencia(tabInferida).build();
+                    }
+                }
 
                 // Executa sempre a sanitização de entrada primeiro
                 ResultadoValidacao resSanitizacao = sanitizador.validar(valorBruto, contexto);
@@ -303,8 +309,24 @@ public class OrquestradorValidacao {
                 String atributoDestino = mapCol.getAtributoDestino();
                 Object valorBruto = extrairValor(payloadNode, reg, mapCol);
                 ContextoValidacaoCampo contexto = mapCol.toContextoValidacao(null);
+                if (contexto.tabelaReferencia() == null || contexto.tabelaReferencia().isBlank()) {
+                    String tabInferida = inferirTabelaReferenciaCanonico(atributoDestino);
+                    if (tabInferida != null) {
+                        contexto = contexto.toBuilder().tabelaReferencia(tabInferida).build();
+                    }
+                }
                 ResultadoValidacao resSanitizacao = sanitizador.validar(valorBruto, contexto);
                 Object valorFinal = resSanitizacao.valorTransformado() != null ? resSanitizacao.valorTransformado() : valorBruto;
+
+                for (ValidadorCampo validador : validadores) {
+                    if (validador == sanitizador) continue;
+                    if (validador.suporta(contexto)) {
+                        ResultadoValidacao resVal = validador.validar(valorFinal, contexto);
+                        if (resVal.valido() && resVal.valorTransformado() != null) {
+                            valorFinal = resVal.valorTransformado();
+                        }
+                    }
+                }
 
                 if ("GEOMETRIA".equalsIgnoreCase(mapCol.getDestinoTipo())) {
                     if (valorFinal != null) {
@@ -318,6 +340,38 @@ public class OrquestradorValidacao {
 
         String geomSegura = sanitizarGeometria(geometriaWktFinal);
         return new RegistroAprovadoSilver(reg, atributosTransformados, geomSegura);
+    }
+
+    /**
+     * Infere o nome canônico da tabela de referência a partir do nome do atributo de destino Silver.
+     * Permite validação automática de domínio mesmo quando tabelaReferencia não foi explicitamente informada.
+     */
+    public static String inferirTabelaReferenciaCanonico(String atributoDestino) {
+        if (atributoDestino == null || atributoDestino.isBlank()) {
+            return null;
+        }
+        String a = atributoDestino.trim().toLowerCase(java.util.Locale.ROOT);
+        return switch (a) {
+            case "situacao_imovel", "status_imovel" -> "situacao_imovel";
+            case "condicao_imovel", "condicao" -> "condicao_imovel";
+            case "tipo_imovel" -> "tipo_imovel";
+            case "municipio", "cod_municipio_ibge", "municipio_id" -> "municipio";
+            case "tipo_area_protegida" -> "tipo_area_protegida";
+            case "categoria_area_protegida", "categoria_uc" -> "categoria_area_protegida";
+            case "orgao" -> "orgao";
+            case "bioma", "bioma_predominante" -> "bioma";
+            case "tipo_auto_infracao" -> "tipo_auto_infracao";
+            case "tipo_infracao" -> "tipo_infracao";
+            case "tipo_pessoa" -> "tipo_pessoa";
+            case "status_auto_infracao" -> "status_auto_infracao";
+            case "classe_prodes", "classes_prodes" -> "classe_prodes";
+            case "satelite" -> "satelite";
+            case "sensor" -> "sensor";
+            case "tipo_area_embargo", "tipo_area_embrago" -> "tipo_area_embargo";
+            case "auto_infracao", "num_auto_infracao" -> "auto_infracao";
+            case "unidade_federativa", "uf" -> "unidade_federativa";
+            default -> null;
+        };
     }
 
     /**
