@@ -1,7 +1,11 @@
 package br.gov.sp.cps.datagis.ingestao;
 
+import br.gov.sp.cps.datagis.armazenamento.ArmazenamentoArquivoBruto;
 import br.gov.sp.cps.datagis.controle.FonteDado;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,17 +24,21 @@ import tools.jackson.databind.ObjectMapper;
  * (sem geometria), o que já é suportado (a coluna é opcional).
  *
  * <p>Não sabe nada sobre qual fonte é — funciona pra qualquer CSV que caiba nesse
- * formato (cabeçalho na primeira linha, uma linha por registro).
+ * formato (cabeçalho na primeira linha, uma linha por registro). O separador de campo
+ * vem de {@code fonte.separadorCsv} ("," | ";" | "|" | tab) — sem isso configurado,
+ * assume vírgula (era o único separador suportado antes desse campo existir).
  */
 @Service
 public class IngestaoCsvExecutor implements IngestaoExecutor {
 
     private static final String FORMATO = "CSV";
+    private static final String TIPO_UPLOAD_MANUAL = "UPLOAD_MANUAL";
 
     /** A cada N linhas convertidas, reporta progresso. */
     private static final int INTERVALO_PROGRESSO = 500;
 
     private final HttpFetchClient httpFetchClient;
+    private final ArmazenamentoArquivoBruto armazenamento;
     private final LoteIngestaoWriter writer;
     private final ObjectMapper objectMapper;
     private final ProgressoExecucaoRegistry progresso;
@@ -39,10 +47,12 @@ public class IngestaoCsvExecutor implements IngestaoExecutor {
 
     public IngestaoCsvExecutor(
             HttpFetchClient httpFetchClient,
+            ArmazenamentoArquivoBruto armazenamento,
             LoteIngestaoWriter writer,
             ObjectMapper objectMapper,
             ProgressoExecucaoRegistry progresso) {
         this.httpFetchClient = httpFetchClient;
+        this.armazenamento = armazenamento;
         this.writer = writer;
         this.objectMapper = objectMapper;
         this.progresso = progresso;
@@ -56,20 +66,21 @@ public class IngestaoCsvExecutor implements IngestaoExecutor {
     @Override
     public LoteIngestao executar(FonteDado fonte) {
         progresso.atualizar(fonte.getId(), FaseExecucao.BUSCANDO_DADOS, 0, null, null);
-        String corpoBruto = httpFetchClient.buscarCorpoBruto(fonte.getUrlOrigem());
+        String corpoBruto = obterCorpoBruto(fonte);
+        char separador = resolverSeparador(fonte.getSeparadorCsv());
         List<String> linhas = corpoBruto.lines().filter(linha -> !linha.isBlank()).toList();
         if (linhas.isEmpty()) {
             throw new IllegalStateException("CSV de \"" + fonte.getNome() + "\" veio vazio");
         }
 
-        List<String> cabecalho = dividirLinhaCsv(linhas.get(0));
+        List<String> cabecalho = dividirLinhaCsv(linhas.get(0), separador);
         int indiceLat = indiceDaColuna(cabecalho, fonte.getCampoGeometriaLat());
         int indiceLon = indiceDaColuna(cabecalho, fonte.getCampoGeometriaLon());
 
         long totalLinhas = linhas.size() - 1;
         List<RegistroPreparado> registros = new ArrayList<>();
         for (int i = 1; i < linhas.size(); i++) {
-            List<String> campos = dividirLinhaCsv(linhas.get(i));
+            List<String> campos = dividirLinhaCsv(linhas.get(i), separador);
 
             Map<String, String> registro = new LinkedHashMap<>();
             for (int c = 0; c < cabecalho.size() && c < campos.size(); c++) {
@@ -88,9 +99,45 @@ public class IngestaoCsvExecutor implements IngestaoExecutor {
         // Hash so das linhas de dado (sem o cabecalho — se um dia o CSV so reordenar
         // colunas mas o dado continuar igual, isso ainda contaria como "mudou", o que
         // e aceitavel; o que importa e nunca deixar de detectar mudanca de verdade).
-        String conteudoParaHash = String.join("\n", linhas.subList(1, linhas.size()));
+        //
+        // O separador entra no hash de proposito (achado testando, 2026-09-20): sem
+        // isso, corrigir o separadorCsv de uma fonte e reenviar o MESMO arquivo batia
+        // no hash antigo (calculado so dos bytes brutos, que nao mudam) e o lote virava
+        // SEM_MUDANCA - a correcao nao tinha efeito nenhum, o lote anterior (com tudo
+        // numa coluna so, por causa do separador errado) continuava sendo o vigente.
+        String conteudoParaHash = separador + "\n" + String.join("\n", linhas.subList(1, linhas.size()));
 
         return writer.gravar(fonte, conteudoParaHash, registros);
+    }
+
+    /**
+     * Fontes {@code UPLOAD_MANUAL} não têm {@code urlOrigem} — o conteúdo vem do
+     * arquivo que o usuário enviou (ver {@code IngestaoExecucaoService#executarComUpload}),
+     * lido de {@link ArmazenamentoArquivoBruto}. Sem esse desvio, o código caía direto
+     * no {@link HttpFetchClient}, que tenta rodar {@code curl} com URL nula e estoura
+     * {@code NullPointerException} — mesma causa raiz já resolvida no
+     * {@code IngestaoShapefileExecutor}, replicada aqui.
+     */
+    private String obterCorpoBruto(FonteDado fonte) {
+        if (TIPO_UPLOAD_MANUAL.equals(fonte.getTipoAquisicao())) {
+            if (fonte.getCaminhoArquivoUpload() == null) {
+                throw new IllegalStateException(
+                        "Fonte \"" + fonte.getNome() + "\" ainda não recebeu nenhum arquivo. "
+                                + "Envie o .csv pelo upload antes de executar.");
+            }
+            try (InputStream bruto = armazenamento.ler(fonte.getCaminhoArquivoUpload())) {
+                return new String(bruto.readAllBytes(), StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                throw new IllegalStateException(
+                        "Falha ao ler o arquivo enviado pra \"" + fonte.getNome() + "\"", e);
+            }
+        }
+        return httpFetchClient.buscarCorpoBruto(fonte.getUrlOrigem());
+    }
+
+    /** Fonte sem separador configurado (cadastrada antes do campo existir) cai em vírgula. */
+    private static char resolverSeparador(String separadorCsv) {
+        return (separadorCsv == null || separadorCsv.isEmpty()) ? ',' : separadorCsv.charAt(0);
     }
 
     private static int indiceDaColuna(List<String> cabecalho, String nomeColuna) {
@@ -122,13 +169,13 @@ public class IngestaoCsvExecutor implements IngestaoExecutor {
     }
 
     /**
-     * Divide uma linha CSV respeitando aspas (campo com vírgula dentro de aspas não
+     * Divide uma linha CSV respeitando aspas (campo com o separador dentro de aspas não
      * quebra) e aspas duplicadas escapadas ({@code ""} dentro de um campo). Não trata
      * campo com quebra de linha dentro de aspas — nenhuma fonte real que usamos tem
      * isso; se aparecer um dia, precisa trocar por leitura char-a-char do arquivo
      * inteiro em vez de linha por linha.
      */
-    private static List<String> dividirLinhaCsv(String linha) {
+    private static List<String> dividirLinhaCsv(String linha, char separador) {
         List<String> campos = new ArrayList<>();
         StringBuilder atual = new StringBuilder();
         boolean dentroDeAspas = false;
@@ -142,7 +189,7 @@ public class IngestaoCsvExecutor implements IngestaoExecutor {
                 } else {
                     dentroDeAspas = !dentroDeAspas;
                 }
-            } else if (c == ',' && !dentroDeAspas) {
+            } else if (c == separador && !dentroDeAspas) {
                 campos.add(atual.toString().trim());
                 atual.setLength(0);
             } else {
