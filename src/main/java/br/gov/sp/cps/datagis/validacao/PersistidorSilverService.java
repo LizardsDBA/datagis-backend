@@ -65,6 +65,11 @@ public class PersistidorSilverService {
     private final ConcurrentHashMap<String, Long> municipioCache = new ConcurrentHashMap<>();
     private volatile boolean municipiosCarregados = false;
 
+    /**
+     * Cache de categoria_area_protegida_id -> tipo_area_protegida_id.
+     */
+    private final ConcurrentHashMap<Long, Long> categoriaParaTipoCache = new ConcurrentHashMap<>();
+
     @Autowired
     public PersistidorSilverService(
             JdbcTemplate jdbcTemplate,
@@ -278,11 +283,17 @@ public class PersistidorSilverService {
         String codigoOrigem = extrairString(attrs, "codigo_origem", "cnuc", "terrai_cod", "id");
         String nome = extrairString(attrs, "nome", "nm_uc", "terrai_nom");
         Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "ICMBIO");
-        Long tipoAreaId = resolverIdReferencia("tipo_area_protegida", attrs.get("tipo_area_protegida"));
+        Long categoriaAreaId = resolverIdReferencia("categoria_area_protegida", attrs.get("categoria_area_protegida"));
+        Long tipoAreaId = null;
+        if (categoriaAreaId != null) {
+            tipoAreaId = resolverTipoDeCategoria(categoriaAreaId);
+        }
+        if (tipoAreaId == null) {
+            tipoAreaId = resolverIdReferencia("tipo_area_protegida", attrs.get("tipo_area_protegida"));
+        }
         if (tipoAreaId == null) {
             tipoAreaId = 1L;
         }
-        Long categoriaAreaId = resolverIdReferencia("categoria_area_protegida", attrs.get("categoria_area_protegida"));
         Long biomaId = resolverIdReferencia("bioma", attrs.get("bioma"));
         if (biomaId == null) {
             biomaId = resolverIdReferencia("bioma", attrs.get("bioma_predominante"));
@@ -1101,6 +1112,33 @@ public class PersistidorSilverService {
         return null;
     }
 
+    public void invalidarCache(String tabela) {
+        if (tabela == null || tabela.isBlank()) {
+            refCache.clear();
+            categoriaParaTipoCache.clear();
+            return;
+        }
+        String tab = ValidadorDominio.normalizarAliasTabela(tabela);
+        refCache.remove(tab);
+        if ("categoria_area_protegida".equals(tab) || "tipo_area_protegida".equals(tab)) {
+            categoriaParaTipoCache.clear();
+        }
+    }
+
+    public Long resolverTipoDeCategoria(Long categoriaId) {
+        if (categoriaId == null) return null;
+        return categoriaParaTipoCache.computeIfAbsent(categoriaId, cid -> {
+            try {
+                String sql = "SELECT tipo_area_protegida_id FROM " + silverSchema + ".categoria_area_protegida WHERE id = ?";
+                List<Long> ids = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getLong("tipo_area_protegida_id"), cid);
+                return ids.isEmpty() ? null : ids.get(0);
+            } catch (Exception e) {
+                log.debug("Aviso ao buscar tipo_area_protegida_id para categoria {}: {}", cid, e.getMessage());
+                return null;
+            }
+        });
+    }
+
     public Long resolverIdAutoInfracao(Object... valores) {
         for (Object v : valores) {
             if (v == null) continue;
@@ -1355,4 +1393,15 @@ public class PersistidorSilverService {
         }
         return null;
     }
+
+    /**
+     * Invalida todo o cache de tabelas de referência e de municípios.
+     */
+    public void invalidarTodoCache() {
+        refCache.clear();
+        categoriaParaTipoCache.clear();
+        municipioCache.clear();
+        municipiosCarregados = false;
+    }
 }
+

@@ -112,4 +112,23 @@ public class QuarentenaController {
         boolean sucesso = quarentenaService.descartarLote(loteId, motivo, analistaId);
         return sucesso ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
+
+    @PostMapping("/dominios")
+    public ResponseEntity<java.util.Map<String, Object>> adicionarValorDominio(
+            @RequestBody br.gov.sp.cps.datagis.validacao.NovoDominioRequest request) {
+        try {
+            java.util.Map<String, Object> resultado = quarentenaService.adicionarValorDominio(request);
+            return ResponseEntity.ok(resultado);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("erro", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(java.util.Map.of("erro", "Erro interno ao cadastrar domínio: " + e.getMessage()));
+        }
+    }
+
+    @GetMapping("/dominios/tipos-area-protegida")
+    public ResponseEntity<List<java.util.Map<String, Object>>> listarTiposAreaProtegida() {
+        return ResponseEntity.ok(quarentenaService.listarTiposAreaProtegida());
+    }
 }
+

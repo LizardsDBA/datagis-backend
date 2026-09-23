@@ -10,9 +10,15 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import br.gov.sp.cps.datagis.validacao.DominioService;
+import br.gov.sp.cps.datagis.validacao.NovoDominioRequest;
+import br.gov.sp.cps.datagis.validacao.OrquestradorValidacao;
 import br.gov.sp.cps.datagis.validacao.TransicaoBronzeSilverService;
+import br.gov.sp.cps.datagis.validacao.ValidadorDominio;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -24,8 +30,16 @@ public class QuarentenaService {
     private static final Logger log = LoggerFactory.getLogger(QuarentenaService.class);
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    private static final Pattern PATTERN_TABELA_REF =
+            Pattern.compile("tabela de referência [\"']?([a-zA-Z0-9_]+)[\"']?", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PATTERN_TIPO_AP =
+            Pattern.compile("[\"'](?:tipo_area_protegida|tipo_uc|tipo_area|modalidade)[\"']\\s*:\\s*[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PATTERN_CAT_AP =
+            Pattern.compile("[\"'](?:categoria_area_protegida|categoria|categoria_uc)[\"']\\s*:\\s*[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE);
+
     private final JdbcTemplate jdbcTemplate;
     private final TransicaoBronzeSilverService transicaoService;
+    private final DominioService dominioService;
 
     // Mapeamento das tabelas espelho da Quarentena e suas respectivas chaves naturais
     private static final Map<String, TabelaEspelhoConfig> TABELAS_ESPELHO = new LinkedHashMap<>();
@@ -43,14 +57,19 @@ public class QuarentenaService {
     public record TabelaEspelhoConfig(String nomeTabela, String expressaoChave) {}
 
     @Autowired
-    public QuarentenaService(JdbcTemplate jdbcTemplate, @Autowired(required = false) TransicaoBronzeSilverService transicaoService) {
+    public QuarentenaService(
+            JdbcTemplate jdbcTemplate,
+            @Autowired(required = false) TransicaoBronzeSilverService transicaoService,
+            @Autowired(required = false) DominioService dominioService) {
         this.jdbcTemplate = jdbcTemplate;
         this.transicaoService = transicaoService;
+        this.dominioService = dominioService;
     }
 
     public QuarentenaService(JdbcTemplate jdbcTemplate) {
-        this(jdbcTemplate, null);
+        this(jdbcTemplate, null, null);
     }
+
 
     public boolean liberarLote(Long loteId, Long analistaId) {
         if (transicaoService != null) {
@@ -404,6 +423,26 @@ public class QuarentenaService {
         return s;
     }
 
+    /**
+     * Adiciona um novo valor de domínio via DominioService.
+     */
+    public Map<String, Object> adicionarValorDominio(NovoDominioRequest request) {
+        if (dominioService != null) {
+            return dominioService.adicionarValorDominio(request);
+        }
+        throw new IllegalStateException("Serviço de Domínio não configurado.");
+    }
+
+    /**
+     * Lista os tipos de áreas protegidas cadastrados na Silver.
+     */
+    public List<Map<String, Object>> listarTiposAreaProtegida() {
+        if (dominioService != null) {
+            return dominioService.listarTiposAreaProtegida();
+        }
+        return Collections.emptyList();
+    }
+
     private ItemQuarentenaDto mapearItemDto(ResultSet rs) throws SQLException {
         LocalDateTime dtQuarentena = rs.getTimestamp("data_quarentena") != null
                 ? rs.getTimestamp("data_quarentena").toLocalDateTime()
@@ -424,24 +463,71 @@ public class QuarentenaService {
             } catch (Exception ignored) {}
         }
 
+        String tipoErro = rs.getString("tipo_erro_codigo");
+        String motivo = rs.getString("motivo_rejeicao");
+        String campoProb = rs.getString("campo_problema");
+        String valRecebido = rs.getString("valor_recebido");
+        String entidade = rs.getString("entidade");
+
+        String tabelaRef = null;
+        if ("VALOR_FORA_DO_DOMINIO".equalsIgnoreCase(tipoErro)) {
+            if (motivo != null) {
+                Matcher m = PATTERN_TABELA_REF.matcher(motivo);
+                if (m.find()) {
+                    tabelaRef = ValidadorDominio.normalizarAliasTabela(m.group(1));
+                }
+            }
+            if (tabelaRef == null && campoProb != null) {
+                tabelaRef = OrquestradorValidacao.inferirTabelaReferenciaCanonico(campoProb);
+                if (tabelaRef == null) {
+                    tabelaRef = ValidadorDominio.normalizarAliasTabela(campoProb);
+                }
+            }
+        }
+
+        String tipoAreaProtegida = null;
+        String categoriaAreaProtegida = null;
+        if ("area_protegida".equalsIgnoreCase(entidade)) {
+            if (payload != null) {
+                Matcher mTipo = PATTERN_TIPO_AP.matcher(payload);
+                if (mTipo.find()) {
+                    tipoAreaProtegida = mTipo.group(1);
+                }
+                Matcher mCat = PATTERN_CAT_AP.matcher(payload);
+                if (mCat.find()) {
+                    categoriaAreaProtegida = mCat.group(1);
+                }
+            }
+            if (tipoAreaProtegida == null && "tipo_area_protegida".equalsIgnoreCase(campoProb)) {
+                tipoAreaProtegida = valRecebido;
+            }
+            if (categoriaAreaProtegida == null && "categoria_area_protegida".equalsIgnoreCase(campoProb)) {
+                categoriaAreaProtegida = valRecebido;
+            }
+        }
+
         return new ItemQuarentenaDto(
                 rs.getLong("id"),
-                rs.getString("entidade"),
+                entidade,
                 rs.getString("chave_identificacao"),
                 rs.getLong("fonte_dado_id"),
                 rs.getString("fonte_dado_nome"),
                 rs.getLong("lote_ingestao_id"),
                 rs.getLong("registro_bruto_id"),
-                rs.getString("tipo_erro_codigo"),
+                tipoErro,
                 rs.getString("tipo_erro_descricao"),
-                rs.getString("campo_problema"),
-                rs.getString("valor_recebido"),
-                rs.getString("motivo_rejeicao"),
+                campoProb,
+                valRecebido,
+                motivo,
                 rs.getString("status_analise_codigo"),
                 rs.getString("status_analise_descricao"),
                 dtQuarentena != null ? dtQuarentena.format(ISO_FORMATTER) : null,
                 dtResolucao != null ? dtResolucao.format(ISO_FORMATTER) : null,
-                payload
+                payload,
+                tabelaRef,
+                tipoAreaProtegida,
+                categoriaAreaProtegida
         );
     }
 }
+

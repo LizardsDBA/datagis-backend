@@ -155,6 +155,10 @@ public class OrquestradorValidacao {
                                 .tabelaReferencia(null)
                                 .referenciaEntidadeSilver(refSilver)
                                 .build();
+                    } else if ("tipo_area_protegida".equals(tabNorm)) {
+                        contexto = contexto.toBuilder()
+                                .tabelaReferencia(null)
+                                .build();
                     }
                 }
 
@@ -349,6 +353,10 @@ public class OrquestradorValidacao {
                                 .tabelaReferencia(null)
                                 .referenciaEntidadeSilver(refSilver)
                                 .build();
+                    } else if ("tipo_area_protegida".equals(tabNorm)) {
+                        contexto = contexto.toBuilder()
+                                .tabelaReferencia(null)
+                                .build();
                     }
                 }
 
@@ -405,7 +413,6 @@ public class OrquestradorValidacao {
             case "situacao_imovel", "status_imovel" -> "situacao_imovel";
             case "condicao_imovel", "condicao" -> "condicao_imovel";
             case "tipo_imovel" -> "tipo_imovel";
-            case "tipo_area_protegida" -> "tipo_area_protegida";
             case "categoria_area_protegida", "categoria_uc" -> "categoria_area_protegida";
             case "orgao" -> "orgao";
             case "bioma", "bioma_predominante" -> "bioma";
