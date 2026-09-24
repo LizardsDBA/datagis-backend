@@ -2,6 +2,8 @@ package br.gov.sp.cps.datagis.quarentena;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -269,6 +271,61 @@ public class QuarentenaService {
                 porTipoErro,
                 porEntidade
         );
+    }
+
+    /**
+     * Retorna o diagnóstico de erros agregados na Quarentena com filtros opcionais de dataset e período.
+     */
+    public List<DiagnosticoErroDto> obterDiagnosticoPorErro(String dataset, LocalDate dataInicio, LocalDate dataFim) {
+        List<String> entidades = resolverEntidades(dataset);
+        if (entidades.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        Map<String, Long> contagemPorErro = new HashMap<>();
+
+        for (String ent : entidades) {
+            TabelaEspelhoConfig cfg = TABELAS_ESPELHO.get(ent);
+            if (cfg == null) continue;
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("SELECT te.codigo AS tipo_erro, COUNT(1) AS qtd ")
+              .append("FROM QUARENTENA.").append(cfg.nomeTabela()).append(" q ")
+              .append("LEFT JOIN QUARENTENA.tipo_erro_quarentena te ON te.id = q.tipo_erro_id ")
+              .append("WHERE 1=1 ");
+
+            List<Object> params = new ArrayList<>();
+            if (dataInicio != null) {
+                sb.append("AND q.data_quarentena >= ? ");
+                params.add(Timestamp.valueOf(dataInicio.atStartOfDay()));
+            }
+            if (dataFim != null) {
+                sb.append("AND q.data_quarentena < ? ");
+                params.add(Timestamp.valueOf(dataFim.plusDays(1).atStartOfDay()));
+            }
+
+            sb.append("GROUP BY te.codigo");
+
+            try {
+                List<Map<String, Object>> rows = jdbcTemplate.queryForList(sb.toString(), params.toArray());
+                for (Map<String, Object> r : rows) {
+                    String te = (String) r.get("tipo_erro");
+                    if (te == null || te.isBlank()) {
+                        te = "OUTROS";
+                    }
+                    long qtd = ((Number) r.get("qtd")).longValue();
+                    contagemPorErro.merge(te, qtd, Long::sum);
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao consultar diagnóstico na tabela {}: {}", cfg.nomeTabela(), e.getMessage());
+            }
+        }
+
+        return contagemPorErro.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed()
+                        .thenComparing(Map.Entry.comparingByKey()))
+                .map(entry -> new DiagnosticoErroDto(entry.getKey(), entry.getValue()))
+                .toList();
     }
 
     /**

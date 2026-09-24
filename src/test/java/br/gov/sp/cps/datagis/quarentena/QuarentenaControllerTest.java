@@ -161,4 +161,25 @@ class QuarentenaControllerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
         verify(quarentenaService).descartarLote(eq(100L), eq("Lote inconsistente"), eq(1L));
     }
+
+    @Test
+@DisplayName("Deve retornar diagnostico agrupado por erro")
+void deveRetornarDiagnostico() {
+    // 1. Prepara o cenário (Mock)
+    List<DiagnosticoErroDto> mockLista = List.of(
+        new DiagnosticoErroDto("GEOMETRIA_INVALIDA", 10L),
+        new DiagnosticoErroDto("CPF_CNPJ_INVALIDO", 5L)
+    );
+    // Diz ao serviço falso para retornar nossa lista simulada
+    when(quarentenaService.obterDiagnosticoPorErro(any(), any(), any())).thenReturn(mockLista);
+
+    // 2. Executa a ação chamando o método do controller
+    ResponseEntity<List<DiagnosticoErroDto>> response = controller.obterDiagnostico(null, null, null);
+
+    // 3. Verifica os resultados (Asserts)
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    assertThat(response.getBody()).hasSize(2);
+    assertThat(response.getBody().get(0).tipoErro()).isEqualTo("GEOMETRIA_INVALIDA");
+    assertThat(response.getBody().get(0).quantidade()).isEqualTo(10L);
+}
 }

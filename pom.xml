@@ -168,6 +168,19 @@
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<!--
+						Garante que o JVM forkado pelo Surefire usa o mesmo Java que
+						executa o Maven (${java.home}). Sem isso, com JDK 17 e JDK 21
+						ambos instalados, o fork pode pegar o Java 17 do PATH do sistema
+						e falhar com NoClassDefFoundError nas classes compiladas para 21.
+					-->
+					<jvm>${java.home}/bin/java</jvm>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
 				<configuration>
 					<annotationProcessorPaths>
@@ -180,6 +193,7 @@
 				</configuration>
 			</plugin>
 		</plugins>
+
 	</build>
 
 	<!-- Necessario para resolver os artefatos org.geotools:* (nao estao no Maven Central). -->
