@@ -374,9 +374,12 @@ public class QuarentenaService {
 
     /**
      * Registra que o item foi corrigido e promove-o para a camada Silver.
+     * <p>
+     * Se houver falha de validação, uma IllegalArgumentException é lançada e não deve
+     * marcar a transação como rollback-only prematuramente.
      */
-    @Transactional
-    public boolean marcarCorrigido(String entidade, Long id, AcaoQuarentenaRequest request) {
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
+    public ResultadoRevalidacaoQuarentena marcarCorrigido(String entidade, Long id, AcaoQuarentenaRequest request) {
         if (transicaoService != null) {
             return transicaoService.promoverRegistroQuarentenaParaSilver(entidade, id, request);
         }
@@ -393,14 +396,18 @@ public class QuarentenaService {
                      "data_resolucao = SYSTIMESTAMP " +
                      "WHERE id = ?";
 
-        return jdbcTemplate.update(sql, analistaId, id) > 0;
+        int rows = jdbcTemplate.update(sql, analistaId, id);
+        if (rows > 0) {
+            return ResultadoRevalidacaoQuarentena.individual(id, List.of());
+        }
+        return null;
     }
 
     /**
      * Sobrecarga para compatibilidade com chamadas legadas passando apenas analistaId.
      */
-    @Transactional
-    public boolean marcarCorrigido(String entidade, Long id, Long analistaId) {
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
+    public ResultadoRevalidacaoQuarentena marcarCorrigido(String entidade, Long id, Long analistaId) {
         return marcarCorrigido(entidade, id, new AcaoQuarentenaRequest(null, null, analistaId));
     }
 

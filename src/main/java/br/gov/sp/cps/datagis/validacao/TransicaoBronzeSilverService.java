@@ -7,15 +7,18 @@ import br.gov.sp.cps.datagis.controle.FonteDadoRepository;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
 import br.gov.sp.cps.datagis.controle.LoteIngestaoRepository;
 import br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest;
+import br.gov.sp.cps.datagis.quarentena.ResultadoRevalidacaoQuarentena;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -52,6 +55,29 @@ public class TransicaoBronzeSilverService {
     private final PersistidorQuarentenaService persistidorQuarentenaService;
     private final JdbcTemplate jdbcTemplate;
     private final String quarentenaSchema;
+    private final String bronzeSchema;
+
+    @Autowired
+    public TransicaoBronzeSilverService(
+            LoteIngestaoRepository loteIngestaoRepository,
+            FonteDadoRepository fonteDadoRepository,
+            RegistroBrutoRepository registroBrutoRepository,
+            OrquestradorValidacao orquestradorValidacao,
+            PersistidorSilverService persistidorSilverService,
+            PersistidorQuarentenaService persistidorQuarentenaService,
+            JdbcTemplate jdbcTemplate,
+            @Value("${spring.flyway.placeholders.quarentenaSchema:QUARENTENA}") String quarentenaSchema,
+            @Value("${spring.flyway.placeholders.bronzeSchema:BRONZE}") String bronzeSchema) {
+        this.loteIngestaoRepository = loteIngestaoRepository;
+        this.fonteDadoRepository = fonteDadoRepository;
+        this.registroBrutoRepository = registroBrutoRepository;
+        this.orquestradorValidacao = orquestradorValidacao;
+        this.persistidorSilverService = persistidorSilverService;
+        this.persistidorQuarentenaService = persistidorQuarentenaService;
+        this.jdbcTemplate = jdbcTemplate;
+        this.quarentenaSchema = (quarentenaSchema != null && !quarentenaSchema.isBlank()) ? quarentenaSchema.trim() : "QUARENTENA";
+        this.bronzeSchema = (bronzeSchema != null && !bronzeSchema.isBlank()) ? bronzeSchema.trim() : "BRONZE";
+    }
 
     public TransicaoBronzeSilverService(
             LoteIngestaoRepository loteIngestaoRepository,
@@ -61,15 +87,10 @@ public class TransicaoBronzeSilverService {
             PersistidorSilverService persistidorSilverService,
             PersistidorQuarentenaService persistidorQuarentenaService,
             JdbcTemplate jdbcTemplate,
-            @Value("${spring.flyway.placeholders.quarentenaSchema:QUARENTENA}") String quarentenaSchema) {
-        this.loteIngestaoRepository = loteIngestaoRepository;
-        this.fonteDadoRepository = fonteDadoRepository;
-        this.registroBrutoRepository = registroBrutoRepository;
-        this.orquestradorValidacao = orquestradorValidacao;
-        this.persistidorSilverService = persistidorSilverService;
-        this.persistidorQuarentenaService = persistidorQuarentenaService;
-        this.jdbcTemplate = jdbcTemplate;
-        this.quarentenaSchema = (quarentenaSchema != null && !quarentenaSchema.isBlank()) ? quarentenaSchema.trim() : "QUARENTENA";
+            String quarentenaSchema) {
+        this(loteIngestaoRepository, fonteDadoRepository, registroBrutoRepository,
+             orquestradorValidacao, persistidorSilverService, persistidorQuarentenaService,
+             jdbcTemplate, quarentenaSchema, "BRONZE");
     }
 
     /**
@@ -249,29 +270,38 @@ public class TransicaoBronzeSilverService {
     /**
      * Revalida e aprova um registro individual retido na Quarentena.
      * <p>
-     * <b>Regra Atômica por Lote:</b> O registro corrigido <b>NÃO</b> é persistido individualmente
-     * na camada Silver. Ele é salvo no Bronze e Quarentena (status {@code CORRIGIDO_REPROCESSADO})
-     * e aguarda a liberação conjunta do lote. Quando todos os registros da quarentena daquele lote
-     * forem concluídos (0 pendentes), o lote inteiro é liberado de forma atômica para a Silver.
+     * Se o registro possuir pendência de {@code VALOR_FORA_DO_DOMINIO} e for validado com sucesso,
+     * uma tentativa coletiva de revalidação e promoção em cascata é disparada para todos os outros
+     * registros da quarentena retidos pelo mesmo tipo de erro de domínio.
+     * <p>
+     * Caso o registro inspecionado NÃO passe na validação, uma {@link IllegalArgumentException} é lançada
+     * e NENHUM outro registro é alterado.
+     * <p>
+     * <b>Regra Atômica por Lote:</b> Os registros corrigidos NÃO são persistidos individualmente
+     * na camada Silver. Permanecem no Bronze e Quarentena (status {@code CORRIGIDO_REPROCESSADO})
+     * e aguardam a liberação conjunta de seus respectivos lotes.
      */
-    @Transactional
-    public boolean promoverRegistroQuarentenaParaSilver(String entidade, Long quarentenaId, AcaoQuarentenaRequest request) {
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
+    public ResultadoRevalidacaoQuarentena promoverRegistroQuarentenaParaSilver(String entidade, Long quarentenaId, AcaoQuarentenaRequest request) {
         if (quarentenaId == null) {
-            return false;
+            return null;
         }
 
         String entSilver = normalizarEntidadeSilver(entidade);
         String tabEspelho = "q_" + entSilver;
 
-        // 1. Carrega o registro da tabela espelho de quarentena
+        // 1. Carrega o registro da tabela espelho de quarentena com o código do erro
         String sql = "SELECT q.id, q.fonte_dado_id, q.lote_ingestao_id, q.registro_bruto_id, " +
-                     "q.geometria_wkt, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original " +
-                     "FROM " + quarentenaSchema + "." + tabEspelho + " q WHERE q.id = ?";
+                     "q.geometria_wkt, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original, " +
+                     "te.codigo AS tipo_erro_codigo " +
+                     "FROM " + quarentenaSchema + "." + tabEspelho + " q " +
+                     "LEFT JOIN " + quarentenaSchema + ".tipo_erro_quarentena te ON te.id = q.tipo_erro_id " +
+                     "WHERE q.id = ?";
 
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, quarentenaId);
         if (rows.isEmpty()) {
             log.warn("Registro de quarentena {} não encontrado na tabela {}.{}", quarentenaId, quarentenaSchema, tabEspelho);
-            return false;
+            return null;
         }
 
         Map<String, Object> row = rows.get(0);
@@ -280,47 +310,37 @@ public class TransicaoBronzeSilverService {
         Long regBrutoId = row.get("registro_bruto_id") != null ? ((Number) row.get("registro_bruto_id")).longValue() : null;
         String geomWkt = row.get("geometria_wkt") != null ? row.get("geometria_wkt").toString() : null;
         String payloadOriginal = row.get("payload_original") != null ? row.get("payload_original").toString() : null;
+        String tipoErroCodigo = row.get("tipo_erro_codigo") != null ? row.get("tipo_erro_codigo").toString() : null;
 
         // 2. Determina o payload efetivo (se o operador editou no modal, usa o corrigido)
         String payloadEfetivo = (request != null && request.payloadCorrigido() != null && !request.payloadCorrigido().trim().isBlank())
                 ? request.payloadCorrigido().trim()
                 : payloadOriginal;
 
-        // Se corrigido, atualiza a quarentena com o novo payload
-        if (request != null && request.payloadCorrigido() != null && !request.payloadCorrigido().trim().isBlank()) {
-            try {
-                jdbcTemplate.update(
-                        "UPDATE " + quarentenaSchema + "." + tabEspelho + " SET payload_original = ? WHERE id = ?",
-                        payloadEfetivo, quarentenaId
-                );
-            } catch (Exception e) {
-                log.debug("Aviso ao atualizar payload na quarentena {}.{}: {}", quarentenaSchema, tabEspelho, e.getMessage());
-            }
-        }
-
-        // 3. Atualiza ou instancia o RegistroBruto
+        // 3. Monta o RegistroBruto em memória para validação (sem alterar banco ainda)
         RegistroBruto reg = null;
-        if (regBrutoId != null) {
+        if (regBrutoId != null && regBrutoId > 0) {
             reg = registroBrutoRepository.findById(regBrutoId).orElse(null);
-            if (reg != null) {
-                if (payloadEfetivo != null && !payloadEfetivo.equals(reg.getPayload())) {
-                    reg.setPayload(payloadEfetivo);
-                    registroBrutoRepository.save(reg);
-                }
-                if (geomWkt != null && (reg.getGeometriaWkt() == null || reg.getGeometriaWkt().isBlank())) {
-                    reg.setGeometriaWkt(geomWkt);
-                }
-            }
         }
-
         if (reg == null) {
-            reg = new RegistroBruto();
-            reg.setId(regBrutoId != null ? regBrutoId : quarentenaId);
-            reg.setFonteDadoId(fonteDadoId != null ? fonteDadoId : 1L);
-            reg.setLoteIngestaoId(loteIngestaoId != null ? loteIngestaoId : 1L);
-            reg.setPayload(payloadEfetivo);
-            reg.setGeometriaWkt(geomWkt);
-            registroBrutoRepository.save(reg);
+            reg = RegistroBruto.builder()
+                    .id(regBrutoId)
+                    .fonteDadoId(fonteDadoId != null ? fonteDadoId : 1L)
+                    .loteIngestaoId(loteIngestaoId != null ? loteIngestaoId : 1L)
+                    .payload(payloadEfetivo)
+                    .geometriaWkt(geomWkt)
+                    .build();
+        } else {
+            // Cria cópia desanexada para validação, evitando dirty-checking acidental da sessão Hibernate
+            reg = RegistroBruto.builder()
+                    .id(reg.getId())
+                    .fonteDadoId(reg.getFonteDadoId())
+                    .loteIngestaoId(reg.getLoteIngestaoId())
+                    .payload(payloadEfetivo)
+                    .geometriaWkt((geomWkt != null && !geomWkt.isBlank()) ? geomWkt : reg.getGeometriaWkt())
+                    .hashRegistro(reg.getHashRegistro())
+                    .dataIngestao(reg.getDataIngestao())
+                    .build();
         }
 
         // 4. Valida o registro individualmente contra a esteira de regras
@@ -335,7 +355,32 @@ public class TransicaoBronzeSilverService {
             }
         }
 
-        // 5. Atualiza o status do registro na Quarentena para CORRIGIDO_REPROCESSADO
+        // 5. REGISTRO APROVADO! Agora sim aplicamos as alterações de banco para o item inspecionado
+        // Se corrigido, atualiza a quarentena com o novo payload
+        if (request != null && request.payloadCorrigido() != null && !request.payloadCorrigido().trim().isBlank()) {
+            try {
+                jdbcTemplate.update(
+                        "UPDATE " + quarentenaSchema + "." + tabEspelho + " SET payload_original = ? WHERE id = ?",
+                        payloadEfetivo, quarentenaId
+                );
+            } catch (Exception e) {
+                log.debug("Aviso ao atualizar payload na quarentena {}.{}: {}", quarentenaSchema, tabEspelho, e.getMessage());
+            }
+        }
+
+        // Atualiza o payload no RegistroBruto via JDBC (evita conflitos de versão JPA e rollback de sessão)
+        if (regBrutoId != null && regBrutoId > 0) {
+            try {
+                jdbcTemplate.update(
+                        "UPDATE " + bronzeSchema + ".registro_bruto SET payload = ? WHERE id = ?",
+                        payloadEfetivo, regBrutoId
+                );
+            } catch (Exception e) {
+                log.warn("Falha ao atualizar payload no registro_bruto {}: {}", regBrutoId, e.getMessage());
+            }
+        }
+
+        // Atualiza o status do registro na Quarentena para CORRIGIDO_REPROCESSADO
         Long analistaId = request != null ? request.analistaId() : null;
         String sqlUpdateStatus = "UPDATE " + quarentenaSchema + "." + tabEspelho +
                 " SET status_analise_id = (SELECT id FROM " + quarentenaSchema + ".status_analise_quarentena WHERE codigo = 'CORRIGIDO_REPROCESSADO'), " +
@@ -343,18 +388,115 @@ public class TransicaoBronzeSilverService {
                 " WHERE id = ?";
         jdbcTemplate.update(sqlUpdateStatus, analistaId, quarentenaId);
 
-        // 6. REGRA ALL-OR-NOTHING: O registro NÃO vai sozinho para a Silver!
-        // Não chamamos persistirAprovados aqui de forma avulsa. O registro permanece em quarentena/bronze.
-        log.info("Registro de quarentena {} ({}) revalidado com sucesso. Aguardando liberação do lote {}.",
-                quarentenaId, tabEspelho, loteIngestaoId);
+        log.info("Registro de quarentena {} ({}) revalidado com sucesso.", quarentenaId, tabEspelho);
 
-        // 7. Se pertencer a um lote, verifica se todas as pendências foram concluídas.
-        // Se todas as pendências da quarentena forem resolvidas, o lote completo é liberado para a Silver.
+        Set<Long> lotesAfetados = new LinkedHashSet<>();
         if (loteIngestaoId != null) {
-            verificarEAtualizarStatusLoteAposResolucao(loteIngestaoId, analistaId);
+            lotesAfetados.add(loteIngestaoId);
         }
 
-        return true;
+        // 6. REAVALIAÇÃO EM CASCATA: Se o erro original era VALOR_FORA_DO_DOMINIO, tenta revalidar os outros
+        int totalColetivoAprovados = 0;
+        int totalColetivoMantidos = 0;
+        if ("VALOR_FORA_DO_DOMINIO".equalsIgnoreCase(tipoErroCodigo)) {
+            int[] resultadoColetivo = reavaliarOutrosRegistrosQuarentenaPorDominio(quarentenaId, analistaId, lotesAfetados);
+            totalColetivoAprovados = resultadoColetivo[0];
+            totalColetivoMantidos = resultadoColetivo[1];
+        }
+
+        // 7. REGRA ALL-OR-NOTHING: Para cada lote afetado, verifica se todas as pendências foram concluídas
+        List<Long> lotesLiberados = new ArrayList<>();
+        for (Long loteId : lotesAfetados) {
+            boolean liberado = verificarEAtualizarStatusLoteAposResolucao(loteId, analistaId);
+            if (liberado) {
+                lotesLiberados.add(loteId);
+            }
+        }
+
+        return ResultadoRevalidacaoQuarentena.coletivo(quarentenaId, totalColetivoAprovados, totalColetivoMantidos, lotesLiberados);
+    }
+
+    /**
+     * Reavalia todos os outros registros retidos na Quarentena com o erro VALOR_FORA_DO_DOMINIO.
+     * Registros que passarem na validação são promovidos a CORRIGIDO_REPROCESSADO.
+     * Registros que ainda falharem permanecem retidos silenciosamente na Quarentena.
+     *
+     * @param quarentenaIdIgnorar ID do registro original que já foi processado
+     * @param analistaId ID do analista responsável
+     * @param lotesAfetados conjunto onde serão adicionados os IDs dos lotes com registros aprovados
+     * @return array com [totalAprovados, totalMantidos]
+     */
+    private int[] reavaliarOutrosRegistrosQuarentenaPorDominio(Long quarentenaIdIgnorar, Long analistaId, Set<Long> lotesAfetados) {
+        int aprovados = 0;
+        int mantidos = 0;
+        String[] tabelas = {
+            "q_imovel_rural", "q_area_protegida", "q_auto_infracao",
+            "q_embargo_ambiental", "q_desmatamento", "q_foco_calor", "q_municipio"
+        };
+
+        for (String tab : tabelas) {
+            try {
+                String sql = "SELECT q.id, q.fonte_dado_id, q.lote_ingestao_id, q.registro_bruto_id, " +
+                             "q.geometria_wkt, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original " +
+                             "FROM " + quarentenaSchema + "." + tab + " q " +
+                             "JOIN " + quarentenaSchema + ".status_analise_quarentena sa ON sa.id = q.status_analise_id " +
+                             "JOIN " + quarentenaSchema + ".tipo_erro_quarentena te ON te.id = q.tipo_erro_id " +
+                             "WHERE sa.codigo IN ('PENDENTE', 'EM_ANALISE') " +
+                             "  AND te.codigo = 'VALOR_FORA_DO_DOMINIO' " +
+                             "  AND q.id != ?";
+
+                List<Map<String, Object>> candidatos = jdbcTemplate.queryForList(sql, quarentenaIdIgnorar != null ? quarentenaIdIgnorar : -1L);
+                if (candidatos == null || candidatos.isEmpty()) {
+                    continue;
+                }
+
+                for (Map<String, Object> c : candidatos) {
+                    try {
+                        Long cId = ((Number) c.get("id")).longValue();
+                        Long cFonteDadoId = c.get("fonte_dado_id") != null ? ((Number) c.get("fonte_dado_id")).longValue() : null;
+                        Long cLoteId = c.get("lote_ingestao_id") != null ? ((Number) c.get("lote_ingestao_id")).longValue() : null;
+                        Long cRegBrutoId = c.get("registro_bruto_id") != null ? ((Number) c.get("registro_bruto_id")).longValue() : null;
+                        String cGeomWkt = c.get("geometria_wkt") != null ? c.get("geometria_wkt").toString() : null;
+                        String cPayload = c.get("payload_original") != null ? c.get("payload_original").toString() : null;
+
+                        RegistroBruto cReg = RegistroBruto.builder()
+                                .id(cRegBrutoId)
+                                .fonteDadoId(cFonteDadoId != null ? cFonteDadoId : 1L)
+                                .loteIngestaoId(cLoteId != null ? cLoteId : 1L)
+                                .payload(cPayload)
+                                .geometriaWkt(cGeomWkt)
+                                .build();
+
+                        boolean valido = false;
+                        if (orquestradorValidacao != null) {
+                            var resVal = orquestradorValidacao.validarRegistroIndividual(cFonteDadoId, cReg);
+                            valido = (resVal != null && resVal.valido());
+                        }
+
+                        if (valido) {
+                            String sqlUpd = "UPDATE " + quarentenaSchema + "." + tab +
+                                    " SET status_analise_id = (SELECT id FROM " + quarentenaSchema + ".status_analise_quarentena WHERE codigo = 'CORRIGIDO_REPROCESSADO'), " +
+                                    " analista_responsavel_id = ?, data_resolucao = SYSTIMESTAMP " +
+                                    " WHERE id = ?";
+                            jdbcTemplate.update(sqlUpd, analistaId, cId);
+
+                            if (cLoteId != null) {
+                                lotesAfetados.add(cLoteId);
+                            }
+                            aprovados++;
+                        } else {
+                            mantidos++;
+                        }
+                    } catch (Exception exItem) {
+                        log.warn("Aviso ao reavaliar registro coletivo em {}: {}", tab, exItem.getMessage());
+                        mantidos++;
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Aviso ao consultar candidatos para reavaliação coletiva em {}.{}: {}", quarentenaSchema, tab, e.getMessage());
+            }
+        }
+        return new int[]{aprovados, mantidos};
     }
 
     /**
@@ -444,12 +586,14 @@ public class TransicaoBronzeSilverService {
                 Long regId = ((Number) r.get("registro_bruto_id")).longValue();
                 String payload = r.get("payload_original") != null ? r.get("payload_original").toString() : null;
                 if (payload != null && !payload.isBlank()) {
-                    registroBrutoRepository.findById(regId).ifPresent(reg -> {
-                        if (!payload.equals(reg.getPayload())) {
-                            reg.setPayload(payload);
-                            registroBrutoRepository.save(reg);
-                        }
-                    });
+                    try {
+                        jdbcTemplate.update(
+                                "UPDATE " + bronzeSchema + ".registro_bruto SET payload = ? WHERE id = ?",
+                                payload, regId
+                        );
+                    } catch (Exception ex) {
+                        log.debug("Aviso ao sincronizar payload no registro_bruto {}: {}", regId, ex.getMessage());
+                    }
                 }
             }
         } catch (Exception e) {

@@ -1,6 +1,7 @@
 package br.gov.sp.cps.datagis.quarentena;
 
 import java.util.List;
+import java.util.Map;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -86,12 +87,19 @@ public class QuarentenaController {
     }
 
     @PostMapping("/{entidade}/{id}/reprocessar")
-    public ResponseEntity<Void> reprocessar(
+    public ResponseEntity<?> reprocessar(
             @PathVariable String entidade,
             @PathVariable Long id,
             @RequestBody(required = false) AcaoQuarentenaRequest request) {
-        boolean sucesso = quarentenaService.marcarCorrigido(entidade, id, request);
-        return sucesso ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+        try {
+            ResultadoRevalidacaoQuarentena resultado = quarentenaService.marcarCorrigido(entidade, id, request);
+            if (resultado == null || !resultado.sucesso()) {
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.ok(resultado);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("erro", e.getMessage()));
+        }
     }
 
     @PostMapping("/lotes/{loteId}/liberar")

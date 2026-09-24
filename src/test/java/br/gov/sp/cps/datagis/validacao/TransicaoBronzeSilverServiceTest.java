@@ -1,6 +1,7 @@
 package br.gov.sp.cps.datagis.validacao;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -18,6 +19,7 @@ import br.gov.sp.cps.datagis.controle.FonteDado;
 import br.gov.sp.cps.datagis.controle.FonteDadoRepository;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
 import br.gov.sp.cps.datagis.controle.LoteIngestaoRepository;
+import br.gov.sp.cps.datagis.quarentena.ResultadoRevalidacaoQuarentena;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
@@ -248,15 +250,15 @@ class TransicaoBronzeSilverServiceTest {
         br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
                 new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest("Corrigido", "{\"cod_imovel\":\"PR-99-OK\"}", 7L);
 
-        boolean sucesso = transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req);
+        ResultadoRevalidacaoQuarentena resultado = transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req);
 
-        assertThat(sucesso).isTrue();
+        assertThat(resultado.sucesso()).isTrue();
         // REGRA ATÔMICA: NÃO deve persistir avulso na Silver
         verify(persistidorSilverService, never()).persistirAprovados(anyString(), anyList());
         // Deve atualizar status do registro na quarentena para CORRIGIDO_REPROCESSADO
         verify(jdbcTemplate).update(contains("status_analise_id"), eq(7L), eq(quarentenaId));
-        // Deve atualizar o payload no registro bruto
-        verify(registroBrutoRepository).save(any(RegistroBruto.class));
+        // Deve atualizar o payload no registro bruto via JDBC
+        verify(jdbcTemplate).update(contains("UPDATE BRONZE.registro_bruto"), eq("{\"cod_imovel\":\"PR-99-OK\"}"), eq(regBrutoId));
     }
 
     @Test
@@ -296,9 +298,9 @@ class TransicaoBronzeSilverServiceTest {
         br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
                 new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest("Corrigido", "{\"cod_imovel\":\"PR-99-OK\"}", 7L);
 
-        boolean sucesso = transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req);
+        ResultadoRevalidacaoQuarentena resultado = transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req);
 
-        assertThat(sucesso).isTrue();
+        assertThat(resultado.sucesso()).isTrue();
         // Lote inteiro liberado: agora sim os registros do lote sobem para a Silver!
         verify(persistidorSilverService).persistirAprovados(eq("imovel_rural"), eq(List.of(apr)));
         assertThat(lote.getStatus()).isEqualTo(TransicaoBronzeSilverService.STATUS_PROMOVIDO_SILVER);
@@ -330,5 +332,94 @@ class TransicaoBronzeSilverServiceTest {
         assertThat(sucesso).isTrue();
         // Apenas o registro válido (701L) é persistido na Silver, o 702L foi excluído
         verify(persistidorSilverService).persistirAprovados(eq("imovel_rural"), eq(List.of(aprValido)));
+    }
+
+    @Test
+    @DisplayName("Quando registro com erro de domínio é aprovado, deve reavaliar e promover outros registros de domínio da quarentena")
+    void quandoRegistroComErroDominioForAprovado_deveTentarPromoverOutrosRegistrosQuarentenaComMesmoErro() {
+        Long quarentenaId = 10L;
+        Long loteId = 5L;
+        Long regBrutoId = 501L;
+
+        // Registro inspecionado com erro VALOR_FORA_DO_DOMINIO
+        Map<String, Object> rowInspecionado = Map.of(
+                "id", quarentenaId,
+                "fonte_dado_id", 1L,
+                "lote_ingestao_id", loteId,
+                "registro_bruto_id", regBrutoId,
+                "payload_original", "{\"cod_imovel\":\"PR-DOM-1\"}",
+                "tipo_erro_codigo", "VALOR_FORA_DO_DOMINIO"
+        );
+        when(jdbcTemplate.queryForList(contains("WHERE q.id = ?"), eq(quarentenaId)))
+                .thenReturn(List.of(rowInspecionado));
+
+        RegistroBruto regInspecionado = RegistroBruto.builder().id(regBrutoId).loteIngestaoId(loteId).fonteDadoId(1L).payload("{\"cod_imovel\":\"PR-DOM-1\"}").build();
+        when(registroBrutoRepository.findById(regBrutoId)).thenReturn(Optional.of(regInspecionado));
+
+        RegistroAprovadoSilver aprInspecionado = new RegistroAprovadoSilver(regInspecionado, Map.of("cod_imovel", "PR-DOM-1"), null);
+        when(orquestradorValidacao.validarRegistroIndividual(eq(1L), any(RegistroBruto.class)))
+                .thenReturn(new OrquestradorValidacao.ResultadoValidacaoRegistro(true, aprInspecionado, null));
+
+        // Simula outro registro candidato com erro VALOR_FORA_DO_DOMINIO retido em q_imovel_rural
+        Map<String, Object> candidato = Map.of(
+                "id", 20L,
+                "fonte_dado_id", 1L,
+                "lote_ingestao_id", loteId,
+                "registro_bruto_id", 502L,
+                "payload_original", "{\"cod_imovel\":\"PR-DOM-2\"}"
+        );
+        when(jdbcTemplate.queryForList(contains("VALOR_FORA_DO_DOMINIO"), eq(quarentenaId)))
+                .thenReturn(List.of(candidato), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+
+        when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), eq(loteId))).thenReturn(1L);
+
+        br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
+                new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest("Revalidado", null, 99L);
+
+        ResultadoRevalidacaoQuarentena resultado =
+                transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req);
+
+        assertThat(resultado.sucesso()).isTrue();
+        assertThat(resultado.totalColetivoAprovados()).isEqualTo(1);
+        // Atualizou o status do registro inspecionado (id 10)
+        verify(jdbcTemplate).update(contains("status_analise_id"), eq(99L), eq(quarentenaId));
+        // E também atualizou o status do outro registro de domínio (id 20)
+        verify(jdbcTemplate).update(contains("status_analise_id"), eq(99L), eq(20L));
+    }
+
+    @Test
+    @DisplayName("Quando registro inicial falhar na validação, lança exceção e NÃO tenta revalidar os outros")
+    void quandoRegistroComErroDominioFalhar_naoDeveTentarPromoverOutrosRegistros() {
+        Long quarentenaId = 11L;
+        Long loteId = 5L;
+        Long regBrutoId = 503L;
+
+        Map<String, Object> rowInspecionado = Map.of(
+                "id", quarentenaId,
+                "fonte_dado_id", 1L,
+                "lote_ingestao_id", loteId,
+                "registro_bruto_id", regBrutoId,
+                "payload_original", "{\"cod_imovel\":\"PR-DOM-FAIL\"}",
+                "tipo_erro_codigo", "VALOR_FORA_DO_DOMINIO"
+        );
+        when(jdbcTemplate.queryForList(contains("WHERE q.id = ?"), eq(quarentenaId)))
+                .thenReturn(List.of(rowInspecionado));
+
+        RegistroBruto reg = RegistroBruto.builder().id(regBrutoId).loteIngestaoId(loteId).fonteDadoId(1L).payload("{\"cod_imovel\":\"PR-DOM-FAIL\"}").build();
+        when(registroBrutoRepository.findById(regBrutoId)).thenReturn(Optional.of(reg));
+
+        RegistroRejeitadoQuarentena rej = new RegistroRejeitadoQuarentena(reg, "VALOR_FORA_DO_DOMINIO", "tipo_imovel", "INVALIDO", "Valor ainda não existe no domínio");
+        when(orquestradorValidacao.validarRegistroIndividual(eq(1L), any(RegistroBruto.class)))
+                .thenReturn(new OrquestradorValidacao.ResultadoValidacaoRegistro(false, null, rej));
+
+        br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
+                new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest("Revalidado", null, 99L);
+
+        assertThrows(IllegalArgumentException.class, () ->
+                transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req)
+        );
+
+        // NENHUM update de status deve ter sido executado
+        verify(jdbcTemplate, never()).update(contains("status_analise_id"), any(), any());
     }
 }

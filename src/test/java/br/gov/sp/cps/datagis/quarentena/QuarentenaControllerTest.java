@@ -108,13 +108,34 @@ class QuarentenaControllerTest {
     @Test
     @DisplayName("Deve reprocessar item corrigido")
     void deveReprocessarItem() {
-        when(quarentenaService.marcarCorrigido(eq("imovel_rural"), eq(1L), any(AcaoQuarentenaRequest.class))).thenReturn(true);
+        ResultadoRevalidacaoQuarentena resultadoMock = new ResultadoRevalidacaoQuarentena(
+                true, 1L, 0, 0, List.of(), "Registro revalidado com sucesso."
+        );
+        when(quarentenaService.marcarCorrigido(eq("imovel_rural"), eq(1L), any(AcaoQuarentenaRequest.class)))
+                .thenReturn(resultadoMock);
 
         AcaoQuarentenaRequest req = new AcaoQuarentenaRequest("Corrigido", "{\"cod_imovel\":\"PR-001\"}", 42L);
-        ResponseEntity<Void> response = controller.reprocessar("imovel_rural", 1L, req);
+        ResponseEntity<?> response = controller.reprocessar("imovel_rural", 1L, req);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isEqualTo(resultadoMock);
         verify(quarentenaService).marcarCorrigido(eq("imovel_rural"), eq(1L), eq(req));
+    }
+
+    @Test
+    @DisplayName("Deve retornar 400 Bad Request quando reprocessamento falhar por validação")
+    void deveRetornarBadRequestQuandoReprocessarFalha() {
+        when(quarentenaService.marcarCorrigido(eq("imovel_rural"), eq(1L), any(AcaoQuarentenaRequest.class)))
+                .thenThrow(new IllegalArgumentException("Registro ainda contém erro no campo 'tipo': Invalido"));
+
+        AcaoQuarentenaRequest req = new AcaoQuarentenaRequest("Corrigido", "{}", 42L);
+        ResponseEntity<?> response = controller.reprocessar("imovel_rural", 1L, req);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isInstanceOf(Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> corpo = (Map<String, Object>) response.getBody();
+        assertThat(corpo).containsKey("erro");
     }
 
     @Test
