@@ -148,20 +148,19 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 6. Se o valor recebido não existir no domínio ativo → erro `VALOR_FORA_DO_DOMINIO` com detalhes completos do campo, valor e tabela.
 7. Se existir → `sucesso(codigoCanonico)` (normaliza para o código canônico).
 
-**Preparação para Ação do Analista / Revalidação:**
-- Métodos públicos de gestão de cache:
-  - `invalidarCache(String tabelaReferencia)`: remove o cache da tabela específica para recarregar do banco após o analista aprovar/cadastrar um novo código.
-  - `invalidarTodoCache()`: limpa o cache de todas as referências em memória.
-  - `isEmCache(String tabelaReferencia)` e `getQuantidadeTabelasEmCache()`: inspeção e monitoramento do cache.
+**Gestão Dinâmica de Domínio e Invalidação de Cache (`DominioService`):**
+- Implementado `DominioService` e endpoint `POST /api/dominios/{tabela}` para permitir que o analista cadastre novos códigos e descrições diretamente em qualquer tabela de domínio ativa da camada Silver (`situacao_imovel`, `bioma`, `tipo_auto_infracao`, etc.).
+- Ao persistir o novo item, o `DominioService` invoca `invalidarCache(tabelaReferencia)` imediatamente, disponibilizando o novo valor para revalidações em tempo real.
+- **Separação conceitual estrita:** tabelas relacionais canônicas da Silver (`municipio` e `auto_infracao`) **não** pertencem ao `ValidadorDominio`, mas sim ao `ValidadorIntegridadeCruzada` (consolidado na migração Flyway `V036`).
 
-### 4.4. `ValidadorIntegridadeCruzada` — [FEITO, 2026-09-13, Fase 2.4]
+### 4.4. `ValidadorIntegridadeCruzada` — [FEITO, 2026-09-13, Fase 2.4 | CONSOLIDADO 2026-09-24]
 
 **Ativa quando** `referenciaEntidadeSilver` está configurada em `mapeamento_coluna` (não nula e não em branco).
 
 **Mecanismo de funcionamento:**
 1. `null` ou string em branco → `sucesso(null)` (responsabilidade do `SanitizadorEntrada`).
 2. Interpreta a referência configurada, suportando:
-   - Nome simples de entidade: `municipio`, `imovel_rural`, `area_protegida`, `auto_infracao`, `embargo_ambiental` (resolvendo a coluna canônica por convenção, ex.: `municipio` → `cod_ibge`).
+   - Nome simples de entidade: `municipio`, `imovel_rural`, `area_protegida`, `auto_infracao`, `embargo_ambiental` (resolvendo a coluna canônica por convenção, ex.: `municipio` → `cod_ibge`, `auto_infracao` → `num_auto_infracao`).
    - Prefixo de schema: `silver.municipio` → `municipio`.
    - Especificação explícita de coluna: `municipio.cod_ibge` ou `outra_tabela.minha_coluna`.
 3. Mitiga SQL Injection validando identificadores de tabela e coluna via regex `^[a-zA-Z0-9_]+$`.
@@ -189,7 +188,7 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 
 **Testes:** `ValidadorFaixaMinimaTest` — 23 cenários.
 
-### 4.6. `ValidadorGeometria` — [FEITO, 2026-09-13, Fase 2.6]
+### 4.6. `ValidadorGeometria` — [FEITO, 2026-09-13, Fase 2.6 | EVOLUÍDO 2026-09-24]
 
 **Ativa quando** `validarGeometria = true`, `validarRecortePr = true`, `destinoTipo = 'GEOMETRIA'` ou `tipoDado` ∈ `{wkt, geojson}`.
 
@@ -197,7 +196,10 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 1. `null` ou string em branco:
    - Se `obrigatorio = true` → erro `GEOMETRIA_NULA`.
    - Se opcional → `sucesso(null)`.
-2. **Parsing**: converte texto WKT ou GeoJSON para geometria JTS (`Geometry`).
+2. **Parsing Multi-formato**: converte para geometria JTS (`Geometry`), suportando:
+   - Texto **WKT** (`POLYGON(...)`, `MULTIPOLYGON(...)`, etc.);
+   - Estrutura **GeoJSON** (`{ "type": "Polygon", "coordinates": [...] }`);
+   - **Lista de Coordenadas JSON** (`[ [lon, lat], [lon, lat], ... ]` ou `[ [ [lon, lat], ... ] ]`), formato utilizado diretamente pelo modal de inspeção e correção da Quarentena;
    - Se a sintaxe estiver corrompida → erro `GEOMETRIA_MALFORMADA`.
 3. **Validação Topológica (JTS `IsValidOp`)**:
    - Analisa auto-interseções, auto-loops ou anéis desconexos.
@@ -263,15 +265,22 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 
 **Testes:** `OrquestradorValidacaoTest` — 5 cenários.
 
-### 4.10. `TransicaoBronzeSilverService` e `PersistidorSilverService` — [FEITO, 2026-09-13 | EVOLUÍDO 2026-09-14]
+### 4.10. `TransicaoBronzeSilverService`, `QuarentenaService` e `PersistidorSilverService` — [FEITO, 2026-09-13 | EVOLUÍDO 2026-09-24]
 
-Coordena a passagem segura dos dados aprovados para a Silver e a retenção de inconsistências na Quarentena.
+Coordena a passagem segura dos dados aprovados para a Silver e a governança de inconsistências na Quarentena.
 
 **Regra de Integridade Total (*All-or-Nothing*):**
 1. Ao processar um lote de ingestão da Bronze:
    - Se **100%** dos registros forem aprovados: o lote é persistido na Silver e marcado como `PROMOVIDO_SILVER`.
    - Se **1 único registro** for para a Quarentena: **0 registros** desse lote entram na Silver. O lote é pausado com o status `RETIDO_QUARENTENA`.
-2. **Governança e Ações do Analista:**
+2. **Revalidação Progressiva de Registros na Quarentena (`QuarentenaService.revalidarRegistro`):**
+   - O analista pode inspecionar e editar campos problemáticos de registros retidos na Quarentena (`POST /api/quarentena/{tabela}/{id}/revalidar`).
+   - Se um registro possuir múltiplos erros de validação encadeados, a revalidação resolve a inconsistência atual e atualiza a linha na Quarentena com o próximo erro pendente (`ResultadoRevalidacaoQuarentena`), guiando o analista passo a passo até sanar 100% dos problemas.
+   - **Imutabilidade Estrita da Bronze:** A edição do analista **nunca sobrescreve** o payload original de `BRONZE.registro_bruto`. O dado bruto permanece imutável para auditoria; as alterações são gravadas na tabela da Quarentena (`QUARENTENA.q_*`) e refletidas na Silver após a liberação.
+   - **Formato Especial de Geometria:** Quando o erro for de geometria, o analista recebe e edita o polígono em formato de lista de coordenadas JSON (`[ [lon, lat], ... ]`), facilitando ajustes diretos de nós e anéis.
+   - **Manutenção do All-or-Nothing:** Um registro revalidado com sucesso tem seu status alterado para `CORRIGIDO_REPROCESSADO`, mas **não** é promovido individualmente para a Silver. O lote permanece `RETIDO_QUARENTENA` até que o **último registro pendente seja resolvido**.
+   - No momento em que o total de registros pendentes do lote chegar a zero, o lote completo é automaticamente promovido para a Silver com status `PROMOVIDO_SILVER`.
+3. **Governança e Ações do Analista em Lote:**
    - **Liberar para Silver** (`POST /api/quarentena/lotes/{id}/liberar`): reprocessa o lote, persiste os registros válidos na Silver (`PersistidorSilverService`), atualiza os registros de quarentena do lote para `CORRIGIDO_REPROCESSADO` (`status_analise_id = 3`) e define o lote como `PROMOVIDO_SILVER`.
    - **Descartar Lote** (`POST /api/quarentena/lotes/{id}/descartar`): define os registros de quarentena como `DESCARTADO` (`status_analise_id = 4`), registra a justificativa em `motivo_rejeicao`, preenche `analista_responsavel_id` e marca o lote como `DESCARTADO` (nenhum dado vai para a Silver).
 
@@ -309,15 +318,16 @@ Coordena a passagem segura dos dados aprovados para a Silver e a retenção de i
 | 2.1 | `SanitizadorEntrada` — falsos nulos e obrigatoriedade | ✅ FEITO |
 | 2.2 | `ValidadorCpfCnpj` — CPF/CNPJ com Módulo 11 | ✅ FEITO |
 | 2.3 | `ValidadorDominio` — lookup em cache de `tabela_referencia` da Silver + normalização fonética + sinônimos | ✅ FEITO |
-| 2.4 | `ValidadorIntegridadeCruzada` — integridade relacional em `referencia_entidade_silver` | ✅ FEITO |
+| 2.4 | `ValidadorIntegridadeCruzada` — integridade relacional em `referencia_entidade_silver` (V036) | ✅ FEITO |
 | 2.5 | `ValidadorFaixaMinima` — valor numérico ≥ `valor_minimo` | ✅ FEITO |
-| 2.6 | `ValidadorGeometria` — tipo primitivo + topologia + recorte PR | ✅ FEITO |
+| 2.6 | `ValidadorGeometria` — tipo primitivo + topologia + recorte PR + parsing de lista de coordenadas JSON | ✅ FEITO |
 | 2.7 | `ValidadorRegressao` — campo preenchido no snapshot anterior, veio null agora | ✅ FEITO |
 | 2.8 | `DeduplicadorRegistros` — deduplicação de chaves naturais e seleção do mais novo para Silver | ✅ FEITO |
 | 3.1 | `OrquestradorValidacao` — encadeia todos os validadores por campo e lote (Bronze → Silver/Quarentena) | ✅ FEITO |
-| 3.2 | `TransicaoBronzeSilverService` & `PersistidorSilverService` — All-or-Nothing, liberação/descarte e persistência Silver | ✅ FEITO |
-| 3.3 | `QuarentenaController` & `QuarentenaService` — APIs REST de auditoria, liberação de lote e resolução de inconsistências | ✅ FEITO |
-| 3.4 | Frontend: Telas de Quarentena (`/quarentena`) e Gestão de Lotes & Pipeline (`/lotes`) | ✅ FEITO |
+| 3.2 | `TransicaoBronzeSilverService` & `PersistidorSilverService` — All-or-Nothing estrito, liberação/descarte e persistência Silver | ✅ FEITO |
+| 3.3 | `QuarentenaController` & `QuarentenaService` — APIs REST de auditoria, revalidação com múltiplos erros, adição de domínios e resolução de inconsistências | ✅ FEITO |
+| 3.4 | Frontend: Telas de Quarentena (`/quarentena`), Gestão de Lotes (`/lotes`) e Modal especializado de Geometria | ✅ FEITO |
+| 3.5 | Migrações Flyway: Unificação de `V033` e `V034` na migração `V036` (Domínios + Integridade Cruzada) | ✅ FEITO |
 
 
 

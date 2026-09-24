@@ -1449,3 +1449,41 @@ ex. `chore<untracked>: estruturação inicial do repositório`. Trocar para o id
   - Stepper interativo com 4 etapas: (1) Validação & Deduplicação, (2) Conversão Espacial MDSYS.SDO_GEOMETRY, (3) Persistência Otimizada na Silver, (4) Baixa na Quarentena & Conclusão;
   - Atualização otimista imediata na tabela (`lote.status = 'PROMOVIDO_SILVER'` e coluna de ação `✓ Disponível na Silver`).
 
+### 10.6. Evolução da Quarentena, Motor de Validação e Migração Unificada V036 (2026-09-24)
+Branch: `bugfix/ajustes-quarentena` (Tasks: `LIZARDS-20`, `LIZARDS-23`).
+
+1. **Correções de Inserção e Payload na Quarentena (`LIZARDS-20`):**
+   - Removidos limites artificiais de tamanho no payload JSON na persistência da Quarentena (`quarentena.q_*`), assegurando suporte total a polígonos extensos (ex.: CAR com milhares de vértices).
+   - Ajustada a esteira de rejeição para evitar estouro de colunas e garantir a integridade dos metadados de auditoria (`tipo_erro_id`, `campo_problema`, `valor_recebido`, `motivo_rejeicao`).
+
+2. **Separação Canônica entre Domínio (Lookup) e Integridade Cruzada (Silver):**
+   - Separação conceitual estrita:
+     - `ValidadorDominio` (`tabela_referencia`): restrito a tabelas de enumeração/referência da Silver (`situacao_imovel`, `condicao_imovel`, `tipo_imovel`, `bioma`, `tipo_auto_infracao`, etc.).
+     - `ValidadorIntegridadeCruzada` (`referencia_entidade_silver`): valida relacionamentos com entidades canônicas dimensionais da Silver (`municipio` e `auto_infracao`).
+   - Mapeamentos atualizados de forma consistente nas fontes padrão.
+
+3. **Gestão Dinâmica de Domínios em Tempo de Execução (`DominioService`):**
+   - Implementado o serviço `DominioService` e o endpoint `POST /api/dominios/{tabela}` permitindo que analistas cadastrem novos valores de domínio diretamente durante o tratamento de registros retidos na Quarentena.
+   - O cadastro dispara invalidação imediata do cache thread-safe em memória do `ValidadorDominio`, permitindo revalidação instantânea do lote.
+
+4. **Revalidação Progressiva de Registros na Quarentena (`QuarentenaService`):**
+   - Implementado método `revalidarRegistro(...)` com suporte a múltiplos erros encadeados: ao corrigir um erro (ex.: valor fora do domínio), se o registro contiver outra falha subsequente (ex.: geometria com auto-interseção), o sistema atualiza a Quarentena com o próximo erro (`ResultadoRevalidacaoQuarentena`), orientando o analista até a resolução completa do item.
+
+5. **Preservação Estrita da Imutabilidade da Camada Bronze:**
+   - As edições e correções realizadas pelo analista na Quarentena **nunca modificam** o registro bruto original em `BRONZE.registro_bruto`.
+   - O dado bruto permanece preservado para auditoria e reproducibilidade; as correções são salvas em `QUARENTENA.q_*` e propagadas diretamente para a Silver após aprovação.
+
+6. **Edição Especializada de Geometria na Quarentena:**
+   - Em registros com inconsistência de geometria (`GEOMETRIA_INVALIDA`, `GEOMETRIA_MALFORMADA`, etc.), o modal de inspeção e edição na Quarentena exibe e recebe as coordenadas formatadas como lista JSON (`[ [lon, lat], ... ]`), em vez de exigir manipulação do payload bruto original.
+   - `ValidadorGeometria` estendido para parsear diretamente listas de coordenadas JSON, além de WKT e GeoJSON.
+
+7. **Cumprimento Estrito da Regra All-or-Nothing:**
+   - Registros individuais corrigidos na Quarentena recebem status `CORRIGIDO_REPROCESSADO`, mas **não** são promovidos isoladamente para a Silver.
+   - O lote permanece retido (`RETIDO_QUARENTENA`) até que 100% dos seus registros com inconsistências sejam resolvidos. Ao solucionar o último registro pendente, o lote inteiro é promovido atomicamente para a Silver (`PROMOVIDO_SILVER`).
+
+8. **Unificação das Migrations Flyway (`V033` + `V034` → `V036`):**
+   - Visando evitar conflitos de versionamento de migrações com branches paralelas da equipe (que criaram `V033`, `V034` e `V035`), as migrações anteriores foram unificadas no arquivo:
+     - `src/main/resources/db/migration/controle/V036__atualizar_mapeamentos_dominio_e_integridade_cruzada.sql`
+   - Os arquivos redundantes `V033` e `V034` foram removidos e o schema do banco sincronizado na versão `036`.
+
+
