@@ -1,29 +1,34 @@
 package br.gov.sp.cps.datagis.controle;
 
+import br.gov.sp.cps.datagis.ingestao.AgendamentoFonteService;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
+import org.quartz.CronExpression;
+import org.quartz.SchedulerException;
 import org.springframework.stereotype.Service;
 
 /** Cadastra, edita e lista as fontes de dados. */
 @Service
 public class FonteDadoService {
 
-    private static final Set<String> TIPOS_ACEITOS =
-            Set.of("UPLOAD_MANUAL", "API_REST", "DOWNLOAD_URL");
+    private static final Set<String> TIPOS_ACEITOS = Set.of("UPLOAD_MANUAL", "API_REST", "DOWNLOAD_URL");
 
     /** Separadores de campo de CSV suportados pelo IngestaoCsvExecutor. */
     private static final Set<String> SEPARADORES_CSV_ACEITOS = Set.of(",", ";", "|", "\t");
     private static final String SEPARADOR_CSV_PADRAO = ",";
 
     private final FonteDadoRepository repository;
+    private final AgendamentoFonteService agendamentoFonteService;
 
-    public FonteDadoService(FonteDadoRepository repository) {
+    public FonteDadoService(FonteDadoRepository repository, AgendamentoFonteService agendamentoFonteService) {
         this.repository = repository;
+        this.agendamentoFonteService = agendamentoFonteService;
     }
 
     public FonteDado cadastrar(FonteDadoRequest dados) {
         validarTipoAquisicao(dados.tipoAquisicao());
+        validarCronExpressao(dados.cronExpressao());
 
         FonteDado fonte = FonteDado.builder()
                 .nome(dados.nome())
@@ -39,7 +44,10 @@ public class FonteDadoService {
                 .dataAdd(LocalDateTime.now())
                 .build();
 
-        return repository.save(fonte);
+        FonteDado salva = repository.save(fonte);
+        sincronizarAgendamento(salva);
+
+        return salva;
     }
 
     public FonteDado buscarPorId(Long id) {
@@ -49,6 +57,7 @@ public class FonteDadoService {
 
     public FonteDado atualizar(Long id, FonteDadoRequest dados) {
         validarTipoAquisicao(dados.tipoAquisicao());
+        validarCronExpressao(dados.cronExpressao());
 
         FonteDado fonte = buscarPorId(id);
         fonte.setNome(dados.nome());
@@ -62,11 +71,27 @@ public class FonteDadoService {
         fonte.setSeparadorCsv(normalizarSeparadorCsv(dados.separadorCsv()));
         fonte.setAtivo(dados.ativo() != null ? dados.ativo() : fonte.getAtivo());
 
-        return repository.save(fonte);
+        FonteDado salva = repository.save(fonte);
+        sincronizarAgendamento(salva);
+
+        return salva;
     }
 
     public List<FonteDado> listar() {
         return repository.findAll();
+    }
+
+    /**
+     * Poe o Quartz em dia com o que acabou de ser gravado, para o agendamento
+     * valer na hora - antes disso, so na proxima subida do backend (LIZARDS-10).
+     */
+    private void sincronizarAgendamento(FonteDado fonte) {
+        try {
+            agendamentoFonteService.sincronizar(fonte);
+        } catch (SchedulerException e) {
+            throw new IllegalStateException(
+                    "Fonte " + fonte.getId() + " foi salva, mas o agendamento falhou: " + e.getMessage(), e);
+        }
     }
 
     private void validarTipoAquisicao(String tipoAquisicao) {
@@ -76,7 +101,22 @@ public class FonteDadoService {
         }
     }
 
-    /** Sem separador informado, mantém "," (era o único suportado antes desse campo existir). */
+    /**
+     * Recusa cron invalida antes de gravar - senao o erro so apareceria ao agendar.
+     */
+    private void validarCronExpressao(String cronExpressao) {
+        if (cronExpressao == null || cronExpressao.isBlank()) {
+            return;
+        }
+        if (!CronExpression.isValidExpression(cronExpressao)) {
+            throw new IllegalArgumentException("cronExpressao inválida: " + cronExpressao);
+        }
+    }
+
+    /**
+     * Sem separador informado, mantém "," (era o único suportado antes desse campo
+     * existir).
+     */
     private String normalizarSeparadorCsv(String separadorCsv) {
         if (separadorCsv == null || separadorCsv.isEmpty()) {
             return SEPARADOR_CSV_PADRAO;
