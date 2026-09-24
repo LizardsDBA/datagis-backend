@@ -281,4 +281,30 @@ class ValidadorGeometriaTest {
         assertThat(resultado.isValido()).isTrue();
         assertThat(resultado.valorTransformado()).isNull();
     }
+
+    @Test
+    @DisplayName("Deve aprovar e converter lista de coordenadas JSON em formato [[x, y], ...]")
+    void deveAprovarListaCoordenadasJson() {
+        ContextoValidacaoCampo ctx = ContextoValidacaoCampo.builder()
+                .colunaOrigem("geometria")
+                .validarGeometria(true)
+                .validarRecortePr(true)
+                .build();
+
+        String jsonCoords = """
+                [
+                  [-51.4, -24.2],
+                  [-51.3, -24.2],
+                  [-51.3, -24.1],
+                  [-51.4, -24.1],
+                  [-51.4, -24.2]
+                ]
+                """;
+
+        ResultadoValidacao resultado = validador.validar(jsonCoords, ctx);
+
+        assertThat(resultado.isValido()).isTrue();
+        assertThat(resultado.valorTransformado()).isNotNull();
+        assertThat(resultado.valorTransformado().toString()).startsWith("POLYGON");
+    }
 }

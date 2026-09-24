@@ -10,6 +10,7 @@ import br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest;
 import br.gov.sp.cps.datagis.quarentena.ResultadoRevalidacaoQuarentena;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -217,6 +218,9 @@ public class TransicaoBronzeSilverService {
                     .toList();
         }
 
+        // Aplica em memória as correções de geometria registradas na Quarentena (mantendo a Bronze bruta original)
+        aplicarGeometriasCorrigidasQuarentena(loteId, entidadeSilver, registros);
+
         List<RegistroAprovadoSilver> todosParaPersistir = new ArrayList<>();
 
         if (!registros.isEmpty()) {
@@ -312,10 +316,13 @@ public class TransicaoBronzeSilverService {
         String payloadOriginal = row.get("payload_original") != null ? row.get("payload_original").toString() : null;
         String tipoErroCodigo = row.get("tipo_erro_codigo") != null ? row.get("tipo_erro_codigo").toString() : null;
 
-        // 2. Determina o payload efetivo (se o operador editou no modal, usa o corrigido)
+        // 2. Determina o payload e a geometria efetivos (se o operador editou no modal, usa o corrigido)
         String payloadEfetivo = (request != null && request.payloadCorrigido() != null && !request.payloadCorrigido().trim().isBlank())
                 ? request.payloadCorrigido().trim()
                 : payloadOriginal;
+        String geomWktEfetivo = (request != null && request.geometriaCorrigida() != null && !request.geometriaCorrigida().trim().isBlank())
+                ? request.geometriaCorrigida().trim()
+                : geomWkt;
 
         // 3. Monta o RegistroBruto em memória para validação (sem alterar banco ainda)
         RegistroBruto reg = null;
@@ -328,7 +335,7 @@ public class TransicaoBronzeSilverService {
                     .fonteDadoId(fonteDadoId != null ? fonteDadoId : 1L)
                     .loteIngestaoId(loteIngestaoId != null ? loteIngestaoId : 1L)
                     .payload(payloadEfetivo)
-                    .geometriaWkt(geomWkt)
+                    .geometriaWkt(geomWktEfetivo)
                     .build();
         } else {
             // Cria cópia desanexada para validação, evitando dirty-checking acidental da sessão Hibernate
@@ -337,7 +344,7 @@ public class TransicaoBronzeSilverService {
                     .fonteDadoId(reg.getFonteDadoId())
                     .loteIngestaoId(reg.getLoteIngestaoId())
                     .payload(payloadEfetivo)
-                    .geometriaWkt((geomWkt != null && !geomWkt.isBlank()) ? geomWkt : reg.getGeometriaWkt())
+                    .geometriaWkt((geomWktEfetivo != null && !geomWktEfetivo.isBlank()) ? geomWktEfetivo : reg.getGeometriaWkt())
                     .hashRegistro(reg.getHashRegistro())
                     .dataIngestao(reg.getDataIngestao())
                     .build();
@@ -368,8 +375,20 @@ public class TransicaoBronzeSilverService {
             }
         }
 
-        // Atualiza o payload no RegistroBruto via JDBC (evita conflitos de versão JPA e rollback de sessão)
-        if (regBrutoId != null && regBrutoId > 0) {
+        // Se corrigida a geometria, atualiza a quarentena com o novo WKT (BRONZE.registro_bruto preserva a geometria original)
+        if (request != null && request.geometriaCorrigida() != null && !request.geometriaCorrigida().trim().isBlank()) {
+            try {
+                jdbcTemplate.update(
+                        "UPDATE " + quarentenaSchema + "." + tabEspelho + " SET geometria_wkt = ? WHERE id = ?",
+                        geomWktEfetivo, quarentenaId
+                );
+            } catch (Exception e) {
+                log.debug("Aviso ao atualizar geometria_wkt na quarentena {}.{}: {}", quarentenaSchema, tabEspelho, e.getMessage());
+            }
+        }
+
+        // Atualiza o payload no RegistroBruto via JDBC caso o payload tenha sido corrigido
+        if (request != null && request.payloadCorrigido() != null && !request.payloadCorrigido().trim().isBlank() && regBrutoId != null && regBrutoId > 0) {
             try {
                 jdbcTemplate.update(
                         "UPDATE " + bronzeSchema + ".registro_bruto SET payload = ? WHERE id = ?",
@@ -598,6 +617,32 @@ public class TransicaoBronzeSilverService {
             }
         } catch (Exception e) {
             log.debug("Aviso ao sincronizar correções da quarentena {}.{}: {}", quarentenaSchema, tabEspelho, e.getMessage());
+        }
+    }
+
+    private void aplicarGeometriasCorrigidasQuarentena(Long loteId, String entidadeSilver, List<RegistroBruto> registros) {
+        if (loteId == null || registros == null || registros.isEmpty()) return;
+        String tabEspelho = "q_" + normalizarEntidadeSilver(entidadeSilver);
+        try {
+            String sql = "SELECT registro_bruto_id, geometria_wkt FROM " + quarentenaSchema + "." + tabEspelho +
+                         " WHERE lote_ingestao_id = ? AND registro_bruto_id IS NOT NULL AND geometria_wkt IS NOT NULL";
+            Map<Long, String> geomPorRegId = new HashMap<>();
+            jdbcTemplate.query(sql, (rs, rowNum) -> {
+                Long rId = rs.getLong("registro_bruto_id");
+                String gWkt = rs.getString("geometria_wkt");
+                if (rId != null && gWkt != null && !gWkt.isBlank()) {
+                    geomPorRegId.put(rId, gWkt);
+                }
+                return null;
+            }, loteId);
+
+            for (RegistroBruto r : registros) {
+                if (r != null && geomPorRegId.containsKey(r.getId())) {
+                    r.setGeometriaWkt(geomPorRegId.get(r.getId()));
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Aviso ao aplicar geometrias corrigidas da quarentena {}.{}: {}", quarentenaSchema, tabEspelho, e.getMessage());
         }
     }
 

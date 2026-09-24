@@ -112,7 +112,7 @@ public class QuarentenaService {
               .append("te.codigo AS tipo_erro_codigo, te.descricao AS tipo_erro_descricao, ")
               .append("q.campo_problema, q.valor_recebido, q.motivo_rejeicao, ")
               .append("sa.codigo AS status_analise_codigo, sa.descricao AS status_analise_descricao, ")
-              .append("q.data_quarentena, q.data_resolucao, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original ")
+              .append("q.data_quarentena, q.data_resolucao, q.geometria_wkt, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original ")
               .append("FROM QUARENTENA.").append(config.nomeTabela()).append(" q ")
               .append("LEFT JOIN QUARENTENA.tipo_erro_quarentena te ON te.id = q.tipo_erro_id ")
               .append("LEFT JOIN QUARENTENA.status_analise_quarentena sa ON sa.id = q.status_analise_id ")
@@ -304,7 +304,7 @@ public class QuarentenaService {
                      "te.codigo AS tipo_erro_codigo, te.descricao AS tipo_erro_descricao, " +
                      "q.campo_problema, q.valor_recebido, q.motivo_rejeicao, " +
                      "sa.codigo AS status_analise_codigo, sa.descricao AS status_analise_descricao, " +
-                     "q.data_quarentena, q.data_resolucao, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original " +
+                     "q.data_quarentena, q.data_resolucao, q.geometria_wkt, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original " +
                      "FROM QUARENTENA." + cfg.nomeTabela() + " q " +
                      "LEFT JOIN QUARENTENA.tipo_erro_quarentena te ON te.id = q.tipo_erro_id " +
                      "LEFT JOIN QUARENTENA.status_analise_quarentena sa ON sa.id = q.status_analise_id " +
@@ -513,6 +513,18 @@ public class QuarentenaService {
             }
         }
 
+        String geomWkt = null;
+        try {
+            geomWkt = rs.getString("geometria_wkt");
+        } catch (Exception ignored) {
+        }
+        if ((geomWkt == null || geomWkt.isBlank()) && valRecebido != null) {
+            String valTrim = valRecebido.trim().toUpperCase(java.util.Locale.ROOT);
+            if (valTrim.startsWith("POLYGON") || valTrim.startsWith("MULTIPOLYGON") || valTrim.startsWith("POINT") || valTrim.startsWith("LINESTRING")) {
+                geomWkt = valRecebido.trim();
+            }
+        }
+
         return new ItemQuarentenaDto(
                 rs.getLong("id"),
                 entidade,
@@ -533,7 +545,8 @@ public class QuarentenaService {
                 payload,
                 tabelaRef,
                 tipoAreaProtegida,
-                categoriaAreaProtegida
+                categoriaAreaProtegida,
+                geomWkt
         );
     }
 }

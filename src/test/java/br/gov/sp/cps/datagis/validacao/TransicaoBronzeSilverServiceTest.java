@@ -422,4 +422,91 @@ class TransicaoBronzeSilverServiceTest {
         // NENHUM update de status deve ter sido executado
         verify(jdbcTemplate, never()).update(contains("status_analise_id"), any(), any());
     }
+
+    @Test
+    @DisplayName("Deve revalidar com sucesso registro com geometriaCorrigida mantendo BRONZE.registro_bruto intacto")
+    void deveRevalidarComSucessoRegistroComGeometriaCorrigidaMantendoBronzeIntacto() {
+        Long quarentenaId = 55L;
+        Long loteId = 12L;
+        Long regBrutoId = 777L;
+        String wktOriginal = "POLYGON ((-51 0, -51 1))";
+        String wktCorrigido = "POLYGON ((-51.4 -24.2, -51.3 -24.2, -51.3 -24.1, -51.4 -24.1, -51.4 -24.2))";
+
+        Map<String, Object> row = Map.of(
+                "id", quarentenaId,
+                "fonte_dado_id", 1L,
+                "lote_ingestao_id", loteId,
+                "registro_bruto_id", regBrutoId,
+                "geometria_wkt", wktOriginal,
+                "payload_original", "{\"cod_imovel\":\"PR-GEO-01\"}",
+                "tipo_erro_codigo", "GEOMETRIA_MALFORMADA"
+        );
+        when(jdbcTemplate.queryForList(anyString(), eq(quarentenaId))).thenReturn(List.of(row));
+
+        RegistroBruto reg = RegistroBruto.builder()
+                .id(regBrutoId)
+                .loteIngestaoId(loteId)
+                .fonteDadoId(1L)
+                .payload("{\"cod_imovel\":\"PR-GEO-01\"}")
+                .geometriaWkt(wktOriginal)
+                .build();
+        when(registroBrutoRepository.findById(regBrutoId)).thenReturn(Optional.of(reg));
+
+        RegistroAprovadoSilver apr = new RegistroAprovadoSilver(reg, Map.of("cod_imovel", "PR-GEO-01"), wktCorrigido);
+        when(orquestradorValidacao.validarRegistroIndividual(eq(1L), any(RegistroBruto.class)))
+                .thenReturn(new OrquestradorValidacao.ResultadoValidacaoRegistro(true, apr, null));
+
+        // Simula que ainda há outros registros no lote
+        when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), eq(loteId))).thenReturn(2L);
+
+        br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
+                new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest(null, null, 15L, wktCorrigido);
+
+        ResultadoRevalidacaoQuarentena res = transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req);
+
+        assertThat(res.sucesso()).isTrue();
+        // Deve atualizar geometria_wkt na quarentena
+        verify(jdbcTemplate).update(contains("UPDATE QUARENTENA.q_imovel_rural SET geometria_wkt = ? WHERE id = ?"), eq(wktCorrigido), eq(quarentenaId));
+        // NÃO deve atualizar geometria no BRONZE.registro_bruto (Bronze permanece imutável e original)
+        verify(jdbcTemplate, never()).update(contains("UPDATE BRONZE.registro_bruto SET geometria_wkt"), any(), any());
+        // Deve atualizar status na quarentena
+        verify(jdbcTemplate).update(contains("status_analise_id"), eq(15L), eq(quarentenaId));
+    }
+
+    @Test
+    @DisplayName("Deve falhar revalidação quando geometriaCorrigida ainda for inválida")
+    void deveFalharRevalidacaoQuandoGeometriaCorrigidaAindaContemInconsistencia() {
+        Long quarentenaId = 56L;
+        Long loteId = 12L;
+        Long regBrutoId = 778L;
+
+        Map<String, Object> row = Map.of(
+                "id", quarentenaId,
+                "fonte_dado_id", 1L,
+                "lote_ingestao_id", loteId,
+                "registro_bruto_id", regBrutoId,
+                "geometria_wkt", "POLYGON ((0 0, 1 1))",
+                "payload_original", "{\"cod_imovel\":\"PR-GEO-02\"}",
+                "tipo_erro_codigo", "GEOMETRIA_INVALIDA"
+        );
+        when(jdbcTemplate.queryForList(anyString(), eq(quarentenaId))).thenReturn(List.of(row));
+
+        RegistroBruto reg = RegistroBruto.builder().id(regBrutoId).loteIngestaoId(loteId).fonteDadoId(1L).payload("{\"cod_imovel\":\"PR-GEO-02\"}").build();
+        when(registroBrutoRepository.findById(regBrutoId)).thenReturn(Optional.of(reg));
+
+        RegistroRejeitadoQuarentena rej = new RegistroRejeitadoQuarentena(reg, "GEOMETRIA_INVALIDA", "geometria", "POLYGON ((...))", "Polígono com auto-interseção");
+        when(orquestradorValidacao.validarRegistroIndividual(eq(1L), any(RegistroBruto.class)))
+                .thenReturn(new OrquestradorValidacao.ResultadoValidacaoRegistro(false, null, rej));
+
+        br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
+                new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest(null, null, 15L, "POLYGON ((0 0, 0 2, 2 0, 2 2, 0 0))");
+
+        assertThrows(IllegalArgumentException.class, () ->
+                transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req)
+        );
+
+        // NENHUM update executado
+        verify(jdbcTemplate, never()).update(contains("status_analise_id"), any(), any());
+        verify(jdbcTemplate, never()).update(contains("UPDATE QUARENTENA.q_imovel_rural SET geometria_wkt"), any(), any());
+    }
 }
