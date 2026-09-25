@@ -10,6 +10,9 @@ public interface LoteIngestaoRepository extends JpaRepository<LoteIngestao, Long
 
     Optional<LoteIngestao> findFirstByFonteDadoIdOrderByIdDesc(Long fonteDadoId);
 
+    /** Usado pela tela de Conjunto de Dados — último lote que efetivamente chegou na Silver. */
+    Optional<LoteIngestao> findFirstByFonteDadoIdAndStatusOrderByIdDesc(Long fonteDadoId, String status);
+
     @Query("SELECT l FROM LoteIngestao l LEFT JOIN FETCH l.fonteDado ORDER BY l.id DESC")
     List<LoteIngestao> findAllComFonteOrderByIdDesc();
 
