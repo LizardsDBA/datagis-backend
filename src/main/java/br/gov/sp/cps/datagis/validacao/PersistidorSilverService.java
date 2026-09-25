@@ -65,6 +65,11 @@ public class PersistidorSilverService {
     private final ConcurrentHashMap<String, Long> municipioCache = new ConcurrentHashMap<>();
     private volatile boolean municipiosCarregados = false;
 
+    /**
+     * Cache de categoria_area_protegida_id -> tipo_area_protegida_id.
+     */
+    private final ConcurrentHashMap<Long, Long> categoriaParaTipoCache = new ConcurrentHashMap<>();
+
     @Autowired
     public PersistidorSilverService(
             JdbcTemplate jdbcTemplate,
@@ -243,9 +248,15 @@ public class PersistidorSilverService {
         String nome = extrairString(attrs, "nome", "nm_mun");
         Long ufId = resolverIdReferencia("unidade_federativa", attrs.get("uf"));
         if (ufId == null) {
+            ufId = resolverIdReferencia("unidade_federativa", attrs.get("unidade_federativa"));
+        }
+        if (ufId == null) {
             ufId = resolverIdReferencia("unidade_federativa", "PR");
         }
         Long biomaId = resolverIdReferencia("bioma", attrs.get("bioma"));
+        if (biomaId == null) {
+            biomaId = resolverIdReferencia("bioma", attrs.get("bioma_predominante"));
+        }
         BigDecimal areaKm2 = extrairBigDecimal(attrs, "area_km2", "area");
         String geomWkt = apr.geometriaWkt();
         String atributosOrigem = extrairPayloadOuJson(reg, attrs);
@@ -272,11 +283,21 @@ public class PersistidorSilverService {
         String codigoOrigem = extrairString(attrs, "codigo_origem", "cnuc", "terrai_cod", "id");
         String nome = extrairString(attrs, "nome", "nm_uc", "terrai_nom");
         Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "ICMBIO");
-        Long tipoAreaId = resolverIdReferencia("tipo_area_protegida", attrs.get("tipo_area_protegida"));
+        Long categoriaAreaId = resolverIdReferencia("categoria_area_protegida", attrs.get("categoria_area_protegida"));
+        Long tipoAreaId = null;
+        if (categoriaAreaId != null) {
+            tipoAreaId = resolverTipoDeCategoria(categoriaAreaId);
+        }
+        if (tipoAreaId == null) {
+            tipoAreaId = resolverIdReferencia("tipo_area_protegida", attrs.get("tipo_area_protegida"));
+        }
         if (tipoAreaId == null) {
             tipoAreaId = 1L;
         }
         Long biomaId = resolverIdReferencia("bioma", attrs.get("bioma"));
+        if (biomaId == null) {
+            biomaId = resolverIdReferencia("bioma", attrs.get("bioma_predominante"));
+        }
         String atoLegal = extrairString(attrs, "ato_legal");
         BigDecimal areaHa = extrairBigDecimal(attrs, "area_ha", "area");
         String geomWkt = apr.geometriaWkt();
@@ -287,6 +308,7 @@ public class PersistidorSilverService {
             orgaoId,
             nome,
             tipoAreaId,
+            categoriaAreaId,
             biomaId,
             atoLegal,
             areaHa,
@@ -305,6 +327,10 @@ public class PersistidorSilverService {
 
         String numeroAuto = extrairString(attrs, "numero_auto", "num_auto");
         Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "IBAMA");
+        Long tipoAutoId = resolverIdReferencia("tipo_auto_infracao", attrs.get("tipo_auto_infracao"));
+        Long tipoInfracaoId = resolverIdReferencia("tipo_infracao", attrs.get("tipo_infracao"));
+        Long tipoPessoaId = resolverIdReferencia("tipo_pessoa", attrs.get("tipo_pessoa"));
+        Long statusAutoId = resolverIdReferencia("status_auto_infracao", attrs.get("status_auto_infracao"));
         Long municipioId = resolverIdMunicipio(attrs.get("municipio"), attrs.get("cod_municipio_ibge"));
         String cpfCnpj = extrairString(attrs, "cpf_cnpj_infrator", "cpf_cnpj");
         String nomeInfrator = extrairString(attrs, "nome_infrator", "infrator");
@@ -317,6 +343,10 @@ public class PersistidorSilverService {
         return new Object[] {
             numeroAuto,
             orgaoId,
+            tipoAutoId,
+            tipoInfracaoId,
+            tipoPessoaId,
+            statusAutoId,
             municipioId,
             cpfCnpj,
             nomeInfrator,
@@ -338,10 +368,17 @@ public class PersistidorSilverService {
 
         String numeroTermo = extrairString(attrs, "numero_termo", "num_tad", "numero_emb");
         Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "IBAMA");
+        Long autoInfracaoId = resolverIdAutoInfracao(attrs.get("auto_infracao"), attrs.get("num_auto_infracao"));
+        Long tipoAreaEmbargoId = resolverIdReferencia("tipo_area_embargo", attrs.get("tipo_area_embargo"));
+        if (tipoAreaEmbargoId == null) {
+            tipoAreaEmbargoId = resolverIdReferencia("tipo_area_embargo", attrs.get("tipo_area_embrago"));
+        }
         Long municipioId = resolverIdMunicipio(attrs.get("municipio"), attrs.get("cod_municipio_ibge"));
         String cpfCnpj = extrairString(attrs, "cpf_cnpj", "cpf_cnpj_infrator");
         String nomeAutuado = extrairString(attrs, "nome_autuado", "autuado");
         Date dataEmbargo = extrairData(attrs, "data_embargo", "data_termo");
+        String numProcesso = extrairString(attrs, "num_processo");
+        String numAutoInfracao = extrairString(attrs, "num_auto_infracao", "auto_infracao");
         BigDecimal areaEmbargadaHa = extrairBigDecimal(attrs, "area_embargada_ha", "area");
         String geomWkt = apr.geometriaWkt();
         String atributosOrigem = extrairPayloadOuJson(reg, attrs);
@@ -349,10 +386,14 @@ public class PersistidorSilverService {
         return new Object[] {
             numeroTermo,
             orgaoId,
+            autoInfracaoId,
+            tipoAreaEmbargoId,
             municipioId,
             cpfCnpj,
             nomeAutuado,
             dataEmbargo,
+            numProcesso,
+            numAutoInfracao,
             areaEmbargadaHa,
             geomWkt,
             atributosOrigem,
@@ -373,6 +414,12 @@ public class PersistidorSilverService {
             identificadorOrigem = "DESM-" + reg.getId();
         }
         Integer ano = extrairInteger(attrs, "ano");
+        Long classeProdesId = resolverIdReferencia("classe_prodes", attrs.get("classe_prodes"));
+        if (classeProdesId == null) {
+            classeProdesId = resolverIdReferencia("classe_prodes", attrs.get("classes_prodes"));
+        }
+        Long sateliteId = resolverIdReferencia("satelite", attrs.get("satelite"));
+        Long sensorId = resolverIdReferencia("sensor", attrs.get("sensor"));
         BigDecimal areaHa = extrairBigDecimal(attrs, "area_ha", "area");
         Date dataImagem = extrairData(attrs, "data_imagem");
         String geomWkt = apr.geometriaWkt();
@@ -382,6 +429,9 @@ public class PersistidorSilverService {
             fonteId,
             identificadorOrigem,
             ano,
+            classeProdesId,
+            sateliteId,
+            sensorId,
             areaHa,
             dataImagem,
             geomWkt,
@@ -402,10 +452,15 @@ public class PersistidorSilverService {
             identificadorOrigem = "FOCO-" + reg.getId();
         }
         Timestamp dataHora = extrairTimestamp(attrs, "data_hora", "data");
+        Long sateliteId = resolverIdReferencia("satelite", attrs.get("satelite"));
+        Long biomaId = resolverIdReferencia("bioma", attrs.get("bioma"));
+        if (biomaId == null) {
+            biomaId = resolverIdReferencia("bioma", attrs.get("bioma_predominante"));
+        }
+        Long municipioId = resolverIdMunicipio(attrs.get("municipio"), attrs.get("cod_municipio_ibge"));
         BigDecimal latitude = extrairBigDecimal(attrs, "latitude", "lat");
         BigDecimal longitude = extrairBigDecimal(attrs, "longitude", "lon");
         BigDecimal riscoFogo = extrairBigDecimal(attrs, "risco_fogo");
-        Long municipioId = resolverIdMunicipio(attrs.get("municipio"), attrs.get("cod_municipio_ibge"));
         String geomWkt = apr.geometriaWkt();
         String atributosOrigem = extrairPayloadOuJson(reg, attrs);
 
@@ -413,6 +468,8 @@ public class PersistidorSilverService {
             fonteId,
             identificadorOrigem,
             dataHora,
+            sateliteId,
+            biomaId,
             municipioId,
             latitude,
             longitude,
@@ -578,6 +635,7 @@ public class PersistidorSilverService {
                     s.orgao_id,
                     s.nome,
                     s.tipo_area_protegida_id,
+                    s.categoria_area_protegida_id,
                     s.bioma_id,
                     s.ato_legal,
                     s.area_ha,
@@ -593,6 +651,7 @@ public class PersistidorSilverService {
                         ? AS orgao_id,
                         ? AS nome,
                         ? AS tipo_area_protegida_id,
+                        ? AS categoria_area_protegida_id,
                         ? AS bioma_id,
                         ? AS ato_legal,
                         ? AS area_ha,
@@ -607,27 +666,28 @@ public class PersistidorSilverService {
             ) s ON (t.codigo_origem = s.codigo_origem AND t.orgao_id = s.orgao_id)
             WHEN MATCHED THEN
                 UPDATE SET
-                    t.nome                   = s.nome,
-                    t.tipo_area_protegida_id = s.tipo_area_protegida_id,
-                    t.bioma_id               = s.bioma_id,
-                    t.ato_legal              = s.ato_legal,
-                    t.area_ha                = s.area_ha,
-                    t.geometria              = COALESCE(s.geometria, t.geometria),
-                    t.atributos_origem       = s.atributos_origem,
-                    t.fonte_dado_id          = s.fonte_dado_id,
-                    t.lote_ingestao_id       = s.lote_ingestao_id,
-                    t.registro_bruto_id      = s.registro_bruto_id,
-                    t.data_processamento     = SYSTIMESTAMP,
-                    t.hash_origem            = s.hash_origem
+                    t.nome                        = s.nome,
+                    t.tipo_area_protegida_id      = s.tipo_area_protegida_id,
+                    t.categoria_area_protegida_id = s.categoria_area_protegida_id,
+                    t.bioma_id                    = s.bioma_id,
+                    t.ato_legal                   = s.ato_legal,
+                    t.area_ha                     = s.area_ha,
+                    t.geometria                   = COALESCE(s.geometria, t.geometria),
+                    t.atributos_origem            = s.atributos_origem,
+                    t.fonte_dado_id               = s.fonte_dado_id,
+                    t.lote_ingestao_id            = s.lote_ingestao_id,
+                    t.registro_bruto_id           = s.registro_bruto_id,
+                    t.data_processamento          = SYSTIMESTAMP,
+                    t.hash_origem                 = s.hash_origem
             WHEN NOT MATCHED THEN
                 INSERT (
                     codigo_origem, orgao_id, nome, tipo_area_protegida_id,
-                    bioma_id, ato_legal, area_ha, geometria,
+                    categoria_area_protegida_id, bioma_id, ato_legal, area_ha, geometria,
                     atributos_origem, fonte_dado_id, lote_ingestao_id,
                     registro_bruto_id, data_processamento, hash_origem
                 ) VALUES (
                     s.codigo_origem, s.orgao_id, s.nome, s.tipo_area_protegida_id,
-                    s.bioma_id, s.ato_legal, s.area_ha, s.geometria,
+                    s.categoria_area_protegida_id, s.bioma_id, s.ato_legal, s.area_ha, s.geometria,
                     s.atributos_origem, s.fonte_dado_id, s.lote_ingestao_id,
                     s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
@@ -641,6 +701,10 @@ public class PersistidorSilverService {
                 SELECT
                     s.numero_auto,
                     s.orgao_id,
+                    s.tipo_auto_infracao_id,
+                    s.tipo_infracao_id,
+                    s.tipo_pessoa_id,
+                    s.status_auto_infracao_id,
                     s.municipio_id,
                     s.cpf_cnpj_infrator,
                     s.nome_infrator,
@@ -657,6 +721,10 @@ public class PersistidorSilverService {
                     SELECT
                         ? AS numero_auto,
                         ? AS orgao_id,
+                        ? AS tipo_auto_infracao_id,
+                        ? AS tipo_infracao_id,
+                        ? AS tipo_pessoa_id,
+                        ? AS status_auto_infracao_id,
                         ? AS municipio_id,
                         ? AS cpf_cnpj_infrator,
                         ? AS nome_infrator,
@@ -674,27 +742,33 @@ public class PersistidorSilverService {
             ) s ON (t.numero_auto = s.numero_auto AND t.orgao_id = s.orgao_id)
             WHEN MATCHED THEN
                 UPDATE SET
-                    t.municipio_id        = s.municipio_id,
-                    t.cpf_cnpj_infrator   = s.cpf_cnpj_infrator,
-                    t.nome_infrator       = s.nome_infrator,
-                    t.data_auto           = s.data_auto,
-                    t.num_processo        = s.num_processo,
-                    t.valor_multa         = s.valor_multa,
-                    t.geometria           = COALESCE(s.geometria, t.geometria),
-                    t.atributos_origem    = s.atributos_origem,
-                    t.fonte_dado_id       = s.fonte_dado_id,
-                    t.lote_ingestao_id    = s.lote_ingestao_id,
-                    t.registro_bruto_id   = s.registro_bruto_id,
-                    t.data_processamento  = SYSTIMESTAMP,
-                    t.hash_origem         = s.hash_origem
+                    t.tipo_auto_infracao_id   = s.tipo_auto_infracao_id,
+                    t.tipo_infracao_id        = s.tipo_infracao_id,
+                    t.tipo_pessoa_id          = s.tipo_pessoa_id,
+                    t.status_auto_infracao_id = s.status_auto_infracao_id,
+                    t.municipio_id            = s.municipio_id,
+                    t.cpf_cnpj_infrator       = s.cpf_cnpj_infrator,
+                    t.nome_infrator           = s.nome_infrator,
+                    t.data_auto               = s.data_auto,
+                    t.num_processo            = s.num_processo,
+                    t.valor_multa             = s.valor_multa,
+                    t.geometria               = COALESCE(s.geometria, t.geometria),
+                    t.atributos_origem        = s.atributos_origem,
+                    t.fonte_dado_id           = s.fonte_dado_id,
+                    t.lote_ingestao_id        = s.lote_ingestao_id,
+                    t.registro_bruto_id       = s.registro_bruto_id,
+                    t.data_processamento      = SYSTIMESTAMP,
+                    t.hash_origem             = s.hash_origem
             WHEN NOT MATCHED THEN
                 INSERT (
-                    numero_auto, orgao_id, municipio_id, cpf_cnpj_infrator,
+                    numero_auto, orgao_id, tipo_auto_infracao_id, tipo_infracao_id,
+                    tipo_pessoa_id, status_auto_infracao_id, municipio_id, cpf_cnpj_infrator,
                     nome_infrator, data_auto, num_processo, valor_multa,
                     geometria, atributos_origem, fonte_dado_id,
                     lote_ingestao_id, registro_bruto_id, data_processamento, hash_origem
                 ) VALUES (
-                    s.numero_auto, s.orgao_id, s.municipio_id, s.cpf_cnpj_infrator,
+                    s.numero_auto, s.orgao_id, s.tipo_auto_infracao_id, s.tipo_infracao_id,
+                    s.tipo_pessoa_id, s.status_auto_infracao_id, s.municipio_id, s.cpf_cnpj_infrator,
                     s.nome_infrator, s.data_auto, s.num_processo, s.valor_multa,
                     s.geometria, s.atributos_origem, s.fonte_dado_id,
                     s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
@@ -709,10 +783,14 @@ public class PersistidorSilverService {
                 SELECT
                     s.numero_termo,
                     s.orgao_id,
+                    s.auto_infracao_id,
+                    s.tipo_area_embargo_id,
                     s.municipio_id,
                     s.cpf_cnpj,
                     s.nome_autuado,
                     s.data_embargo,
+                    s.num_processo,
+                    s.num_auto_infracao,
                     s.area_embargada_ha,
                     CASE WHEN s.wkt IS NOT NULL THEN SDO_GEOMETRY(s.wkt, 4674) ELSE NULL END AS geometria,
                     s.atributos_origem,
@@ -724,10 +802,14 @@ public class PersistidorSilverService {
                     SELECT
                         ? AS numero_termo,
                         ? AS orgao_id,
+                        ? AS auto_infracao_id,
+                        ? AS tipo_area_embargo_id,
                         ? AS municipio_id,
                         ? AS cpf_cnpj,
                         ? AS nome_autuado,
                         ? AS data_embargo,
+                        ? AS num_processo,
+                        ? AS num_auto_infracao,
                         ? AS area_embargada_ha,
                         TO_CLOB(?) AS wkt,
                         TO_CLOB(?) AS atributos_origem,
@@ -740,27 +822,33 @@ public class PersistidorSilverService {
             ) s ON (t.numero_termo = s.numero_termo AND t.orgao_id = s.orgao_id)
             WHEN MATCHED THEN
                 UPDATE SET
-                    t.municipio_id        = s.municipio_id,
-                    t.cpf_cnpj            = s.cpf_cnpj,
-                    t.nome_autuado        = s.nome_autuado,
-                    t.data_embargo        = s.data_embargo,
-                    t.area_embargada_ha   = s.area_embargada_ha,
-                    t.geometria           = COALESCE(s.geometria, t.geometria),
-                    t.atributos_origem    = s.atributos_origem,
-                    t.fonte_dado_id       = s.fonte_dado_id,
-                    t.lote_ingestao_id    = s.lote_ingestao_id,
-                    t.registro_bruto_id   = s.registro_bruto_id,
-                    t.data_processamento  = SYSTIMESTAMP,
-                    t.hash_origem         = s.hash_origem
+                    t.auto_infracao_id     = s.auto_infracao_id,
+                    t.tipo_area_embargo_id = s.tipo_area_embargo_id,
+                    t.municipio_id         = s.municipio_id,
+                    t.cpf_cnpj             = s.cpf_cnpj,
+                    t.nome_autuado         = s.nome_autuado,
+                    t.data_embargo         = s.data_embargo,
+                    t.num_processo         = s.num_processo,
+                    t.num_auto_infracao    = s.num_auto_infracao,
+                    t.area_embargada_ha    = s.area_embargada_ha,
+                    t.geometria            = COALESCE(s.geometria, t.geometria),
+                    t.atributos_origem     = s.atributos_origem,
+                    t.fonte_dado_id        = s.fonte_dado_id,
+                    t.lote_ingestao_id     = s.lote_ingestao_id,
+                    t.registro_bruto_id    = s.registro_bruto_id,
+                    t.data_processamento   = SYSTIMESTAMP,
+                    t.hash_origem          = s.hash_origem
             WHEN NOT MATCHED THEN
                 INSERT (
-                    numero_termo, orgao_id, municipio_id, cpf_cnpj,
-                    nome_autuado, data_embargo, area_embargada_ha,
+                    numero_termo, orgao_id, auto_infracao_id, tipo_area_embargo_id,
+                    municipio_id, cpf_cnpj, nome_autuado, data_embargo,
+                    num_processo, num_auto_infracao, area_embargada_ha,
                     geometria, atributos_origem, fonte_dado_id,
                     lote_ingestao_id, registro_bruto_id, data_processamento, hash_origem
                 ) VALUES (
-                    s.numero_termo, s.orgao_id, s.municipio_id, s.cpf_cnpj,
-                    s.nome_autuado, s.data_embargo, s.area_embargada_ha,
+                    s.numero_termo, s.orgao_id, s.auto_infracao_id, s.tipo_area_embargo_id,
+                    s.municipio_id, s.cpf_cnpj, s.nome_autuado, s.data_embargo,
+                    s.num_processo, s.num_auto_infracao, s.area_embargada_ha,
                     s.geometria, s.atributos_origem, s.fonte_dado_id,
                     s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
@@ -775,6 +863,9 @@ public class PersistidorSilverService {
                     s.fonte_dado_id,
                     s.identificador_origem,
                     s.ano,
+                    s.classe_prodes_id,
+                    s.satelite_id,
+                    s.sensor_id,
                     s.area_ha,
                     s.data_imagem,
                     CASE WHEN s.wkt IS NOT NULL THEN SDO_GEOMETRY(s.wkt, 4674) ELSE NULL END AS geometria,
@@ -787,6 +878,9 @@ public class PersistidorSilverService {
                         ? AS fonte_dado_id,
                         ? AS identificador_origem,
                         ? AS ano,
+                        ? AS classe_prodes_id,
+                        ? AS satelite_id,
+                        ? AS sensor_id,
                         ? AS area_ha,
                         ? AS data_imagem,
                         TO_CLOB(?) AS wkt,
@@ -800,6 +894,9 @@ public class PersistidorSilverService {
             WHEN MATCHED THEN
                 UPDATE SET
                     t.ano                = s.ano,
+                    t.classe_prodes_id   = s.classe_prodes_id,
+                    t.satelite_id        = s.satelite_id,
+                    t.sensor_id          = s.sensor_id,
                     t.area_ha            = s.area_ha,
                     t.data_imagem        = s.data_imagem,
                     t.geometria          = COALESCE(s.geometria, t.geometria),
@@ -810,11 +907,13 @@ public class PersistidorSilverService {
                     t.hash_origem        = s.hash_origem
             WHEN NOT MATCHED THEN
                 INSERT (
-                    fonte_dado_id, identificador_origem, ano, area_ha,
+                    fonte_dado_id, identificador_origem, ano, classe_prodes_id,
+                    satelite_id, sensor_id, area_ha,
                     data_imagem, geometria, atributos_origem,
                     lote_ingestao_id, registro_bruto_id, data_processamento, hash_origem
                 ) VALUES (
-                    s.fonte_dado_id, s.identificador_origem, s.ano, s.area_ha,
+                    s.fonte_dado_id, s.identificador_origem, s.ano, s.classe_prodes_id,
+                    s.satelite_id, s.sensor_id, s.area_ha,
                     s.data_imagem, s.geometria, s.atributos_origem,
                     s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
@@ -829,6 +928,8 @@ public class PersistidorSilverService {
                     s.fonte_dado_id,
                     s.identificador_origem,
                     s.data_hora,
+                    s.satelite_id,
+                    s.bioma_id,
                     s.municipio_id,
                     s.latitude,
                     s.longitude,
@@ -843,6 +944,8 @@ public class PersistidorSilverService {
                         ? AS fonte_dado_id,
                         ? AS identificador_origem,
                         ? AS data_hora,
+                        ? AS satelite_id,
+                        ? AS bioma_id,
                         ? AS municipio_id,
                         ? AS latitude,
                         ? AS longitude,
@@ -858,6 +961,8 @@ public class PersistidorSilverService {
             WHEN MATCHED THEN
                 UPDATE SET
                     t.data_hora          = s.data_hora,
+                    t.satelite_id        = s.satelite_id,
+                    t.bioma_id           = s.bioma_id,
                     t.municipio_id       = s.municipio_id,
                     t.latitude           = s.latitude,
                     t.longitude          = s.longitude,
@@ -870,13 +975,13 @@ public class PersistidorSilverService {
                     t.hash_origem        = s.hash_origem
             WHEN NOT MATCHED THEN
                 INSERT (
-                    fonte_dado_id, identificador_origem, data_hora, municipio_id,
-                    latitude, longitude, risco_fogo, geometria,
+                    fonte_dado_id, identificador_origem, data_hora, satelite_id,
+                    bioma_id, municipio_id, latitude, longitude, risco_fogo, geometria,
                     atributos_origem, lote_ingestao_id, registro_bruto_id,
                     data_processamento, hash_origem
                 ) VALUES (
-                    s.fonte_dado_id, s.identificador_origem, s.data_hora, s.municipio_id,
-                    s.latitude, s.longitude, s.risco_fogo, s.geometria,
+                    s.fonte_dado_id, s.identificador_origem, s.data_hora, s.satelite_id,
+                    s.bioma_id, s.municipio_id, s.latitude, s.longitude, s.risco_fogo, s.geometria,
                     s.atributos_origem, s.lote_ingestao_id, s.registro_bruto_id,
                     SYSTIMESTAMP, s.hash_origem
                 )
@@ -959,7 +1064,14 @@ public class PersistidorSilverService {
             return Long.parseLong(valStr);
         } catch (NumberFormatException ignored) {}
 
-        String tab = tabela.toLowerCase(Locale.ROOT);
+        String tab = ValidadorDominio.normalizarAliasTabela(tabela);
+        if ("municipio".equals(tab)) {
+            return resolverIdMunicipio(valor);
+        }
+        if ("auto_infracao".equals(tab)) {
+            return resolverIdAutoInfracao(valor);
+        }
+
         Map<String, Long> mapaTabela = refCache.computeIfAbsent(tab, k -> carregarMapaReferencia(tab));
 
         // 1. Busca direta (case-insensitive)
@@ -1000,10 +1112,70 @@ public class PersistidorSilverService {
         return null;
     }
 
+    public void invalidarCache(String tabela) {
+        if (tabela == null || tabela.isBlank()) {
+            refCache.clear();
+            categoriaParaTipoCache.clear();
+            return;
+        }
+        String tab = ValidadorDominio.normalizarAliasTabela(tabela);
+        refCache.remove(tab);
+        if ("categoria_area_protegida".equals(tab) || "tipo_area_protegida".equals(tab)) {
+            categoriaParaTipoCache.clear();
+        }
+    }
+
+    public Long resolverTipoDeCategoria(Long categoriaId) {
+        if (categoriaId == null) return null;
+        return categoriaParaTipoCache.computeIfAbsent(categoriaId, cid -> {
+            try {
+                String sql = "SELECT tipo_area_protegida_id FROM " + silverSchema + ".categoria_area_protegida WHERE id = ?";
+                List<Long> ids = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getLong("tipo_area_protegida_id"), cid);
+                return ids.isEmpty() ? null : ids.get(0);
+            } catch (Exception e) {
+                log.debug("Aviso ao buscar tipo_area_protegida_id para categoria {}: {}", cid, e.getMessage());
+                return null;
+            }
+        });
+    }
+
+    public Long resolverIdAutoInfracao(Object... valores) {
+        for (Object v : valores) {
+            if (v == null) continue;
+            String str = v.toString().trim();
+            if (str.isEmpty()) continue;
+            try {
+                String sql = "SELECT id FROM " + silverSchema + ".auto_infracao WHERE numero_auto = ?";
+                List<Long> ids = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getLong("id"), str);
+                if (!ids.isEmpty()) {
+                    return ids.get(0);
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao consultar auto_infracao {}: {}", str, e.getMessage());
+            }
+        }
+        return null;
+    }
+
     private Map<String, Long> carregarMapaReferencia(String tabela) {
         Map<String, Long> mapa = new HashMap<>();
+        String tab = ValidadorDominio.normalizarAliasTabela(tabela);
         try {
-            String sql = "SELECT id, codigo, descricao FROM " + silverSchema + "." + tabela + " WHERE ativo = 1";
+            if ("unidade_federativa".equals(tab)) {
+                String sql = "SELECT id, codigo, descricao, CAST(cod_ibge AS VARCHAR2(10)) AS cod_ibge FROM " + silverSchema + ".unidade_federativa WHERE ativo = 1";
+                jdbcTemplate.query(sql, rs -> {
+                    long id = rs.getLong("id");
+                    String cod = rs.getString("codigo");
+                    String desc = rs.getString("descricao");
+                    String ibge = rs.getString("cod_ibge");
+                    if (cod != null) registrarNoMapaRef(mapa, cod, id);
+                    if (desc != null) registrarNoMapaRef(mapa, desc, id);
+                    if (ibge != null) registrarNoMapaRef(mapa, ibge, id);
+                });
+                return mapa;
+            }
+
+            String sql = "SELECT id, codigo, descricao FROM " + silverSchema + "." + tab + " WHERE ativo = 1";
             jdbcTemplate.query(sql, rs -> {
                 long id = rs.getLong("id");
                 String cod = rs.getString("codigo");
@@ -1016,7 +1188,7 @@ public class PersistidorSilverService {
                 }
             });
         } catch (Exception e) {
-            log.debug("Não foi possível carregar tabela de referência {}.{}: {}", silverSchema, tabela, e.getMessage());
+            log.debug("Não foi possível carregar tabela de referência {}.{}: {}", silverSchema, tab, e.getMessage());
         }
         return mapa;
     }
@@ -1221,4 +1393,15 @@ public class PersistidorSilverService {
         }
         return null;
     }
+
+    /**
+     * Invalida todo o cache de tabelas de referência e de municípios.
+     */
+    public void invalidarTodoCache() {
+        refCache.clear();
+        categoriaParaTipoCache.clear();
+        municipioCache.clear();
+        municipiosCarregados = false;
+    }
 }
+

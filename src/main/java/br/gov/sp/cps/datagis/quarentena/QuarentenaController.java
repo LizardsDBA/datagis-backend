@@ -3,6 +3,7 @@ package br.gov.sp.cps.datagis.quarentena;
 import java.time.LocalDate;
 import org.springframework.format.annotation.DateTimeFormat;
 import java.util.List;
+import java.util.Map;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -30,11 +31,16 @@ public class QuarentenaController {
             @RequestParam(required = false) Long fonteDadoId,
             @RequestParam(required = false) Long loteIngestaoId,
             @RequestParam(defaultValue = "0") int pagina,
-            @RequestParam(defaultValue = "20") int tamanho) {
+            @RequestParam(defaultValue = "50") int tamanho) {
 
         int offset = Math.max(0, pagina) * Math.max(1, tamanho);
         List<ItemQuarentenaDto> itens = quarentenaService.listarItens(entidade, status, tipoErro, fonteDadoId, loteIngestaoId, offset, tamanho);
-        return ResponseEntity.ok(itens);
+        long total = quarentenaService.contarItens(entidade, status, tipoErro, fonteDadoId, loteIngestaoId);
+
+        return ResponseEntity.ok()
+                .header("X-Total-Count", String.valueOf(total))
+                .header("Access-Control-Expose-Headers", "X-Total-Count")
+                .body(itens);
     }
 
     @GetMapping("/metricas")
@@ -93,13 +99,19 @@ public class QuarentenaController {
     }
 
     @PostMapping("/{entidade}/{id}/reprocessar")
-    public ResponseEntity<Void> reprocessar(
+    public ResponseEntity<?> reprocessar(
             @PathVariable String entidade,
             @PathVariable Long id,
             @RequestBody(required = false) AcaoQuarentenaRequest request) {
-        Long analistaId = request != null ? request.analistaId() : null;
-        boolean sucesso = quarentenaService.marcarCorrigido(entidade, id, analistaId);
-        return sucesso ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+        try {
+            ResultadoRevalidacaoQuarentena resultado = quarentenaService.marcarCorrigido(entidade, id, request);
+            if (resultado == null || !resultado.sucesso()) {
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.ok(resultado);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("erro", e.getMessage()));
+        }
     }
 
     @PostMapping("/lotes/{loteId}/liberar")
@@ -120,4 +132,23 @@ public class QuarentenaController {
         boolean sucesso = quarentenaService.descartarLote(loteId, motivo, analistaId);
         return sucesso ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
+
+    @PostMapping("/dominios")
+    public ResponseEntity<java.util.Map<String, Object>> adicionarValorDominio(
+            @RequestBody br.gov.sp.cps.datagis.validacao.NovoDominioRequest request) {
+        try {
+            java.util.Map<String, Object> resultado = quarentenaService.adicionarValorDominio(request);
+            return ResponseEntity.ok(resultado);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("erro", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(java.util.Map.of("erro", "Erro interno ao cadastrar domínio: " + e.getMessage()));
+        }
+    }
+
+    @GetMapping("/dominios/tipos-area-protegida")
+    public ResponseEntity<List<java.util.Map<String, Object>>> listarTiposAreaProtegida() {
+        return ResponseEntity.ok(quarentenaService.listarTiposAreaProtegida());
+    }
 }
+

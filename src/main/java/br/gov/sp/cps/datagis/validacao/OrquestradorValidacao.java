@@ -12,6 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.io.WKTReader;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -139,6 +141,41 @@ public class OrquestradorValidacao {
 
                 ContextoValidacaoCampo contexto = mapCol.toContextoValidacao(valorAnterior);
 
+                // Defesa contra mapeamentos legados: municipio e auto_infracao pertencem a integridade cruzada Silver, nao a dominio
+                if (contexto.tabelaReferencia() != null && !contexto.tabelaReferencia().isBlank()) {
+                    String tabNorm = contexto.tabelaReferencia().trim().toLowerCase(java.util.Locale.ROOT);
+                    if (tabNorm.contains(".")) {
+                        tabNorm = tabNorm.substring(tabNorm.lastIndexOf('.') + 1);
+                    }
+                    if ("municipio".equals(tabNorm) || "auto_infracao".equals(tabNorm)) {
+                        String refSilver = (contexto.referenciaEntidadeSilver() != null && !contexto.referenciaEntidadeSilver().isBlank())
+                                ? contexto.referenciaEntidadeSilver()
+                                : tabNorm;
+                        contexto = contexto.toBuilder()
+                                .tabelaReferencia(null)
+                                .referenciaEntidadeSilver(refSilver)
+                                .build();
+                    } else if ("tipo_area_protegida".equals(tabNorm)) {
+                        contexto = contexto.toBuilder()
+                                .tabelaReferencia(null)
+                                .build();
+                    }
+                }
+
+                if (contexto.tabelaReferencia() == null || contexto.tabelaReferencia().isBlank()) {
+                    String tabInferida = inferirTabelaReferenciaCanonico(atributoDestino);
+                    if (tabInferida != null) {
+                        contexto = contexto.toBuilder().tabelaReferencia(tabInferida).build();
+                    }
+                }
+
+                if (contexto.referenciaEntidadeSilver() == null || contexto.referenciaEntidadeSilver().isBlank()) {
+                    String refSilverInferida = inferirReferenciaEntidadeSilverCanonico(atributoDestino);
+                    if (refSilverInferida != null) {
+                        contexto = contexto.toBuilder().referenciaEntidadeSilver(refSilverInferida).build();
+                    }
+                }
+
                 // Executa sempre a sanitização de entrada primeiro
                 ResultadoValidacao resSanitizacao = sanitizador.validar(valorBruto, contexto);
                 if (!resSanitizacao.valido()) {
@@ -260,4 +297,183 @@ public class OrquestradorValidacao {
         JsonNode n = node.get(campoChave);
         return n != null && !n.isNull() ? n.asText().trim() : null;
     }
+
+    /**
+     * Transforma um RegistroBruto em RegistroAprovadoSilver aplicando todos os mapeamentos
+     * configurados para a fonte (sanitização, mapeamento de campos e extração de geometria).
+     * Garante que geometrias malformadas ou inválidas não quebrem o Oracle Spatial.
+     */
+    public RegistroAprovadoSilver transformarRegistro(Long fonteDadoId, RegistroBruto reg) {
+        if (reg == null) return null;
+        JsonNode payloadNode = parsearPayload(reg.getPayload());
+        List<MapeamentoColuna> mapeamentos = mapeamentoRepository != null && fonteDadoId != null
+                ? mapeamentoRepository.findByFonteDadoId(fonteDadoId)
+                : Collections.emptyList();
+
+        Map<String, Object> atributosTransformados = new LinkedHashMap<>();
+        String geometriaWktFinal = reg.getGeometriaWkt();
+
+        if (mapeamentos.isEmpty()) {
+            if (payloadNode != null) {
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> map = objectMapper.convertValue(payloadNode, Map.class);
+                    if (map != null) {
+                        for (Map.Entry<String, Object> entry : map.entrySet()) {
+                            String k = entry.getKey();
+                            Object v = entry.getValue();
+                            if (k != null && ("geometry".equalsIgnoreCase(k) || "geom".equalsIgnoreCase(k) || "wkt".equalsIgnoreCase(k))) {
+                                if (geometriaWktFinal == null && v != null) {
+                                    geometriaWktFinal = v.toString();
+                                }
+                            } else if (k != null) {
+                                atributosTransformados.put(k, v);
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+        } else {
+            for (MapeamentoColuna mapCol : mapeamentos) {
+                String atributoDestino = mapCol.getAtributoDestino();
+                Object valorBruto = extrairValor(payloadNode, reg, mapCol);
+                ContextoValidacaoCampo contexto = mapCol.toContextoValidacao(null);
+
+                // Defesa contra mapeamentos legados: municipio e auto_infracao pertencem a integridade cruzada Silver, nao a dominio
+                if (contexto.tabelaReferencia() != null && !contexto.tabelaReferencia().isBlank()) {
+                    String tabNorm = contexto.tabelaReferencia().trim().toLowerCase(java.util.Locale.ROOT);
+                    if (tabNorm.contains(".")) {
+                        tabNorm = tabNorm.substring(tabNorm.lastIndexOf('.') + 1);
+                    }
+                    if ("municipio".equals(tabNorm) || "auto_infracao".equals(tabNorm)) {
+                        String refSilver = (contexto.referenciaEntidadeSilver() != null && !contexto.referenciaEntidadeSilver().isBlank())
+                                ? contexto.referenciaEntidadeSilver()
+                                : tabNorm;
+                        contexto = contexto.toBuilder()
+                                .tabelaReferencia(null)
+                                .referenciaEntidadeSilver(refSilver)
+                                .build();
+                    } else if ("tipo_area_protegida".equals(tabNorm)) {
+                        contexto = contexto.toBuilder()
+                                .tabelaReferencia(null)
+                                .build();
+                    }
+                }
+
+                if (contexto.tabelaReferencia() == null || contexto.tabelaReferencia().isBlank()) {
+                    String tabInferida = inferirTabelaReferenciaCanonico(atributoDestino);
+                    if (tabInferida != null) {
+                        contexto = contexto.toBuilder().tabelaReferencia(tabInferida).build();
+                    }
+                }
+
+                if (contexto.referenciaEntidadeSilver() == null || contexto.referenciaEntidadeSilver().isBlank()) {
+                    String refSilverInferida = inferirReferenciaEntidadeSilverCanonico(atributoDestino);
+                    if (refSilverInferida != null) {
+                        contexto = contexto.toBuilder().referenciaEntidadeSilver(refSilverInferida).build();
+                    }
+                }
+                ResultadoValidacao resSanitizacao = sanitizador.validar(valorBruto, contexto);
+                Object valorFinal = resSanitizacao.valorTransformado() != null ? resSanitizacao.valorTransformado() : valorBruto;
+
+                for (ValidadorCampo validador : validadores) {
+                    if (validador == sanitizador) continue;
+                    if (validador.suporta(contexto)) {
+                        ResultadoValidacao resVal = validador.validar(valorFinal, contexto);
+                        if (resVal.valido() && resVal.valorTransformado() != null) {
+                            valorFinal = resVal.valorTransformado();
+                        }
+                    }
+                }
+
+                if ("GEOMETRIA".equalsIgnoreCase(mapCol.getDestinoTipo())) {
+                    if (valorFinal != null) {
+                        geometriaWktFinal = valorFinal.toString();
+                    }
+                } else {
+                    atributosTransformados.put(atributoDestino, valorFinal);
+                }
+            }
+        }
+
+        String geomSegura = sanitizarGeometria(geometriaWktFinal);
+        return new RegistroAprovadoSilver(reg, atributosTransformados, geomSegura);
+    }
+
+    /**
+     * Infere o nome canônico da tabela de referência de domínio (lookup/enum) a partir do nome do atributo de destino Silver.
+     * OBS: Município e Auto de Infração NÃO pertencem a este método, pois são entidades canônicas validadas por Integridade Cruzada.
+     */
+    public static String inferirTabelaReferenciaCanonico(String atributoDestino) {
+        if (atributoDestino == null || atributoDestino.isBlank()) {
+            return null;
+        }
+        String a = atributoDestino.trim().toLowerCase(java.util.Locale.ROOT);
+        return switch (a) {
+            case "situacao_imovel", "status_imovel" -> "situacao_imovel";
+            case "condicao_imovel", "condicao" -> "condicao_imovel";
+            case "tipo_imovel" -> "tipo_imovel";
+            case "categoria_area_protegida", "categoria_uc" -> "categoria_area_protegida";
+            case "orgao" -> "orgao";
+            case "bioma", "bioma_predominante" -> "bioma";
+            case "tipo_auto_infracao" -> "tipo_auto_infracao";
+            case "tipo_infracao" -> "tipo_infracao";
+            case "tipo_pessoa" -> "tipo_pessoa";
+            case "status_auto_infracao" -> "status_auto_infracao";
+            case "classe_prodes", "classes_prodes" -> "classe_prodes";
+            case "satelite" -> "satelite";
+            case "sensor" -> "sensor";
+            case "tipo_area_embargo", "tipo_area_embrago" -> "tipo_area_embargo";
+            case "unidade_federativa", "uf" -> "unidade_federativa";
+            default -> null;
+        };
+    }
+
+    /**
+     * Infere o nome canônico da entidade Silver para Integridade Cruzada
+     * a partir do nome do atributo de destino Silver (ex.: municipio, num_auto_infracao).
+     */
+    public static String inferirReferenciaEntidadeSilverCanonico(String atributoDestino) {
+        if (atributoDestino == null || atributoDestino.isBlank()) {
+            return null;
+        }
+        String a = atributoDestino.trim().toLowerCase(java.util.Locale.ROOT);
+        return switch (a) {
+            case "municipio", "cod_municipio_ibge", "municipio_id" -> "municipio";
+            case "auto_infracao", "num_auto_infracao", "auto_infracao_id" -> "auto_infracao";
+            default -> null;
+        };
+    }
+
+    /**
+     * Valida um único registro individualmente contra a esteira de regras da fonte.
+     * Devolve o resultado indicando se passou, com o objeto pronto para Silver ou erro de quarentena.
+     */
+    public ResultadoValidacaoRegistro validarRegistroIndividual(Long fonteDadoId, RegistroBruto reg) {
+        ResultadoOrquestracao res = orquestrarLote(fonteDadoId, List.of(reg), null);
+        if (!res.aprovados().isEmpty()) {
+            return new ResultadoValidacaoRegistro(true, res.aprovados().get(0), null);
+        } else {
+            RegistroRejeitadoQuarentena rej = !res.rejeitados().isEmpty() ? res.rejeitados().get(0) : null;
+            RegistroAprovadoSilver fallback = transformarRegistro(fonteDadoId, reg);
+            return new ResultadoValidacaoRegistro(false, fallback, rej);
+        }
+    }
+
+    public record ResultadoValidacaoRegistro(
+            boolean valido,
+            RegistroAprovadoSilver aprovado,
+            RegistroRejeitadoQuarentena rejeitado
+    ) {}
+
+    private String sanitizarGeometria(String wkt) {
+        if (wkt == null || wkt.isBlank()) return null;
+        try {
+            Geometry g = new WKTReader().read(wkt.trim());
+            return (g != null && !g.isEmpty() && g.isValid()) ? wkt.trim() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
 }
+

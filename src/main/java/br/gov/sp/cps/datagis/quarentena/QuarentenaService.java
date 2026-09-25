@@ -12,9 +12,15 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import br.gov.sp.cps.datagis.validacao.DominioService;
+import br.gov.sp.cps.datagis.validacao.NovoDominioRequest;
+import br.gov.sp.cps.datagis.validacao.OrquestradorValidacao;
 import br.gov.sp.cps.datagis.validacao.TransicaoBronzeSilverService;
+import br.gov.sp.cps.datagis.validacao.ValidadorDominio;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -26,8 +32,16 @@ public class QuarentenaService {
     private static final Logger log = LoggerFactory.getLogger(QuarentenaService.class);
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    private static final Pattern PATTERN_TABELA_REF =
+            Pattern.compile("tabela de referência [\"']?([a-zA-Z0-9_]+)[\"']?", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PATTERN_TIPO_AP =
+            Pattern.compile("[\"'](?:tipo_area_protegida|tipo_uc|tipo_area|modalidade)[\"']\\s*:\\s*[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PATTERN_CAT_AP =
+            Pattern.compile("[\"'](?:categoria_area_protegida|categoria|categoria_uc)[\"']\\s*:\\s*[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE);
+
     private final JdbcTemplate jdbcTemplate;
     private final TransicaoBronzeSilverService transicaoService;
+    private final DominioService dominioService;
 
     // Mapeamento das tabelas espelho da Quarentena e suas respectivas chaves naturais
     private static final Map<String, TabelaEspelhoConfig> TABELAS_ESPELHO = new LinkedHashMap<>();
@@ -45,14 +59,19 @@ public class QuarentenaService {
     public record TabelaEspelhoConfig(String nomeTabela, String expressaoChave) {}
 
     @Autowired
-    public QuarentenaService(JdbcTemplate jdbcTemplate, @Autowired(required = false) TransicaoBronzeSilverService transicaoService) {
+    public QuarentenaService(
+            JdbcTemplate jdbcTemplate,
+            @Autowired(required = false) TransicaoBronzeSilverService transicaoService,
+            @Autowired(required = false) DominioService dominioService) {
         this.jdbcTemplate = jdbcTemplate;
         this.transicaoService = transicaoService;
+        this.dominioService = dominioService;
     }
 
     public QuarentenaService(JdbcTemplate jdbcTemplate) {
-        this(jdbcTemplate, null);
+        this(jdbcTemplate, null, null);
     }
+
 
     public boolean liberarLote(Long loteId, Long analistaId) {
         if (transicaoService != null) {
@@ -95,7 +114,7 @@ public class QuarentenaService {
               .append("te.codigo AS tipo_erro_codigo, te.descricao AS tipo_erro_descricao, ")
               .append("q.campo_problema, q.valor_recebido, q.motivo_rejeicao, ")
               .append("sa.codigo AS status_analise_codigo, sa.descricao AS status_analise_descricao, ")
-              .append("q.data_quarentena, q.data_resolucao, CAST(q.payload_original AS VARCHAR2(4000)) AS payload_original ")
+              .append("q.data_quarentena, q.data_resolucao, q.geometria_wkt, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original ")
               .append("FROM QUARENTENA.").append(config.nomeTabela()).append(" q ")
               .append("LEFT JOIN QUARENTENA.tipo_erro_quarentena te ON te.id = q.tipo_erro_id ")
               .append("LEFT JOIN QUARENTENA.status_analise_quarentena sa ON sa.id = q.status_analise_id ")
@@ -133,8 +152,64 @@ public class QuarentenaService {
         try {
             return jdbcTemplate.query(sqlUnificada, (rs, rowNum) -> mapearItemDto(rs), params.toArray());
         } catch (Exception e) {
-            log.warn("Erro ao consultar quarentena com sintaxe FETCH: {}, tentando fallback LIMIT/OFFSET", e.getMessage());
-            return fallbackConsulta(subqueries, params, offset, limit);
+            log.error("Erro ao consultar quarentena com sintaxe FETCH: {}", e.getMessage(), e);
+            throw new RuntimeException("Falha ao consultar quarentena: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Conta a quantidade total de itens retidos de acordo com os filtros aplicados.
+     */
+    public long contarItens(String entidade, String status, String tipoErro, Long fonteDadoId, Long loteIngestaoId) {
+        List<String> entidadesParaConsultar = resolverEntidades(entidade);
+        if (entidadesParaConsultar.isEmpty()) {
+            return 0;
+        }
+
+        List<String> subqueries = new ArrayList<>();
+        List<Object> params = new ArrayList<>();
+
+        for (String ent : entidadesParaConsultar) {
+            TabelaEspelhoConfig config = TABELAS_ESPELHO.get(ent);
+            if (config == null) continue;
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("SELECT COUNT(1) AS qtd FROM QUARENTENA.").append(config.nomeTabela()).append(" q ")
+              .append("LEFT JOIN QUARENTENA.tipo_erro_quarentena te ON te.id = q.tipo_erro_id ")
+              .append("LEFT JOIN QUARENTENA.status_analise_quarentena sa ON sa.id = q.status_analise_id ")
+              .append("WHERE 1=1 ");
+
+            if (status != null && !status.isBlank() && !"todos".equalsIgnoreCase(status.trim()) && !"todas".equalsIgnoreCase(status.trim())) {
+                sb.append("AND sa.codigo = ? ");
+                params.add(status.trim().toUpperCase());
+            }
+            if (tipoErro != null && !tipoErro.isBlank() && !"todos".equalsIgnoreCase(tipoErro.trim()) && !"todas".equalsIgnoreCase(tipoErro.trim())) {
+                sb.append("AND te.codigo = ? ");
+                params.add(tipoErro.trim().toUpperCase());
+            }
+            if (fonteDadoId != null) {
+                sb.append("AND q.fonte_dado_id = ? ");
+                params.add(fonteDadoId);
+            }
+            if (loteIngestaoId != null) {
+                sb.append("AND q.lote_ingestao_id = ? ");
+                params.add(loteIngestaoId);
+            }
+
+            subqueries.add(sb.toString());
+        }
+
+        if (subqueries.isEmpty()) {
+            return 0;
+        }
+
+        String sql = "SELECT COALESCE(SUM(qtd), 0) FROM (" + String.join(" UNION ALL ", subqueries) + ")";
+        try {
+            Long total = jdbcTemplate.queryForObject(sql, Long.class, params.toArray());
+            return total != null ? total : 0;
+        } catch (Exception e) {
+            log.error("Erro ao contar itens da quarentena: {}", e.getMessage());
+            return 0;
         }
     }
 
@@ -286,7 +361,7 @@ public class QuarentenaService {
                      "te.codigo AS tipo_erro_codigo, te.descricao AS tipo_erro_descricao, " +
                      "q.campo_problema, q.valor_recebido, q.motivo_rejeicao, " +
                      "sa.codigo AS status_analise_codigo, sa.descricao AS status_analise_descricao, " +
-                     "q.data_quarentena, q.data_resolucao, CAST(q.payload_original AS VARCHAR2(4000)) AS payload_original " +
+                     "q.data_quarentena, q.data_resolucao, q.geometria_wkt, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original " +
                      "FROM QUARENTENA." + cfg.nomeTabela() + " q " +
                      "LEFT JOIN QUARENTENA.tipo_erro_quarentena te ON te.id = q.tipo_erro_id " +
                      "LEFT JOIN QUARENTENA.status_analise_quarentena sa ON sa.id = q.status_analise_id " +
@@ -320,6 +395,19 @@ public class QuarentenaService {
 
         Long analistaId = request != null ? request.analistaId() : null;
         int rows = jdbcTemplate.update(sql, motivoDesc, analistaId, id);
+
+        if (rows > 0 && transicaoService != null) {
+            try {
+                String sqlLote = "SELECT lote_ingestao_id FROM QUARENTENA." + cfg.nomeTabela() + " WHERE id = ?";
+                List<Long> loteIds = jdbcTemplate.query(sqlLote, (rs, rowNum) -> rs.getLong(1), id);
+                if (!loteIds.isEmpty() && loteIds.get(0) != null) {
+                    transicaoService.verificarEAtualizarStatusLoteAposResolucao(loteIds.get(0), analistaId);
+                }
+            } catch (Exception e) {
+                log.debug("Aviso ao verificar status do lote após descarte: {}", e.getMessage());
+            }
+        }
+
         return rows > 0;
     }
 
@@ -342,22 +430,42 @@ public class QuarentenaService {
     }
 
     /**
-     * Registra que o item foi corrigido e reprocessado.
+     * Registra que o item foi corrigido e promove-o para a camada Silver.
+     * <p>
+     * Se houver falha de validação, uma IllegalArgumentException é lançada e não deve
+     * marcar a transação como rollback-only prematuramente.
      */
-    @Transactional
-    public boolean marcarCorrigido(String entidade, Long id, Long analistaId) {
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
+    public ResultadoRevalidacaoQuarentena marcarCorrigido(String entidade, Long id, AcaoQuarentenaRequest request) {
+        if (transicaoService != null) {
+            return transicaoService.promoverRegistroQuarentenaParaSilver(entidade, id, request);
+        }
+
         TabelaEspelhoConfig cfg = TABELAS_ESPELHO.get(normalizarEntidade(entidade));
         if (cfg == null) {
             throw new IllegalArgumentException("Entidade de quarentena desconhecida: " + entidade);
         }
 
+        Long analistaId = request != null ? request.analistaId() : null;
         String sql = "UPDATE QUARENTENA." + cfg.nomeTabela() + " SET " +
                      "status_analise_id = (SELECT id FROM QUARENTENA.status_analise_quarentena WHERE codigo = 'CORRIGIDO_REPROCESSADO'), " +
                      "analista_responsavel_id = ?, " +
                      "data_resolucao = SYSTIMESTAMP " +
                      "WHERE id = ?";
 
-        return jdbcTemplate.update(sql, analistaId, id) > 0;
+        int rows = jdbcTemplate.update(sql, analistaId, id);
+        if (rows > 0) {
+            return ResultadoRevalidacaoQuarentena.individual(id, List.of());
+        }
+        return null;
+    }
+
+    /**
+     * Sobrecarga para compatibilidade com chamadas legadas passando apenas analistaId.
+     */
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
+    public ResultadoRevalidacaoQuarentena marcarCorrigido(String entidade, Long id, Long analistaId) {
+        return marcarCorrigido(entidade, id, new AcaoQuarentenaRequest(null, null, analistaId));
     }
 
     // -------------------------------------------------------------------------
@@ -379,6 +487,26 @@ public class QuarentenaService {
         return s;
     }
 
+    /**
+     * Adiciona um novo valor de domínio via DominioService.
+     */
+    public Map<String, Object> adicionarValorDominio(NovoDominioRequest request) {
+        if (dominioService != null) {
+            return dominioService.adicionarValorDominio(request);
+        }
+        throw new IllegalStateException("Serviço de Domínio não configurado.");
+    }
+
+    /**
+     * Lista os tipos de áreas protegidas cadastrados na Silver.
+     */
+    public List<Map<String, Object>> listarTiposAreaProtegida() {
+        if (dominioService != null) {
+            return dominioService.listarTiposAreaProtegida();
+        }
+        return Collections.emptyList();
+    }
+
     private ItemQuarentenaDto mapearItemDto(ResultSet rs) throws SQLException {
         LocalDateTime dtQuarentena = rs.getTimestamp("data_quarentena") != null
                 ? rs.getTimestamp("data_quarentena").toLocalDateTime()
@@ -387,36 +515,96 @@ public class QuarentenaService {
                 ? rs.getTimestamp("data_resolucao").toLocalDateTime()
                 : null;
 
+        String payload = null;
+        try {
+            java.sql.Clob clob = rs.getClob("payload_original");
+            if (clob != null) {
+                payload = clob.getSubString(1, (int) Math.min(clob.length(), Integer.MAX_VALUE));
+            }
+        } catch (Exception e) {
+            try {
+                payload = rs.getString("payload_original");
+            } catch (Exception ignored) {}
+        }
+
+        String tipoErro = rs.getString("tipo_erro_codigo");
+        String motivo = rs.getString("motivo_rejeicao");
+        String campoProb = rs.getString("campo_problema");
+        String valRecebido = rs.getString("valor_recebido");
+        String entidade = rs.getString("entidade");
+
+        String tabelaRef = null;
+        if ("VALOR_FORA_DO_DOMINIO".equalsIgnoreCase(tipoErro)) {
+            if (motivo != null) {
+                Matcher m = PATTERN_TABELA_REF.matcher(motivo);
+                if (m.find()) {
+                    tabelaRef = ValidadorDominio.normalizarAliasTabela(m.group(1));
+                }
+            }
+            if (tabelaRef == null && campoProb != null) {
+                tabelaRef = OrquestradorValidacao.inferirTabelaReferenciaCanonico(campoProb);
+                if (tabelaRef == null) {
+                    tabelaRef = ValidadorDominio.normalizarAliasTabela(campoProb);
+                }
+            }
+        }
+
+        String tipoAreaProtegida = null;
+        String categoriaAreaProtegida = null;
+        if ("area_protegida".equalsIgnoreCase(entidade)) {
+            if (payload != null) {
+                Matcher mTipo = PATTERN_TIPO_AP.matcher(payload);
+                if (mTipo.find()) {
+                    tipoAreaProtegida = mTipo.group(1);
+                }
+                Matcher mCat = PATTERN_CAT_AP.matcher(payload);
+                if (mCat.find()) {
+                    categoriaAreaProtegida = mCat.group(1);
+                }
+            }
+            if (tipoAreaProtegida == null && "tipo_area_protegida".equalsIgnoreCase(campoProb)) {
+                tipoAreaProtegida = valRecebido;
+            }
+            if (categoriaAreaProtegida == null && "categoria_area_protegida".equalsIgnoreCase(campoProb)) {
+                categoriaAreaProtegida = valRecebido;
+            }
+        }
+
+        String geomWkt = null;
+        try {
+            geomWkt = rs.getString("geometria_wkt");
+        } catch (Exception ignored) {
+        }
+        if ((geomWkt == null || geomWkt.isBlank()) && valRecebido != null) {
+            String valTrim = valRecebido.trim().toUpperCase(java.util.Locale.ROOT);
+            if (valTrim.startsWith("POLYGON") || valTrim.startsWith("MULTIPOLYGON") || valTrim.startsWith("POINT") || valTrim.startsWith("LINESTRING")) {
+                geomWkt = valRecebido.trim();
+            }
+        }
+
         return new ItemQuarentenaDto(
                 rs.getLong("id"),
-                rs.getString("entidade"),
+                entidade,
                 rs.getString("chave_identificacao"),
                 rs.getLong("fonte_dado_id"),
                 rs.getString("fonte_dado_nome"),
                 rs.getLong("lote_ingestao_id"),
                 rs.getLong("registro_bruto_id"),
-                rs.getString("tipo_erro_codigo"),
+                tipoErro,
                 rs.getString("tipo_erro_descricao"),
-                rs.getString("campo_problema"),
-                rs.getString("valor_recebido"),
-                rs.getString("motivo_rejeicao"),
+                campoProb,
+                valRecebido,
+                motivo,
                 rs.getString("status_analise_codigo"),
                 rs.getString("status_analise_descricao"),
                 dtQuarentena != null ? dtQuarentena.format(ISO_FORMATTER) : null,
                 dtResolucao != null ? dtResolucao.format(ISO_FORMATTER) : null,
-                rs.getString("payload_original")
+                payload,
+                tabelaRef,
+                tipoAreaProtegida,
+                categoriaAreaProtegida,
+                geomWkt
         );
     }
-
-    private List<ItemQuarentenaDto> fallbackConsulta(List<String> subqueries, List<Object> params, int offset, int limit) {
-        // Fallback para ambientes com suporte básico
-        String sql = String.join(" UNION ALL ", subqueries);
-        List<Object> cleanParams = new ArrayList<>(params.subList(0, params.size() - 2));
-        List<ItemQuarentenaDto> todos = jdbcTemplate.query(sql, (rs, rowNum) -> mapearItemDto(rs), cleanParams.toArray());
-        int start = Math.min(Math.max(0, offset), todos.size());
-        int end = Math.min(start + Math.max(1, limit), todos.size());
-        return todos.subList(start, end);
-    }
-
-    
 }
+

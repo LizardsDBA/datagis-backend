@@ -165,8 +165,61 @@ public class ValidadorGeometria implements ValidadorCampo {
         if (limpo.startsWith("{")) {
             return parsearGeoJson(limpo);
         }
+        if (limpo.startsWith("[")) {
+            return parsearJsonArrayCoordenadas(limpo);
+        }
         WKTReader reader = new WKTReader(geometryFactory);
         return reader.read(limpo);
+    }
+
+    /**
+     * Faz parsing de lista de coordenadas JSON, por exemplo:
+     * [[-50.1, -25.2], [-50.2, -25.3], ...]
+     */
+    private Geometry parsearJsonArrayCoordenadas(String json) throws ParseException {
+        try {
+            JsonNode root = objectMapper.readTree(json);
+            if (!root.isArray() || root.isEmpty()) {
+                throw new ParseException("Array de coordenadas JSON vazio");
+            }
+            // Caso 1: Ponto único [lon, lat]
+            if (root.get(0).isNumber()) {
+                if (root.size() < 2) throw new ParseException("Coordenada de ponto incompleta");
+                return geometryFactory.createPoint(new org.locationtech.jts.geom.Coordinate(
+                        root.get(0).doubleValue(), root.get(1).doubleValue()));
+            }
+            // Caso 2: Array de pares [[lon, lat], [lon, lat], ...]
+            if (root.get(0).isArray() && root.get(0).size() >= 2 && root.get(0).get(0).isNumber()) {
+                org.locationtech.jts.geom.Coordinate[] ring = extrairArrayCoordenadas(root);
+                if (ring.length >= 3 && !ring[0].equals2D(ring[ring.length - 1])) {
+                    org.locationtech.jts.geom.Coordinate[] fechado = new org.locationtech.jts.geom.Coordinate[ring.length + 1];
+                    System.arraycopy(ring, 0, fechado, 0, ring.length);
+                    fechado[fechado.length - 1] = ring[0].copy();
+                    ring = fechado;
+                }
+                return geometryFactory.createPolygon(geometryFactory.createLinearRing(ring));
+            }
+            // Caso 3: Array aninhado (anéis ou múltiplos polígonos)
+            if (root.get(0).isArray() && root.get(0).size() > 0 && root.get(0).get(0).isArray()) {
+                if (root.get(0).get(0).get(0).isNumber()) {
+                    JsonNode exterior = root.get(0);
+                    org.locationtech.jts.geom.Coordinate[] ring = extrairArrayCoordenadas(exterior);
+                    if (ring.length >= 3 && !ring[0].equals2D(ring[ring.length - 1])) {
+                        org.locationtech.jts.geom.Coordinate[] fechado = new org.locationtech.jts.geom.Coordinate[ring.length + 1];
+                        System.arraycopy(ring, 0, fechado, 0, ring.length);
+                        fechado[fechado.length - 1] = ring[0].copy();
+                        ring = fechado;
+                    }
+                    return geometryFactory.createPolygon(geometryFactory.createLinearRing(ring));
+                }
+                return converterCoordenadasGeoJson("MULTIPOLYGON", root);
+            }
+            throw new ParseException("Formato de coordenadas JSON não reconhecido");
+        } catch (ParseException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ParseException("Erro ao processar lista de coordenadas JSON: " + e.getMessage());
+        }
     }
 
     /**

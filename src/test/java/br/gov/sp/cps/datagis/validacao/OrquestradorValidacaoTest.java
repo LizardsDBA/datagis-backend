@@ -196,6 +196,24 @@ class OrquestradorValidacaoTest {
         assertThat(resultado.rejeitados().get(0).tipoErro()).isEqualTo("REGRESSAO_DE_VALOR");
     }
 
+    @Test
+    @DisplayName("Não deve inferir município ou auto de infração como tabela de domínio (lookup)")
+    void naoDeveInferirMunicipioEAutoInfracaoComoDominio() {
+        assertThat(OrquestradorValidacao.inferirTabelaReferenciaCanonico("municipio")).isNull();
+        assertThat(OrquestradorValidacao.inferirTabelaReferenciaCanonico("cod_municipio_ibge")).isNull();
+        assertThat(OrquestradorValidacao.inferirTabelaReferenciaCanonico("num_auto_infracao")).isNull();
+        assertThat(OrquestradorValidacao.inferirTabelaReferenciaCanonico("auto_infracao")).isNull();
+    }
+
+    @Test
+    @DisplayName("Deve inferir município e auto de infração como referência à entidade Silver (integridade cruzada)")
+    void deveInferirMunicipioEAutoInfracaoComoIntegridadeCruzada() {
+        assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("municipio")).isEqualTo("municipio");
+        assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("cod_municipio_ibge")).isEqualTo("municipio");
+        assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("num_auto_infracao")).isEqualTo("auto_infracao");
+        assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("auto_infracao")).isEqualTo("auto_infracao");
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------

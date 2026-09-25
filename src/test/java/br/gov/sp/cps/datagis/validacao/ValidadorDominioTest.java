@@ -359,6 +359,58 @@ class ValidadorDominioTest {
         assertThat(r3.valorTransformado()).isEqualTo("PCT");
     }
 
+    @Test
+    @DisplayName("Deve validar unidade_federativa e normalizar aliases (uf -> unidade_federativa)")
+    void deveValidarUnidadeFederativaEAlias() {
+        when(jdbcTemplate.queryForList("SELECT codigo, descricao, CAST(cod_ibge AS VARCHAR2(10)) AS cod_ibge FROM SILVER.unidade_federativa WHERE ativo = 1"))
+                .thenReturn(List.of(
+                        Map.of("CODIGO", "PR", "DESCRICAO", "Parana", "COD_IBGE", "41"),
+                        Map.of("CODIGO", "SP", "DESCRICAO", "Sao Paulo", "COD_IBGE", "35")
+                ));
+
+        ContextoValidacaoCampo ctx = contextoComTabela("uf", "uf");
+
+        ResultadoValidacao r1 = validador.validar("PR", ctx);
+        assertThat(r1.isValido()).isTrue();
+        assertThat(r1.valorTransformado()).isEqualTo("PR");
+
+        ResultadoValidacao r2 = validador.validar("Paraná", ctx);
+        assertThat(r2.isValido()).isTrue();
+        assertThat(r2.valorTransformado()).isEqualTo("PR");
+
+        ResultadoValidacao r3 = validador.validar("41", ctx);
+        assertThat(r3.isValido()).isTrue();
+        assertThat(r3.valorTransformado()).isEqualTo("PR");
+
+        ResultadoValidacao rInvalido = validador.validar("XX", ctx);
+        assertThat(rInvalido.isValido()).isFalse();
+        assertThat(rInvalido.tipoErro()).isEqualTo("VALOR_FORA_DO_DOMINIO");
+    }
+
+    @Test
+    @DisplayName("Deve normalizar aliases de tabelas classes_prodes, tipo_area_embrago e bioma_predominante")
+    void deveNormalizarAliasesDiversos() {
+        when(jdbcTemplate.queryForList("SELECT codigo, descricao FROM SILVER.classe_prodes WHERE ativo = 1"))
+                .thenReturn(List.of(
+                        Map.of("CODIGO", "DESMATAMENTO", "DESCRICAO", "Desmatamento (corte raso)")
+                ));
+
+        ContextoValidacaoCampo ctxProdes = contextoComTabela("classe", "classes_prodes");
+        ResultadoValidacao rProdes = validador.validar("Desmatamento", ctxProdes);
+        assertThat(rProdes.isValido()).isTrue();
+        assertThat(rProdes.valorTransformado()).isEqualTo("DESMATAMENTO");
+
+        when(jdbcTemplate.queryForList("SELECT codigo, descricao FROM SILVER.tipo_area_embargo WHERE ativo = 1"))
+                .thenReturn(List.of(
+                        Map.of("CODIGO", "QUEIMADA", "DESCRICAO", "Queimada / incendio")
+                ));
+
+        ContextoValidacaoCampo ctxEmbargo = contextoComTabela("tipo_area", "tipo_area_embrago");
+        ResultadoValidacao rEmbargo = validador.validar("Queimada", ctxEmbargo);
+        assertThat(rEmbargo.isValido()).isTrue();
+        assertThat(rEmbargo.valorTransformado()).isEqualTo("QUEIMADA");
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------

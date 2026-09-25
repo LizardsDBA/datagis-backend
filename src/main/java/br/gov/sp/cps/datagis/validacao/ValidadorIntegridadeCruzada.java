@@ -135,7 +135,20 @@ public class ValidadorIntegridadeCruzada implements ValidadorCampo {
                     chaveCache,
                     k -> carregarTodasChaves(def)
             );
-            return chavesPreCarregadas.contains(chaveValor);
+            if (chavesPreCarregadas.contains(chaveValor)) {
+                return true;
+            }
+            if (chaveValor.matches("^[A-Za-z]{2}-\\d+$")) {
+                String semUf = chaveValor.substring(3);
+                if (chavesPreCarregadas.contains(semUf)) {
+                    return true;
+                }
+            }
+            String norm = normalizarTexto(chaveValor);
+            if (chavesPreCarregadas.contains(norm)) {
+                return true;
+            }
+            return false;
         }
 
         // Para outras tabelas, verifica se já foi verificado e mantido em cache
@@ -156,17 +169,43 @@ public class ValidadorIntegridadeCruzada implements ValidadorCampo {
 
     /**
      * Executa carga em lote de todas as chaves de entidades dimensionais (ex.: silver.municipio).
+     * Para município, indexa código IBGE numérico, prefixado (ex.: PR-4106902) e nome oficial.
      */
     private Set<String> carregarTodasChaves(DefinicaoReferenciaSilver def) {
         try {
             String sql = "SELECT " + def.coluna() + " FROM " + silverSchema + "." + def.tabela();
             List<String> resultados = jdbcTemplate.queryForList(sql, String.class);
             Set<String> chaves = new HashSet<>();
-            for (String res : resultados) {
-                if (res != null && !res.isBlank()) {
-                    chaves.add(res.trim().toUpperCase(Locale.ROOT));
+            if (resultados != null) {
+                for (String res : resultados) {
+                    if (res != null && !res.isBlank()) {
+                        String s = res.trim().toUpperCase(Locale.ROOT);
+                        chaves.add(s);
+                        if ("municipio".equalsIgnoreCase(def.tabela())) {
+                            chaves.add("PR-" + s);
+                        }
+                    }
                 }
             }
+
+            if ("municipio".equalsIgnoreCase(def.tabela()) && !"nome".equalsIgnoreCase(def.coluna())) {
+                try {
+                    String sqlNome = "SELECT nome FROM " + silverSchema + ".municipio";
+                    List<String> nomes = jdbcTemplate.queryForList(sqlNome, String.class);
+                    if (nomes != null) {
+                        for (String nm : nomes) {
+                            if (nm != null && !nm.isBlank()) {
+                                String nmUpper = nm.trim().toUpperCase(Locale.ROOT);
+                                chaves.add(nmUpper);
+                                chaves.add(normalizarTexto(nmUpper));
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // Em mocks ou ambientes sem stub para 'nome', ignora
+                }
+            }
+
             Set<String> chavesSet = ConcurrentHashMap.newKeySet(chaves.size() + 16);
             chavesSet.addAll(chaves);
             return chavesSet;
@@ -176,6 +215,12 @@ public class ValidadorIntegridadeCruzada implements ValidadorCampo {
                     ex
             );
         }
+    }
+
+    public static String normalizarTexto(String s) {
+        if (s == null) return "";
+        return java.text.Normalizer.normalize(s.trim().toUpperCase(Locale.ROOT), java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "");
     }
 
     /**
