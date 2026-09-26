@@ -320,6 +320,7 @@ public class TransicaoBronzeSilverService {
         // 1. Carrega o registro da tabela espelho de quarentena com o código do erro
         String sql = "SELECT q.id, q.fonte_dado_id, q.lote_ingestao_id, q.registro_bruto_id, " +
                 "q.geometria_wkt, JSON_SERIALIZE(q.payload_original RETURNING CLOB) AS payload_original, " +
+                "q.campo_problema, " +
                 "te.codigo AS tipo_erro_codigo " +
                 "FROM " + quarentenaSchema + "." + tabEspelho + " q " +
                 "LEFT JOIN " + quarentenaSchema + ".tipo_erro_quarentena te ON te.id = q.tipo_erro_id " +
@@ -340,6 +341,7 @@ public class TransicaoBronzeSilverService {
                 : null;
         String geomWkt = row.get("geometria_wkt") != null ? row.get("geometria_wkt").toString() : null;
         String payloadOriginal = row.get("payload_original") != null ? row.get("payload_original").toString() : null;
+        String campoProblemaOriginal = row.get("campo_problema") != null ? row.get("campo_problema").toString() : null;
         String tipoErroCodigo = row.get("tipo_erro_codigo") != null ? row.get("tipo_erro_codigo").toString() : null;
 
         // 2. Determina o payload e a geometria efetivos (se o operador editou no modal,
@@ -381,6 +383,8 @@ public class TransicaoBronzeSilverService {
                     .build();
         }
 
+        Long analistaId = request != null ? request.analistaId() : null;
+
         // 4. Valida o registro individualmente contra a esteira de regras
         if (orquestradorValidacao != null) {
             OrquestradorValidacao.ResultadoValidacaoRegistro resVal = orquestradorValidacao
@@ -412,6 +416,50 @@ public class TransicaoBronzeSilverService {
                         log.warn("Falha ao sincronizar novo erro de revalidação na quarentena {}: {}", quarentenaId,
                                 exUpd.getMessage());
                     }
+                }
+
+                // Preserva payload_original / geometria_wkt editados na quarentena se foram informados
+                if (request != null && request.payloadCorrigido() != null && !request.payloadCorrigido().trim().isBlank()) {
+                    try {
+                        jdbcTemplate.update(
+                                "UPDATE " + quarentenaSchema + "." + tabEspelho + " SET payload_original = ? WHERE id = ?",
+                                payloadEfetivo, quarentenaId);
+                    } catch (Exception e) {
+                        log.debug("Aviso ao atualizar payload na quarentena {}.{}: {}", quarentenaSchema, tabEspelho,
+                                e.getMessage());
+                    }
+                }
+                if (request != null && request.geometriaCorrigida() != null && !request.geometriaCorrigida().trim().isBlank()) {
+                    try {
+                        jdbcTemplate.update(
+                                "UPDATE " + quarentenaSchema + "." + tabEspelho + " SET geometria_wkt = ? WHERE id = ?",
+                                geomWktEfetivo, quarentenaId);
+                    } catch (Exception e) {
+                        log.debug("Aviso ao atualizar geometria_wkt na quarentena {}.{}: {}", quarentenaSchema, tabEspelho,
+                                e.getMessage());
+                    }
+                }
+
+                // REAVALIAÇÃO EM CASCATA NA TRANSIÇÃO DE ERRO:
+                // Se o erro original era VALOR_FORA_DO_DOMINIO e o registro passou da validação de domínio
+                // (transitando para outro tipo de erro OU para outro campo), repassa a revalidação para
+                // todos os outros registros com pendência de domínio ANTES de disparar o próximo erro.
+                boolean eraErroDominio = "VALOR_FORA_DO_DOMINIO".equalsIgnoreCase(tipoErroCodigo);
+                boolean transitouParaOutroErro = novoTipoErro != null && (
+                        !"VALOR_FORA_DO_DOMINIO".equalsIgnoreCase(novoTipoErro)
+                        || (campoProblemaOriginal != null && !campoProblemaOriginal.equalsIgnoreCase(campo))
+                );
+
+                if (eraErroDominio && transitouParaOutroErro) {
+                    Set<Long> lotesAfetadosColetivo = new LinkedHashSet<>();
+                    int[] resultadoColetivo = reavaliarOutrosRegistrosQuarentenaPorDominio(quarentenaId, analistaId,
+                            lotesAfetadosColetivo);
+                    for (Long loteId : lotesAfetadosColetivo) {
+                        verificarEAtualizarStatusLoteAposResolucao(loteId, analistaId);
+                    }
+                    log.info(
+                            "Registro {} transitou de VALOR_FORA_DO_DOMINIO ({}) para {} ({}). Reavaliação em cascata executada: {} aprovado(s), {} mantido(s).",
+                            quarentenaId, campoProblemaOriginal, novoTipoErro, campo, resultadoColetivo[0], resultadoColetivo[1]);
                 }
 
                 log.warn("Tentativa de revalidação falhou para quarentena {}. Campo '{}': {}", quarentenaId, campo,
@@ -461,7 +509,6 @@ public class TransicaoBronzeSilverService {
         }
 
         // Atualiza o status do registro na Quarentena para CORRIGIDO_REPROCESSADO
-        Long analistaId = request != null ? request.analistaId() : null;
         String sqlUpdateStatus = "UPDATE " + quarentenaSchema + "." + tabEspelho +
                 " SET status_analise_id = (SELECT id FROM " + quarentenaSchema
                 + ".status_analise_quarentena WHERE codigo = 'CORRIGIDO_REPROCESSADO'), " +
