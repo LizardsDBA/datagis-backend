@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
@@ -400,6 +401,7 @@ class TransicaoBronzeSilverServiceTest {
                 "lote_ingestao_id", loteId,
                 "registro_bruto_id", regBrutoId,
                 "payload_original", "{\"cod_imovel\":\"PR-DOM-FAIL\"}",
+                "campo_problema", "tipo_imovel",
                 "tipo_erro_codigo", "VALOR_FORA_DO_DOMINIO"
         );
         when(jdbcTemplate.queryForList(contains("WHERE q.id = ?"), eq(quarentenaId)))
@@ -419,8 +421,122 @@ class TransicaoBronzeSilverServiceTest {
                 transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req)
         );
 
-        // NENHUM update de status deve ter sido executado
-        verify(jdbcTemplate, never()).update(contains("status_analise_id"), any(), any());
+        // NENHUM update para CORRIGIDO_REPROCESSADO deve ter sido executado
+        verify(jdbcTemplate, never()).update(contains("status_analise_id = (SELECT id FROM QUARENTENA.status_analise_quarentena WHERE codigo = 'CORRIGIDO_REPROCESSADO')"), any(), any());
+    }
+
+    @Test
+    @DisplayName("Quando registro com erro de domínio transitar para novo erro (CPF), sincroniza novo erro e DISPARA revalidação em cascata para os outros")
+    void quandoRegistroComErroDominioTransitarParaNovoErro_deveDispararRevalidacaoEmCascataParaOutrosRegistros() {
+        Long quarentenaId = 15L;
+        Long loteId = 5L;
+        Long regBrutoId = 505L;
+
+        // Registro inspecionado que originalmente possuía erro VALOR_FORA_DO_DOMINIO no campo tipo_imovel
+        Map<String, Object> rowInspecionado = Map.of(
+                "id", quarentenaId,
+                "fonte_dado_id", 1L,
+                "lote_ingestao_id", loteId,
+                "registro_bruto_id", regBrutoId,
+                "payload_original", "{\"cpf\":\"00000000000\",\"tipo_imovel\":\"NOVO_DOMINIO\"}",
+                "campo_problema", "tipo_imovel",
+                "tipo_erro_codigo", "VALOR_FORA_DO_DOMINIO"
+        );
+        when(jdbcTemplate.queryForList(contains("WHERE q.id = ?"), eq(quarentenaId)))
+                .thenReturn(List.of(rowInspecionado));
+
+        RegistroBruto reg = RegistroBruto.builder().id(regBrutoId).loteIngestaoId(loteId).fonteDadoId(1L).payload("{\"cpf\":\"00000000000\",\"tipo_imovel\":\"NOVO_DOMINIO\"}").build();
+        when(registroBrutoRepository.findById(regBrutoId)).thenReturn(Optional.of(reg));
+
+        // Registro inspecionado supera o domínio, mas agora cai em CPF_CNPJ_INVALIDO
+        RegistroRejeitadoQuarentena rejNovoErro = new RegistroRejeitadoQuarentena(reg, "CPF_CNPJ_INVALIDO", "cpf", "00000000000", "CPF inválido");
+        when(orquestradorValidacao.validarRegistroIndividual(eq(1L), any(RegistroBruto.class)))
+                .thenReturn(new OrquestradorValidacao.ResultadoValidacaoRegistro(false, null, rejNovoErro));
+
+        // Simula outro registro candidato com erro VALOR_FORA_DO_DOMINIO na quarentena
+        Map<String, Object> candidatoOutro = Map.of(
+                "id", 25L,
+                "fonte_dado_id", 1L,
+                "lote_ingestao_id", 8L,
+                "registro_bruto_id", 606L,
+                "payload_original", "{\"cpf\":\"12345678909\",\"tipo_imovel\":\"NOVO_DOMINIO\"}"
+        );
+        when(jdbcTemplate.queryForList(contains("VALOR_FORA_DO_DOMINIO"), eq(quarentenaId)))
+                .thenReturn(List.of(candidatoOutro), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+
+        // Para o registro candidato (id 25), a validação agora é 100% válida!
+        when(orquestradorValidacao.validarRegistroIndividual(eq(1L), argThat(r -> r != null && Long.valueOf(606L).equals(r.getId()))))
+                .thenReturn(new OrquestradorValidacao.ResultadoValidacaoRegistro(true, null, null));
+
+        br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
+                new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest("Revalidado", null, 99L);
+
+        // Deve lançar IllegalArgumentException para o registro inspecionado (pois ainda tem erro de CPF)
+        assertThrows(IllegalArgumentException.class, () ->
+                transicaoService.promoverRegistroQuarentenaParaSilver("imovel_rural", quarentenaId, req)
+        );
+
+        // 1. Atualizou o registro inspecionado para o novo erro (CPF_CNPJ_INVALIDO) com status PENDENTE
+        verify(jdbcTemplate).update(contains("tipo_erro_id = (SELECT id FROM"), eq("CPF_CNPJ_INVALIDO"), eq("cpf"), eq("00000000000"), eq("CPF inválido"), eq(quarentenaId));
+
+        // 2. DISPAROU A CASCATA: consultou candidatos de domínio e aprovou o outro registro (id 25) para CORRIGIDO_REPROCESSADO
+        verify(jdbcTemplate).update(contains("status_analise_id = (SELECT id FROM QUARENTENA.status_analise_quarentena WHERE codigo = 'CORRIGIDO_REPROCESSADO')"), eq(99L), eq(25L));
+    }
+
+    @Test
+    @DisplayName("Quando registro com erro de domínio transitar para OUTRO campo de domínio (biomas), sincroniza e DISPARA cascata para outros registros")
+    void quandoRegistroComErroDominioTransitarParaOutroCampoDominio_deveDispararRevalidacaoEmCascata() {
+        Long quarentenaId = 16L;
+        Long loteId = 5L;
+        Long regBrutoId = 506L;
+
+        // Registro inspecionado originalmente com erro de domínio em categoria_area_protegida
+        Map<String, Object> rowInspecionado = Map.of(
+                "id", quarentenaId,
+                "fonte_dado_id", 2L,
+                "lote_ingestao_id", loteId,
+                "registro_bruto_id", regBrutoId,
+                "payload_original", "{\"categoria_area_protegida\":\"NOVA_CAT\",\"biomas\":\"SISTEMA COSTEIRO-MARINHO\"}",
+                "campo_problema", "categoria_area_protegida",
+                "tipo_erro_codigo", "VALOR_FORA_DO_DOMINIO"
+        );
+        when(jdbcTemplate.queryForList(contains("WHERE q.id = ?"), eq(quarentenaId)))
+                .thenReturn(List.of(rowInspecionado));
+
+        RegistroBruto reg = RegistroBruto.builder().id(regBrutoId).loteIngestaoId(loteId).fonteDadoId(2L).payload("{\"categoria_area_protegida\":\"NOVA_CAT\",\"biomas\":\"SISTEMA COSTEIRO-MARINHO\"}").build();
+        when(registroBrutoRepository.findById(regBrutoId)).thenReturn(Optional.of(reg));
+
+        // Registro inspecionado supera categoria_area_protegida, mas cai em VALOR_FORA_DO_DOMINIO no campo biomas!
+        RegistroRejeitadoQuarentena rejOutroCampo = new RegistroRejeitadoQuarentena(reg, "VALOR_FORA_DO_DOMINIO", "biomas", "SISTEMA COSTEIRO-MARINHO", "Valor não encontrado na tabela bioma");
+        when(orquestradorValidacao.validarRegistroIndividual(eq(2L), any(RegistroBruto.class)))
+                .thenReturn(new OrquestradorValidacao.ResultadoValidacaoRegistro(false, null, rejOutroCampo));
+
+        // Outro registro candidato que só precisava de NOVA_CAT
+        Map<String, Object> outroCandidato = Map.of(
+                "id", 30L,
+                "fonte_dado_id", 2L,
+                "lote_ingestao_id", 9L,
+                "registro_bruto_id", 607L,
+                "payload_original", "{\"categoria_area_protegida\":\"NOVA_CAT\",\"biomas\":\"Mata Atlântica\"}"
+        );
+        when(jdbcTemplate.queryForList(contains("VALOR_FORA_DO_DOMINIO"), eq(quarentenaId)))
+                .thenReturn(List.of(outroCandidato), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+
+        when(orquestradorValidacao.validarRegistroIndividual(eq(2L), argThat(r -> r != null && Long.valueOf(607L).equals(r.getId()))))
+                .thenReturn(new OrquestradorValidacao.ResultadoValidacaoRegistro(true, null, null));
+
+        br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest req =
+                new br.gov.sp.cps.datagis.quarentena.AcaoQuarentenaRequest("Revalidado", null, 99L);
+
+        assertThrows(IllegalArgumentException.class, () ->
+                transicaoService.promoverRegistroQuarentenaParaSilver("area_protegida", quarentenaId, req)
+        );
+
+        // 1. Atualizou o registro 16 com o novo campo problema biomas
+        verify(jdbcTemplate).update(contains("tipo_erro_id = (SELECT id FROM"), eq("VALOR_FORA_DO_DOMINIO"), eq("biomas"), eq("SISTEMA COSTEIRO-MARINHO"), eq("Valor não encontrado na tabela bioma"), eq(quarentenaId));
+
+        // 2. DISPAROU A CASCATA: o outro candidato (id 30) foi aprovado para CORRIGIDO_REPROCESSADO
+        verify(jdbcTemplate).update(contains("status_analise_id = (SELECT id FROM QUARENTENA.status_analise_quarentena WHERE codigo = 'CORRIGIDO_REPROCESSADO')"), eq(99L), eq(30L));
     }
 
     @Test
