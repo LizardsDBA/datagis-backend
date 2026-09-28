@@ -28,6 +28,9 @@
 	</scm>
 	<properties>
 		<java.version>21</java.version>
+		<!-- O Spring Boot nao gerencia essas versoes, entao fica fixo aqui. -->
+		<geotools.version>35.1</geotools.version>
+		<jts.version>1.20.0</jts.version>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -57,6 +60,47 @@
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-oracle</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-quartz</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-batch</artifactId>
+		</dependency>
+
+		<!-- Suporte a SDO_GEOMETRY no JPA/Hibernate. Sem versao, o Spring Boot resolve. -->
+		<dependency>
+			<groupId>org.hibernate.orm</groupId>
+			<artifactId>hibernate-spatial</artifactId>
+		</dependency>
+		<!-- Operacoes geometricas (interseccao, validacao topologica, parsing WKT). -->
+		<dependency>
+			<groupId>org.locationtech.jts</groupId>
+			<artifactId>jts-core</artifactId>
+			<version>${jts.version}</version>
+		</dependency>
+
+		<!-- Leitura de Shapefile/GeoJSON pras proximas fontes (IBGE, ICMBio, FUNAI,
+		     IBAMA). O CAR (1a fonte) e GeoJSON puro via Jackson, nao usa isso ainda.
+		     Ainda falta testar se essas libs funcionam direito no Boot 4. -->
+		<dependency>
+			<groupId>org.geotools</groupId>
+			<artifactId>gt-shapefile</artifactId>
+			<version>${geotools.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.geotools</groupId>
+			<artifactId>gt-geojson</artifactId>
+			<version>${geotools.version}</version>
+		</dependency>
+
+		<!-- OpenAPI/Swagger - precisa ser linha 3.x (2.x nao suporta Spring Boot 4). -->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>3.0.3</version>
 		</dependency>
 
 		<dependency>
@@ -124,41 +168,41 @@
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<!--
+						Garante que o JVM forkado pelo Surefire usa o mesmo Java que
+						executa o Maven (${java.home}). Sem isso, com JDK 17 e JDK 21
+						ambos instalados, o fork pode pegar o Java 17 do PATH do sistema
+						e falhar com NoClassDefFoundError nas classes compiladas para 21.
+					-->
+					<jvm>${java.home}/bin/java</jvm>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
-				<executions>
-					<execution>
-						<id>default-compile</id>
-						<phase>compile</phase>
-						<goals>
-							<goal>compile</goal>
-						</goals>
-						<configuration>
-							<annotationProcessorPaths>
-								<path>
-									<groupId>org.projectlombok</groupId>
-									<artifactId>lombok</artifactId>
-								</path>
-							</annotationProcessorPaths>
-						</configuration>
-					</execution>
-					<execution>
-						<id>default-testCompile</id>
-						<phase>test-compile</phase>
-						<goals>
-							<goal>testCompile</goal>
-						</goals>
-						<configuration>
-							<annotationProcessorPaths>
-								<path>
-									<groupId>org.projectlombok</groupId>
-									<artifactId>lombok</artifactId>
-								</path>
-							</annotationProcessorPaths>
-						</configuration>
-					</execution>
-				</executions>
+				<configuration>
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+							<version>${lombok.version}</version>
+						</path>
+					</annotationProcessorPaths>
+				</configuration>
 			</plugin>
 		</plugins>
+
 	</build>
+
+	<!-- Necessario para resolver os artefatos org.geotools:* (nao estao no Maven Central). -->
+	<repositories>
+		<repository>
+			<id>osgeo</id>
+			<name>OSGeo Release Repository</name>
+			<url>https://repo.osgeo.org/repository/release/</url>
+		</repository>
+	</repositories>
 
 </project>

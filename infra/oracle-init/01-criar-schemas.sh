@@ -1,18 +1,16 @@
 #!/bin/bash
-# Executado UMA VEZ pelo entrypoint do gvenzl/oracle-free, na primeira
-# inicializacao (datafiles vazios), conectado como SYS. Quando este script
-# roda, o usuario definido em APP_USER/APP_USER_PASSWORD ja foi criado no PDB
-# FREEPDB1 pelo proprio entrypoint da imagem (com o papel DB_DEVELOPER_ROLE).
+# Roda uma vez so, na primeira inicializacao do container Oracle (banco vazio),
+# conectado como SYS. Nesse ponto o usuario do APP_USER/APP_USER_PASSWORD ja foi
+# criado no PDB pelo proprio entrypoint da imagem.
 #
-# Design (ver CLAUDE.md §2.1): 7 schemas, 1 unico usuario de conexao.
-#   - APP_USER (definido no .env como CONTROLE) = schema de controle E e quem
-#     o Spring Boot usa para conectar no banco.
-#   - BRONZE, SILVER, GOLD, QUARENTENA, QUARTZ, BATCH sao criados aqui como
-#     usuarios "donos de schema" sem uso de login direto — so existem para
-#     possuir tabelas. O APP_USER recebe privilegios ANY para criar/ler/
-#     escrever objetos QUALIFICADOS nesses schemas (ex.: bronze.registro_bruto).
-#   - Adequado para DEV/academico. Em um ambiente real isso seria restrito
-#     por schema com roles dedicados em vez de privilegios ANY.
+# Ideia: 7 schemas, 1 usuario de conexao so.
+#   - APP_USER (CONTROLE no .env) e o schema de controle e tambem quem o Spring
+#     usa pra conectar no banco.
+#   - BRONZE, SILVER, GOLD, QUARENTENA, QUARTZ, BATCH sao criados aqui so pra
+#     serem donos de tabela, sem login. O APP_USER ganha privilegio ANY pra
+#     criar/ler/escrever nesses schemas (ex.: bronze.registro_bruto).
+#   - Isso e ok pra projeto de faculdade. Num sistema de producao cada schema
+#     teria seu proprio usuario e permissao restrita.
 set -euo pipefail
 
 : "${APP_USER:?defina APP_USER no .env}"
@@ -32,8 +30,16 @@ CREATE USER batch      IDENTIFIED BY "${SCHEMA_PASSWORD}" DEFAULT TABLESPACE USE
 GRANT CREATE ANY TABLE, ALTER ANY TABLE, DROP ANY TABLE                      TO ${APP_USER};
 GRANT SELECT ANY TABLE, INSERT ANY TABLE, UPDATE ANY TABLE, DELETE ANY TABLE TO ${APP_USER};
 GRANT CREATE ANY INDEX, CREATE ANY SEQUENCE, CREATE ANY TRIGGER, CREATE ANY VIEW TO ${APP_USER};
+-- Toda tabela com IDENTITY cria uma sequence escondida no schema dono dela.
+-- Sem SELECT ANY SEQUENCE, criar tabela com IDENTITY fora do schema CONTROLE
+-- da erro (testamos e confirmamos isso).
+GRANT SELECT ANY SEQUENCE TO ${APP_USER};
+-- Nao existe "REFERENCES ANY TABLE" no Oracle. Pra fazer FK de um schema pro
+-- outro (ex.: bronze -> controle) precisa de GRANT REFERENCES na tabela,
+-- feito pelo dono dela. Isso fica nas migrations do Flyway, nao aqui, porque
+-- aqui ainda nao existe tabela nenhuma.
 
 EXIT;
 EOSQL
 
-echo "[oracle-init] schemas bronze/silver/gold/quarentena/quartz/batch criados; privilegios ANY concedidos a ${APP_USER} (schema controle)."
+echo "[oracle-init] schemas criados e privilegios concedidos a ${APP_USER}."
