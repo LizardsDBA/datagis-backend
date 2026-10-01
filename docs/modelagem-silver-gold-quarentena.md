@@ -362,7 +362,13 @@ Nenhuma migration é necessária para fontes que se enquadrem nos fenômenos exi
 
 ---
 
-## 8. Seeds de demonstração (`V021`-`V023`, location `db/migration/seed-demo`)
+## 8. Seeds de demonstração (`V021`-`V023`, location `db/migration/seed-demo`) — **[REMOVIDAS em 2026-10-01]**
+
+> As migrations `V021`, `V022`, `V023`, `V026` e `V027` (pasta `seed-demo`) foram apagadas
+> e a location saiu do `spring.flyway.locations`. Bronze/Silver/Gold/Quarentena não têm
+> mais dado falso semeado — só as tabelas de referência/catálogo. Banco de dev que já
+> aplicou essas versões precisa ser recriado (`docker compose down -v`). O texto abaixo
+> fica só como histórico.
 
 **Dados FALSOS** em Silver / Gold / Quarentena pra o time desenvolver as telas que leem
 essas camadas **antes** da transformação Bronze→Silver existir. Não vieram de

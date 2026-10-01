@@ -553,6 +553,10 @@ esquecido.
   `oracle-data` para datafiles, `infra/oracle-init/` montado em
   `/container-entrypoint-initdb.d`, `healthcheck: healthcheck.sh` (nativo da imagem).
   `backend` usa `depends_on: { oracle: { condition: service_healthy } }`.
+  **Isso só vale no `docker compose up`** — no reboot do PC o Docker religa tudo junto
+  (`restart: unless-stopped` ignora `depends_on`). Por isso o backend também espera o
+  banco sozinho: `spring.flyway.connect-retries=60` + `connect-retries-interval=5`
+  (até 5 min) no `application.properties` (2026-10-01).
 - `backend`: volume nomeado `maven-repo` → `/root/.m2` (cache de dependência entre subidas).
   `SPRING_DATASOURCE_URL/USERNAME/PASSWORD` vêm direto do `.env` via `environment:` do
   compose — Spring Boot faz o binding automático, **sem precisar de
@@ -1437,6 +1441,32 @@ disparar.
   - De-para dinâmico de colunas gerenciável pelo analista;
   - **202 testes unitários no backend aprovados** (100% de sucesso).
   - **Build frontend Vite concluído com sucesso** (`✓ built in 2.10s`).
+
+### 9.31. Seeds: só fontes + lote de municípios do PR — [DECIDIDO, 2026-10-01, branch `feat/ajuste-seeds`]
+- **Seeds de demonstração removidas** (`seed-demo/V021`–`V023`, `V026`, `V027`) e a location
+  saiu do `spring.flyway.locations`. Bronze/Silver/Gold/Quarentena nascem vazias, exceto
+  tabelas de referência/catálogo (V011, V015/V017/V030, V016/V018), que os validadores e
+  as FKs exigem. Banco de dev antigo precisa de `docker compose down -v` (Flyway recusa
+  versão aplicada que sumiu dos arquivos).
+- **Única seed de dado: `V037__seed_lote_ibge_malha_municipal_pr.sql`**, arquivo SQL pronto (gerado uma vez a partir do serviço do IAT; o gerador não fica no repo).
+  1 `lote_ingestao`
+  (`PROMOVIDO_SILVER`) da fonte 'IBGE - Malha Municipal (PR)' → 399 `registro_bruto` →
+  399 `silver.municipio`, linhagem ligada. Existe pra nenhuma fonte cair em
+  `REFERENCIA_NAO_ENCONTRADA` por falta de município.
+- **Resolução da geometria:** mesmo serviço do IAT da fonte 7, com
+  `maxAllowableOffset=0.00005` (~5 m, ~14 MB; com 0.0001 o servidor gera auto-interseção em 3 municípios). Resolução total = ~62 MB (pesado pra
+  migration e pro mapa); API do IBGE `qualidade=maxima` (3,6 MB) descartada porque não
+  traz nome nem área, e o validador casa município também pelo nome (focos, ICMBio).
+- **Conferido contra as fontes reais:** CAR, Focos IAT, Embargos/Autos IBAMA casam 100%.
+  Embargos/Autos ICMBio têm ~37 registros com nome que não é município do PR ou está
+  escrito errado na origem ("Cap. Leônidas Marques", "Tuneiras de Oeste", Naviraí/MS,
+  "Mar territorial"...) — esses vão pra Quarentena por desenho.
+- **[EM ABERTO] `bronze.registro_bruto.hash_registro` nunca é preenchido** (achado
+  2026-10-01). O `LoteIngestaoWriter` monta o `RegistroBruto` sem `.hashRegistro(...)`
+  nos dois caminhos de gravação — por isso `hash_origem` também sai vazio em toda a
+  Silver. Não confundir com `lote_ingestao.hash_conteudo` (hash do lote inteiro, que
+  funciona). Correção: SHA-256 de `payload` + `geometria_wkt` por registro. Combinado
+  fazer depois, em branch `fix/` própria.
 
 ---
 
