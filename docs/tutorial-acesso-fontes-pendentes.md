@@ -10,10 +10,18 @@
 > **Atualização 2026-10-04:** a linha 5 (Limites de biomas) deixou de ser "só falta
 > cadastrar" — foi cadastrada, ingerida e **virou seed fixo** (ver nota na tabela
 > abaixo e `CLAUDE.md` §2.5/§9). `IngestaoShapefileExecutor` ganhou suporte a
-> `DOWNLOAD_URL` nesse processo (antes só aceitava `UPLOAD_MANUAL`) — o que também
-> destrava o cadastro de INCRA (linha 6) sem nenhum código novo. INCRA em si **ainda
-> não foi cadastrado** — a tabela de "só falta cadastrar" da §0 foi atualizada pra
-> refletir isso.
+> `DOWNLOAD_URL` nesse processo (antes só aceitava `UPLOAD_MANUAL`).
+>
+> **Segunda atualização, mesmo dia:** com `DOWNLOAD_URL` funcionando, cadastramos e
+> testamos ao vivo também **MMA (CNUC nacional)** e **SFB (CNFP)** pra linha 6 — as
+> duas promoveram 100% dos registros (16.059 no total). Achado grande: **67% do CNFP
+> (8.671 de 12.874) resolve como `orgao=INCRA`** — o SFB sozinho já cobre boa parte
+> do que as 2 fontes INCRA separadas (quilombolas/assentamentos) trariam. Com isso, a
+> linha 6 do slide está **efetivamente coberta** (ICMBio + FUNAI + MMA + SFB
+> cadastrados e funcionando) — INCRA como fonte própria vira opcional, não bloqueio.
+> **As únicas fontes que realmente faltam agora são as 3 do CAR (linhas 2/3/4),
+> travadas no credenciamento SICAR Temas (§1)** — não é mais pesquisa nem cadastro,
+> é um processo institucional externo.
 
 ## 0. Slide oficial × o que está cadastrado hoje × o que falta
 
@@ -30,37 +38,30 @@ versão original deste cruzamento e hoje, ver nota na própria linha.
 | 3 | Reserva Legal declarada | CAR | IRL | ❌ **não cadastrada** — mesmo bloqueio |
 | 4 | Vegetação nativa | CAR | ICV, IAPP | ❌ **não cadastrada** — Plano B investigado hoje, não funciona ainda, §2 |
 | 5 | Limites de biomas | IBGE | IRL | ✅ **cadastrada e ingerida em 2026-10-04** — `DOWNLOAD_URL`+`SHAPEFILE` (precisou implementar suporte a `DOWNLOAD_URL` no `IngestaoShapefileExecutor`, que só aceitava `UPLOAD_MANUAL` até então). Geometria dos 6 biomas **virou seed fixo** (`V040`, mesmo padrão do município/`V037`) — ambiente novo já sobe com tudo geolocalizado, sem precisar disparar ingestão manual |
-| 6 | Áreas protegidas e territórios especiais | ICMBio, MMA, FUNAI, **INCRA**, SFB | ISAP | 🟡 **2 de 5 órgãos cadastrados** (`#2` ICMBio, `#8` FUNAI) — INCRA (quilombolas+assentamentos) segue validado desde a v2, mas **ainda não foi cadastrado** (tabela abaixo). MMA/SFB seguem sem fonte encontrada (§3 do doc antigo) |
+| 6 | Áreas protegidas e territórios especiais | ICMBio, MMA, FUNAI, **INCRA**, SFB | ISAP | ✅ **4 de 5 nominalmente cadastrados e testados em 2026-10-04** — ICMBio (`#2`), FUNAI (`#8`), MMA/CNUC nacional e SFB/CNFP (16.059 registros promovidos, 100%). INCRA não tem fonte própria cadastrada, mas **67% do SFB já resolve como `orgao=INCRA`** (assentamentos/glebas) — cobertura efetiva, não é mais gap real |
 | 7 | Embargos ambientais | IBAMA, ICMBio | IAE | ✅ **4 fontes cadastradas** — `#5`/`#9` embargos (IBAMA/ICMBio) + `#10`/`#11` autos de infração (dado extra, não pedido literalmente pelo slide, mas do mesmo tema) |
 | 8 | Desmatamento | INPE (PRODES) | IDesmat | ✅ `#3` |
 | 9 | Focos de calor | INPE (Queimadas) | IFC | ✅ **2 fontes** — `#4` IAT/PR (granular, preferida) + `#6` CSV nacional mensal (fallback) |
 | 10 | Malha municipal | IBGE | Agregação | ✅ `#7` |
 
 **Resumindo em 3 baldes:**
-- ✅ **7 das 10 linhas** do slide 100% cobertas (1, 5, 7, 8, 9, 10 — e a 6 parcialmente).
-- 🟠 **1 linha é "trabalho de cadastro", não pesquisa** — INCRA já tem fonte
-  confirmada, só falta o `POST /api/fontes` com os dados abaixo (biomas, que estava
-  na mesma situação, foi resolvida em 2026-10-04). **Zero investigação nova
-  necessária, só tempo de alguém fazer o cadastro:**
+- ✅ **8 das 10 linhas** do slide cobertas (1, 5, 6, 7, 8, 9, 10 — a 6 com os 4
+  órgãos nominais cadastrados e o 5º coberto via sobreposição real de dado, não só
+  "poderia cadastrar").
+- 🟡 **INCRA como fonte própria é opcional, não gap** — as 2 URLs abaixo continuam
+  válidas e testáveis (`DOWNLOAD_URL`/`SHAPEFILE` já funciona de ponta a ponta, mesmo
+  caminho usado pra biomas/MMA/SFB) se algum dia quiserem o dado "oficial" do INCRA
+  separado, mas **não bloqueia nada** — 67% do SFB já vem com `orgao=INCRA`:
 
   | Fonte | `tipo_aquisicao` | `url_origem` | `formato_esperado` |
   |---|---|---|---|
   | INCRA — Territórios quilombolas | `DOWNLOAD_URL` | `https://www.gov.br/insa/pt-br/centrais-de-conteudo/mapas/mapas-em-shapefile/quilombos-incra.zip` | `SHAPEFILE` |
   | INCRA — Assentamentos | `DOWNLOAD_URL` | `https://www.gov.br/insa/pt-br/centrais-de-conteudo/mapas/mapas-em-shapefile/assentamentos-sab-incra.zip` | `SHAPEFILE` |
 
-  `DOWNLOAD_URL`/`SHAPEFILE` **já funciona de ponta a ponta** — foi exatamente o
-  caminho testado ao vivo pra biomas em 2026-10-04 (baixa o `.zip`, descompacta,
-  lê via GeoTools, mesmo fluxo em streaming do upload manual). Cadastrar INCRA hoje
-  é só preencher a tela com os valores acima e disparar a execução — não precisa de
-  nenhum código novo. Falta decidir se a geometria de INCRA também vira seed fixo
-  (como biomas) ou fica no fluxo normal de ingestão — não é tão estática quanto
-  biomas/município (quilombos e assentamentos são criados com alguma frequência),
-  então pode valer deixar só a ingestão normal mesmo.
-- 🔴 **3 linhas são gap de verdade** (2, 3, 4) — dependem da API SICAR Temas, sem
-  alternativa equivalente confirmada ainda. Ver §1 e §2 abaixo.
-- ⚪ **MMA e SFB** (dentro da linha 6) seguem sem fonte própria encontrada — não travam
-  o ISAP (que já é calculável com ICMBio+FUNAI, e INCRA quando for cadastrado), é mais
-  questão de cobertura literal do slide do que bloqueio funcional.
+- 🔴 **3 linhas são gap de verdade** (2, 3, 4) — **as únicas que realmente faltam
+  hoje.** Dependem da API SICAR Temas, sem alternativa equivalente confirmada ainda.
+  Não é mais pesquisa nem cadastro — é o credenciamento institucional do §1. Ver §1 e
+  §2 abaixo.
 
 ---
 
@@ -174,44 +175,44 @@ sabemos que **esse candidato específico, do jeito que está exposto, não serve
 
 ## 3. Lista final — "quais fontes faltam", direto ao ponto
 
-Pra quem só quer a resposta objetiva da pergunta do título — **3 gaps de verdade + 1
-pendência que já tem solução conhecida, só falta cadastrar** (ver tabela completa §0;
-biomas, que estava nesta segunda lista até 2026-10-03, foi resolvida em 2026-10-04):
+Pra quem só quer a resposta objetiva da pergunta do título, **em 2026-10-04 isso
+ficou simples: só as 3 linhas do CAR (2, 3, 4) continuam faltando de verdade.**
+Todo o resto do slide tem fonte cadastrada e testada (ver tabela completa §0).
 
-**Gaps de verdade (pesquisa ainda não fechou o caminho):**
+**Gaps de verdade (pesquisa não resolve sozinha — depende de credenciamento externo):**
 - **APP declarada** (indicador IAPP) — falta. Só a API SICAR Temas resolve. Credenciamento pesado (§1).
 - **Reserva Legal declarada** (indicador IRL) — falta. Mesma API, mesmo bloqueio.
 - **Vegetação nativa** (indicador ICV) — falta. API SICAR Temas resolveria; Plano B
-  (IAT) **investigado hoje e ainda não funciona** (§2) — precisa de mais um passo antes
+  (IAT) **investigado e ainda não funciona** (§2) — precisa de mais um passo antes
   de declarar resolvido ou descartado.
 
-**Não é gap de pesquisa, é gap de cadastro (achado em 2026-10-03, ainda em aberto):**
-- **INCRA** (quilombolas + assentamentos, parte do indicador ISAP) — fonte validada
-  desde a v2, nunca virou `fonte_dado`. Caminho técnico (`DOWNLOAD_URL`+`SHAPEFILE`)
-  **confirmado funcionando de ponta a ponta** desde 2026-10-04 (foi o mesmo caminho
-  implementado pra biomas) — cadastrar é só preencher a tela, zero código novo.
-
 **Resolvido em 2026-10-04:**
-- **Limites de biomas** (IBGE, indicador IRL) — cadastrada, ingerida, e a geometria dos
-  6 biomas virou seed fixo (`V040`) — não depende mais de ninguém disparar nada.
+- **Limites de biomas** (IBGE, indicador IRL) — cadastrada, ingerida, geometria virou
+  seed fixo (`V040`) — não depende de ninguém disparar nada.
+- **Áreas protegidas e territórios especiais** (indicador ISAP) — ICMBio/FUNAI já
+  cadastrados antes; MMA (CNUC) e SFB (CNFP) cadastrados e testados agora, 16.059
+  registros promovidos. INCRA como fonte própria fica opcional (§0) — 67% do SFB já
+  resolve como `orgao=INCRA`.
 
-Os 3 primeiros (gaps de verdade) bloqueiam especificamente os packages
-`pkg_calculo_conservacao` e metade do `pkg_calculo_territorial` do desenho em
+Os 3 gaps de verdade bloqueiam especificamente os packages `pkg_calculo_conservacao` e
+metade do `pkg_calculo_territorial` do desenho em
 `docs/gold-procedures-calculo-publicacao.md` — travam só quando chegar a hora de
-implementar ICV/IRL/IAPP de verdade, não antes. INCRA não bloqueia nada tecnicamente —
-é só não ter sido cadastrado ainda.
+implementar ICV/IRL/IAPP de verdade, não antes. Nenhuma outra procedure de cálculo
+(ISAP, IAE, IDesmat, IFC) depende mais de fonte faltando.
 
 ---
 
 ## 4. Ação recomendada esta semana
 
 1. **Alguém fala com o Prof. Garcia e/ou a Visiona hoje/amanhã** sobre o credenciamento
-   Conecta Gov (§1) — é o item de maior prazo externo, quanto antes abrir, melhor.
+   Conecta Gov (§1) — é o único item que ainda bloqueia alguma coisa, e tem prazo
+   externo fora do nosso controle. Quanto antes abrir, melhor.
 2. **Alguém retesta o Plano B** (§2, item 1 e 2) — é trabalho técnico que a própria
-   equipe resolve sozinha, sem depender de terceiros.
-3. **Cadastrar INCRA** (§0) — 5 minutos de `POST /api/fontes` (ou pela tela), zero
-   pesquisa nova, caminho `DOWNLOAD_URL`/`SHAPEFILE` já testado de ponta a ponta com
-   biomas. Decidir junto se a geometria também vira seed fixo ou fica só no fluxo
-   normal de ingestão (§0 tem a discussão).
-4. Enquanto isso não resolve: **ICV, IRL e IAPP ficam como stub** nas procedures
-   (`docs/gold-procedures-calculo-publicacao.md` §2) — ninguém trava esperando.
+   equipe resolve sozinha, sem depender de terceiros, caso o credenciamento demore.
+3. Enquanto isso não resolve: **ICV, IRL e IAPP ficam como stub** nas procedures
+   (`docs/gold-procedures-calculo-publicacao.md` §2) — ninguém mais trava esperando
+   fonte de dado, só esses 3 indicadores específicos.
+4. Decidir, sem pressa (não bloqueia nada): categorização fina de `area_protegida`
+   pro MMA/SFB (`categoria_area_protegida`/`tipo_area_protegida` ainda não cobrem
+   Projeto de Assentamento/Território Quilombola/Gleba Arrecadada) e se vale cadastrar
+   o INCRA separado ou deixar só a cobertura via SFB.
