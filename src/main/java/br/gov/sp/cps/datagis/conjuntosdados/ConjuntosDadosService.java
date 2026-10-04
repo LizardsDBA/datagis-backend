@@ -38,7 +38,7 @@ public class ConjuntosDadosService {
      */
     private static final Set<String> ENTIDADES_SILVER_VALIDAS = Set.of(
             "imovel_rural", "area_protegida", "embargo_ambiental", "auto_infracao",
-            "desmatamento", "foco_calor", "municipio");
+            "desmatamento", "foco_calor", "municipio", "bioma");
 
     private final LoteIngestaoRepository loteIngestaoRepository;
     private final FonteDadoRepository fonteDadoRepository;
