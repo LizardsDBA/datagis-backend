@@ -22,7 +22,7 @@ class PersistidorSilverServiceTest {
     @BeforeEach
     void setUp() {
         jdbcTemplate = mock(JdbcTemplate.class);
-        persistidor = new PersistidorSilverService(jdbcTemplate, "SILVER", null);
+        persistidor = new PersistidorSilverService(jdbcTemplate, "SILVER", "CONTROLE", null);
     }
 
     @Test

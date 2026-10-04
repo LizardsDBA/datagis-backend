@@ -48,6 +48,7 @@ public class PersistidorSilverService {
 
     private final JdbcTemplate jdbcTemplate;
     private final String silverSchema;
+    private final String controleSchema;
     private final ObjectMapper objectMapper;
 
     /**
@@ -70,18 +71,29 @@ public class PersistidorSilverService {
      */
     private final ConcurrentHashMap<Long, Long> categoriaParaTipoCache = new ConcurrentHashMap<>();
 
+    /**
+     * Cache de fonte_dado_id -> fonte_dado.orgao (controle.fonte_dado), usado como
+     * fallback de orgao_id em area_protegida quando o texto declarado pela fonte não
+     * resolve em nenhum código conhecido (ex.: secretaria estadual/municipal sem
+     * entrada em silver.orgao). Evita o antigo fallback fixo "ICMBIO" pra qualquer
+     * fonte (mislabeava silenciosamente FUNAI, MMA, SFB como se fossem ICMBio).
+     */
+    private final ConcurrentHashMap<Long, String> fonteOrgaoCache = new ConcurrentHashMap<>();
+
     @Autowired
     public PersistidorSilverService(
             JdbcTemplate jdbcTemplate,
             @Value("${spring.flyway.placeholders.silverSchema:SILVER}") String silverSchema,
+            @Value("${spring.flyway.placeholders.controleSchema:CONTROLE}") String controleSchema,
             ObjectMapper objectMapper) {
         this.jdbcTemplate = jdbcTemplate;
         this.silverSchema = (silverSchema != null && !silverSchema.isBlank()) ? silverSchema.trim() : "SILVER";
+        this.controleSchema = (controleSchema != null && !controleSchema.isBlank()) ? controleSchema.trim() : "CONTROLE";
         this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
     }
 
     public PersistidorSilverService(JdbcTemplate jdbcTemplate) {
-        this(jdbcTemplate, "SILVER", new ObjectMapper());
+        this(jdbcTemplate, "SILVER", "CONTROLE", new ObjectMapper());
     }
 
     /**
@@ -291,8 +303,12 @@ public class PersistidorSilverService {
         RegistroBruto reg = apr.registroBruto();
 
         String codigoOrigem = extrairString(attrs, "codigo_origem", "cnuc", "terrai_cod", "id");
+        if (codigoOrigem == null && reg != null) {
+            codigoOrigem = "REG-" + reg.getId();
+        }
         String nome = extrairString(attrs, "nome", "nm_uc", "terrai_nom");
-        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "ICMBIO");
+        String orgaoPadraoFonte = resolverOrgaoPadraoFonte(reg != null ? reg.getFonteDadoId() : null);
+        Long orgaoId = resolverIdOrgao(attrs.get("orgao_declarado"), orgaoPadraoFonte);
         Long categoriaAreaId = resolverIdReferencia("categoria_area_protegida", attrs.get("categoria_area_protegida"));
         Long tipoAreaId = null;
         if (categoriaAreaId != null) {
@@ -1300,6 +1316,32 @@ public class PersistidorSilverService {
     }
 
     /**
+     * Órgão cadastrado em controle.fonte_dado pra esta fonte (ex.: "MMA", "SFB",
+     * "FUNAI") — usado como fallback de orgao_id quando o texto declarado no próprio
+     * registro não resolve em nenhum código de silver.orgao (ex.: secretaria estadual
+     * ou municipal sem entrada no domínio). "ICMBIO" só entra se a fonte não existir
+     * mais ou não tiver orgao preenchido — mantém o comportamento antigo como
+     * último recurso, nunca como padrão pra toda e qualquer fonte.
+     */
+    private String resolverOrgaoPadraoFonte(Long fonteDadoId) {
+        if (fonteDadoId == null) {
+            return "ICMBIO";
+        }
+        return fonteOrgaoCache.computeIfAbsent(fonteDadoId, id -> {
+            try {
+                String sql = "SELECT orgao FROM " + controleSchema + ".fonte_dado WHERE id = ?";
+                List<String> orgaos = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("orgao"), id);
+                if (!orgaos.isEmpty() && orgaos.get(0) != null && !orgaos.get(0).isBlank()) {
+                    return orgaos.get(0);
+                }
+            } catch (Exception e) {
+                log.debug("Não foi possível resolver o orgao padrão da fonte {}: {}", id, e.getMessage());
+            }
+            return "ICMBIO";
+        });
+    }
+
+    /**
      * Inicializa em memória todo o catálogo dimensional de municípios
      * (código IBGE numérico, nome em caixa alta e nome normalizado sem acentos),
      * eliminando milhares de consultas repetidas ao banco durante a persistência em lote.
@@ -1489,6 +1531,7 @@ public class PersistidorSilverService {
         categoriaParaTipoCache.clear();
         municipioCache.clear();
         municipiosCarregados = false;
+        fonteOrgaoCache.clear();
     }
 }
 
