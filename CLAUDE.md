@@ -263,6 +263,15 @@ Validar na fatia de cálculo.
 
 **Ponto crítico ainda em aberto:** o algoritmo de `hash_versao` (amarra dado-fonte +
 regra + resultado) ainda não foi detalhado — a coluna existe, a lógica de cálculo não.
+**Proposta de algoritmo em `docs/gold-procedures-calculo-publicacao.md` §4** (SHA-256
+via `DBMS_CRYPTO` sobre string canônica), a confirmar.
+
+**Transição Silver→Gold (cálculo dos indicadores + publicação) — [PROPOSTO: via PL/SQL,
+2026-10-03]**, diferente de Bronze→Silver (que é Java, §9.23-25). Design completo,
+cobertura real por indicador (3 dos 7 sem fonte hoje — ICV, IRL, IAPP), convenção de
+procedure/package e trade-offs em **`docs/gold-procedures-calculo-publicacao.md`**. Nada
+implementado ainda — é documentação anterior ao desenvolvimento, mapeada nas 3 tasks do
+board (Conservação/Territorial/Ambiental).
 
 ### 2.7. Schema de controle (transversal)
 - `usuario`, `papel`, `usuario_papel` — RBAC (**adiado**, ver seção 4)
@@ -717,6 +726,20 @@ formatos" do desafio oficial da Visiona**.
   têm fonte de dado funcionando até hoje, por causa do bloqueio de credenciamento acima).
   Demais linhas: atendidas de forma exata ou com formato de acesso equivalente
   (ex.: GeoJSON via API no lugar de `.shp` estático — mesma fonte/órgão, canal diferente).
+- **`docs/tutorial-acesso-fontes-pendentes.md` (2026-10-03, prioridade máxima) —**
+  passo a passo real do credenciamento Conecta Gov (autocadastro + certificado digital
+  ICP-Brasil + pedido formal de órgão à SGD/ME + IP allowlist Serpro — processo pesado,
+  provavelmente exige apoio institucional da FATEC/Visiona, não é algo que o time resolve
+  sozinho) **e** reteste ao vivo do Plano B (vegetação nativa via IAT): achado novo que
+  **muda o status anterior** — o candidato `Vegetacao_Nativa_IAT_2021` é só tabela
+  (197.963 registros, sem geometria consultável), não serve pra interseção geoespacial
+  do jeito que está hoje. Plano B segue em aberto, não resolvido.
+  **Atualizado no mesmo dia** com uma §0 nova: cruzamento das 10 linhas do slide oficial
+  contra o `controle.fonte_dado` **consultado direto no banco** (não documentação) — 6
+  linhas 100% cobertas, 3 gaps de verdade (os de cima), e **2 achados novos que não são
+  gap de pesquisa, só de cadastro**: IBGE (limites de biomas) e INCRA (quilombolas +
+  assentamentos) já tinham fonte validada desde a v2 mas nunca viraram `fonte_dado` —
+  URLs prontas pra cadastrar no próprio tutorial §0.
 
 ### 5.8. Arquitetura de ingestão genérica por formato — **[DECIDIDO e implementado, 2026-09-08/09 — substitui a lógica CAR-específica da §5.2/§5.6]**
 
@@ -1467,6 +1490,27 @@ disparar.
   Silver. Não confundir com `lote_ingestao.hash_conteudo` (hash do lote inteiro, que
   funciona). Correção: SHA-256 de `payload` + `geometria_wkt` por registro. Combinado
   fazer depois, em branch `fix/` própria.
+
+### 9.32. Design de Silver→Gold via PL/SQL — [DOCUMENTADO, 2026-10-03, pré-desenvolvimento]
+Nada implementado ainda — sessão de documentação, a pedido do time, antes de abrir as 3
+tasks do board (`LIZARDS-31` Conservação, Territorial, Ambiental). Ver
+`docs/gold-procedures-calculo-publicacao.md` (novo) e §2.6.
+
+- **Decisão proposta**: Silver→Gold (cálculo dos 7 indicadores + publicação nos 3
+  blocos da Gold) vira **PL/SQL** (packages por task), diferente de Bronze→Silver
+  (Java). Trade-offs documentados, não só vantagens — time ainda não escreveu PL/SQL
+  neste projeto, teste só via Oracle real (sem mock), mesmo padrão `*OracleIT` do §9.28.
+- **Achado que muda o escopo das 3 tasks**: `LIZARDS-31` (Conservação/ICV) e metade de
+  Territorial (IRL, IAPP) **não têm fonte de dado hoje** (`tipo_indicador.tem_fonte=0`
+  na `V016`, gap já conhecido desde `docs/checklist-cobertura-fontes.md` — API SICAR
+  Temas exige credenciamento Serpro fora do alcance do time). Só ISAP, IAE, IDesmat e
+  IFC são calculáveis de verdade agora; o resto vira stub até a fonte aparecer.
+- Proposta de algoritmo pra `hash_versao` (§2.6) — primeira vez que esse ponto em
+  aberto ganha um desenho concreto.
+- **Itens em aberto que a equipe ainda precisa fechar**: confirmar a ida pra PL/SQL;
+  validar o algoritmo de hash; Quartz+Job vs. `DBMS_SCHEDULER` pra disparar a
+  publicação; tolerância de generalização de geometria do mapa; donos de cada
+  package/task (tabela em branco no documento, a preencher).
 
 ---
 
