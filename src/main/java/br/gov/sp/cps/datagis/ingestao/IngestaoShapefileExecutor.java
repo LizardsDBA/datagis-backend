@@ -38,6 +38,13 @@ import tools.jackson.databind.ObjectMapper;
  * sistema. O {@code .zip} pode trazer mais de um {@code .shp} (ex.: perímetro + APP +
  * Reserva Legal juntos no mesmo pacote do estado) — todos entram no mesmo lote.
  *
+ * <p><b>Fontes {@code DOWNLOAD_URL}</b> (ex.: limites de biomas do IBGE, que publica um
+ * {@code .zip} estático e estável em {@code geoftp.ibge.gov.br}, sem SPA/sessão no
+ * meio) baixam o {@code .zip} de {@code fonte.getUrlOrigem()} via
+ * {@link HttpFetchClient#baixarParaArquivoTemporario} antes de descompactar — mesmo
+ * caminho de leitura em streaming do {@code UPLOAD_MANUAL} dali em diante, só a origem
+ * do {@code .zip} muda.
+ *
  * <p>Usa {@code gt-shapefile}/{@code gt-main} (GeoTools, já no {@code pom.xml} desde o
  * início, nunca exercitado até agora — é o item 3 do spike de compatibilidade,
  * CLAUDE.md §5.5). A geometria de cada feição já vem como {@link Geometry} (JTS) —
@@ -57,22 +64,26 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
 
     private static final String FORMATO = "SHAPEFILE";
     private static final String TIPO_UPLOAD_MANUAL = "UPLOAD_MANUAL";
+    private static final String TIPO_DOWNLOAD_URL = "DOWNLOAD_URL";
 
     private final ArmazenamentoArquivoBruto armazenamento;
     private final LoteIngestaoWriter writer;
     private final ObjectMapper objectMapper;
     private final ProgressoExecucaoRegistry progresso;
+    private final HttpFetchClient httpFetchClient;
     private final WKTWriter wktWriter = new WKTWriter();
 
     public IngestaoShapefileExecutor(
             ArmazenamentoArquivoBruto armazenamento,
             LoteIngestaoWriter writer,
             ObjectMapper objectMapper,
-            ProgressoExecucaoRegistry progresso) {
+            ProgressoExecucaoRegistry progresso,
+            HttpFetchClient httpFetchClient) {
         this.armazenamento = armazenamento;
         this.writer = writer;
         this.objectMapper = objectMapper;
         this.progresso = progresso;
+        this.httpFetchClient = httpFetchClient;
     }
 
     @Override
@@ -82,18 +93,24 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
 
     @Override
     public LoteIngestao executar(FonteDado fonte) {
-        if (!TIPO_UPLOAD_MANUAL.equals(fonte.getTipoAquisicao())) {
+        boolean uploadManual = TIPO_UPLOAD_MANUAL.equals(fonte.getTipoAquisicao());
+        boolean downloadUrl = TIPO_DOWNLOAD_URL.equals(fonte.getTipoAquisicao());
+        if (!uploadManual && !downloadUrl) {
             throw new IllegalStateException(
-                    "Fonte \"" + fonte.getNome() + "\" é SHAPEFILE mas não é UPLOAD_MANUAL — "
-                            + "download automático de Shapefile ainda não foi implementado, só upload.");
+                    "Fonte \"" + fonte.getNome() + "\" é SHAPEFILE mas o tipo de aquisição \""
+                            + fonte.getTipoAquisicao() + "\" não é suportado — use UPLOAD_MANUAL ou DOWNLOAD_URL.");
         }
-        if (fonte.getCaminhoArquivoUpload() == null) {
+        if (uploadManual && fonte.getCaminhoArquivoUpload() == null) {
             throw new IllegalStateException(
                     "Fonte \"" + fonte.getNome() + "\" ainda não recebeu nenhum arquivo. "
                             + "Envie o .zip pelo upload antes de executar.");
         }
+        if (downloadUrl && (fonte.getUrlOrigem() == null || fonte.getUrlOrigem().isBlank())) {
+            throw new IllegalStateException(
+                    "Fonte \"" + fonte.getNome() + "\" é DOWNLOAD_URL mas não tem url_origem configurada.");
+        }
 
-        Path diretorioTemp = descompactar(fonte);
+        Path diretorioTemp = uploadManual ? descompactarDeUpload(fonte) : descompactarDeDownload(fonte);
         try {
             List<Path> shapefiles = listarShapefiles(diretorioTemp, fonte);
             Long totalEstimado = contarRegistrosTotais(shapefiles);
@@ -104,17 +121,45 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
         }
     }
 
-    /** Descompacta achatado (ignora subpastas do zip) — .shp/.dbf/.shx/.prj precisam ficar juntos. */
-    private Path descompactar(FonteDado fonte) {
+    private Path descompactarDeUpload(FonteDado fonte) {
         progresso.atualizar(fonte.getId(), FaseExecucao.DESCOMPACTANDO, 0, null, null);
+        try (InputStream bruto = armazenamento.ler(fonte.getCaminhoArquivoUpload())) {
+            return descompactar(fonte, bruto);
+        } catch (IOException e) {
+            throw new IllegalStateException(
+                    "Falha ao descompactar o arquivo enviado pra \"" + fonte.getNome() + "\" — é um .zip válido?", e);
+        }
+    }
+
+    /** Baixa o .zip da URL cadastrada antes de descompactar — mesmo caminho de leitura do upload dali em diante. */
+    private Path descompactarDeDownload(FonteDado fonte) {
+        progresso.atualizar(fonte.getId(), FaseExecucao.BUSCANDO_DADOS, 0, null, null);
+        Path zipBaixado = httpFetchClient.baixarParaArquivoTemporario(
+                fonte.getUrlOrigem(), "datagis-shp-download-" + fonte.getId());
+        try (InputStream bruto = Files.newInputStream(zipBaixado)) {
+            progresso.atualizar(fonte.getId(), FaseExecucao.DESCOMPACTANDO, 0, null, null);
+            return descompactar(fonte, bruto);
+        } catch (IOException e) {
+            throw new IllegalStateException(
+                    "Falha ao descompactar o .zip baixado de \"" + fonte.getNome() + "\" — é um .zip válido?", e);
+        } finally {
+            try {
+                Files.deleteIfExists(zipBaixado);
+            } catch (IOException ignorado) {
+                // arquivo temporario de download - limpeza de melhor esforco
+            }
+        }
+    }
+
+    /** Descompacta achatado (ignora subpastas do zip) — .shp/.dbf/.shx/.prj precisam ficar juntos. */
+    private Path descompactar(FonteDado fonte, InputStream bruto) throws IOException {
         Path destino;
         try {
             destino = Files.createTempDirectory("datagis-shp-" + fonte.getId());
         } catch (IOException e) {
             throw new IllegalStateException("Falha ao criar diretório temporário pra descompactar", e);
         }
-        try (InputStream bruto = armazenamento.ler(fonte.getCaminhoArquivoUpload());
-                ZipInputStream zip = new ZipInputStream(bruto)) {
+        try (ZipInputStream zip = new ZipInputStream(bruto)) {
             ZipEntry entrada;
             int extraidos = 0;
             while ((entrada = zip.getNextEntry()) != null) {
@@ -126,9 +171,6 @@ public class IngestaoShapefileExecutor implements IngestaoExecutor {
                 extraidos++;
                 progresso.atualizar(fonte.getId(), FaseExecucao.DESCOMPACTANDO, extraidos, null, nomeArquivo);
             }
-        } catch (IOException e) {
-            throw new IllegalStateException(
-                    "Falha ao descompactar o arquivo enviado pra \"" + fonte.getNome() + "\" — é um .zip válido?", e);
         }
         return destino;
     }

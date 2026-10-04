@@ -2,6 +2,8 @@ package br.gov.sp.cps.datagis.ingestao;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import org.springframework.stereotype.Component;
 
 /**
@@ -40,6 +42,53 @@ public class HttpFetchClient {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Busca de " + url + " interrompida", e);
+        }
+    }
+
+    /**
+     * Baixa o corpo da URL direto pra um arquivo temporário, sem passar por
+     * {@code String} — {@link #buscarCorpoBruto} decodifica como UTF-8, o que
+     * corromperia um binário (ex.: o {@code .zip} de um Shapefile). Mesmo curl,
+     * mesmo User-Agent (evita o mesmo bloqueio de WAF), só trocando a captura de
+     * stdout por {@code -o <arquivo>}. Timeout maior (arquivo binário, não texto
+     * de API) — o zip de biomas do IBGE já tem 14 MB e fontes maiores existem.
+     *
+     * @return caminho do arquivo temporário baixado; quem chama é responsável por apagá-lo.
+     */
+    public Path baixarParaArquivoTemporario(String url, String prefixoArquivo) {
+        Path destino;
+        try {
+            destino = Files.createTempFile(prefixoArquivo, ".bin");
+        } catch (IOException e) {
+            throw new IllegalStateException("Falha ao criar arquivo temporário para baixar " + url, e);
+        }
+        ProcessBuilder processBuilder = new ProcessBuilder(
+                "curl", "-sS", "-f", "-L", "--max-time", "300", "-A", USER_AGENT, "-o", destino.toString(), url);
+        try {
+            Process processo = processBuilder.start();
+            String erro = new String(processo.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+            int codigoSaida = processo.waitFor();
+            if (codigoSaida != 0) {
+                apagarSilenciosamente(destino);
+                throw new IllegalStateException(
+                        "curl falhou (exit " + codigoSaida + ") ao baixar " + url + ": " + erro);
+            }
+            return destino;
+        } catch (IOException e) {
+            apagarSilenciosamente(destino);
+            throw new IllegalStateException("Falha ao executar curl para baixar " + url, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            apagarSilenciosamente(destino);
+            throw new IllegalStateException("Download de " + url + " interrompido", e);
+        }
+    }
+
+    private void apagarSilenciosamente(Path arquivo) {
+        try {
+            Files.deleteIfExists(arquivo);
+        } catch (IOException ignorado) {
+            // melhor esforco - arquivo temporario, nao trava a ingestao
         }
     }
 }

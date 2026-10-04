@@ -54,6 +54,8 @@ class IngestaoShapefileExecutorTest {
     private ArmazenamentoArquivoBruto armazenamento;
     @Mock
     private LoteIngestaoWriter writer;
+    @Mock
+    private HttpFetchClient httpFetchClient;
 
     @TempDir
     Path diretorioTemp;
@@ -62,7 +64,8 @@ class IngestaoShapefileExecutorTest {
 
     @BeforeEach
     void configurar() {
-        executor = new IngestaoShapefileExecutor(armazenamento, writer, new ObjectMapper(), new ProgressoExecucaoRegistry());
+        executor = new IngestaoShapefileExecutor(
+                armazenamento, writer, new ObjectMapper(), new ProgressoExecucaoRegistry(), httpFetchClient);
     }
 
     @Test
@@ -128,6 +131,46 @@ class IngestaoShapefileExecutorTest {
         org.mockito.ArgumentCaptor<Long> totalCaptor = org.mockito.ArgumentCaptor.forClass(Long.class);
         org.mockito.Mockito.verify(writer).gravarStreaming(eq(fonte), any(FornecedorRegistros.class), totalCaptor.capture());
         assertThat(totalCaptor.getValue()).isEqualTo(2L);
+    }
+
+    @Test
+    void deveFalharSeDownloadUrlSemUrlOrigem() {
+        FonteDado fonte = FonteDado.builder()
+                .id(6L).nome("IBGE - Limites de biomas")
+                .tipoAquisicao("DOWNLOAD_URL").formatoEsperado("SHAPEFILE")
+                .build();
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> executor.executar(fonte))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("url_origem");
+    }
+
+    @Test
+    void deveBaixarEDescompactarQuandoTipoAquisicaoForDownloadUrl() throws Exception {
+        byte[] zip = criarZipComShapefileDeTeste();
+        Path zipBaixado = diretorioTemp.resolve("biomas-baixado.zip");
+        Files.write(zipBaixado, zip);
+
+        FonteDado fonte = FonteDado.builder()
+                .id(6L).nome("IBGE - Limites de biomas")
+                .tipoAquisicao("DOWNLOAD_URL").formatoEsperado("SHAPEFILE")
+                .urlOrigem("http://geoftp.ibge.gov.br/biomas.zip")
+                .build();
+        when(httpFetchClient.baixarParaArquivoTemporario(eq("http://geoftp.ibge.gov.br/biomas.zip"), any()))
+                .thenReturn(zipBaixado);
+        LoteIngestao loteEsperado = LoteIngestao.builder().id(21L).status("CONCLUIDO").build();
+
+        List<RegistroPreparado> registrosRecebidos = new ArrayList<>();
+        when(writer.gravarStreaming(eq(fonte), any(FornecedorRegistros.class), any())).thenAnswer(chamada -> {
+            FornecedorRegistros fornecedor = chamada.getArgument(1);
+            fornecedor.fornecer(registrosRecebidos::add);
+            return loteEsperado;
+        });
+
+        LoteIngestao resultado = executor.executar(fonte);
+
+        assertThat(resultado).isSameAs(loteEsperado);
+        assertThat(registrosRecebidos).hasSize(2);
     }
 
     /** Cria um Shapefile de verdade (via GeoTools, o mesmo escritor que a produção usaria) e zipa. */

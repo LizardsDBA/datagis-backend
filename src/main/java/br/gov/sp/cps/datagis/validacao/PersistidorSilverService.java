@@ -171,6 +171,10 @@ public class PersistidorSilverService {
         executarMerge(obterSqlMerge("foco_calor"), extrairParametrosFocoCalor(apr));
     }
 
+    public void persistirBioma(RegistroAprovadoSilver apr) {
+        executarMerge(obterSqlMerge("bioma"), extrairParametrosBioma(apr));
+    }
+
     public void persistirGenerico(String entidade, RegistroAprovadoSilver apr) {
         log.warn("Entidade Silver '{}' não possui persistidor canônico especializado, delegando para imovel_rural.", entidade);
         persistirImovelRural(apr);
@@ -189,7 +193,13 @@ public class PersistidorSilverService {
             case "embargo_ambiental" -> extrairParametrosEmbargoAmbiental(apr);
             case "desmatamento" -> extrairParametrosDesmatamento(apr);
             case "foco_calor" -> extrairParametrosFocoCalor(apr);
-            default -> extrairParametrosImovelRural(apr);
+            case "bioma" -> extrairParametrosBioma(apr);
+            default -> throw new IllegalStateException(
+                    "Entidade Silver \"" + entidade + "\" não possui persistidor especializado — "
+                            + "configure fonte_dado.entidade_silver com um valor reconhecido "
+                            + "(imovel_rural, municipio, area_protegida, auto_infracao, "
+                            + "embargo_ambiental, desmatamento, foco_calor, bioma) em vez de "
+                            + "deixar cair silenciosamente em imovel_rural.");
         };
     }
 
@@ -482,6 +492,41 @@ public class PersistidorSilverService {
         };
     }
 
+    /**
+     * Bioma é tabela de referência pura (6 linhas semeadas na V011, uma por bioma
+     * oficial do IBGE) — esta ingestão nunca cria linha nova, só enriquece as 6 já
+     * existentes com geometria + linhagem. Por isso a chave do MERGE é o {@code id}
+     * já existente (resolvido por nome via {@link #resolverIdReferencia}), não um
+     * texto solto vindo da fonte — evita que uma variação ortográfica do nome do
+     * bioma na origem crie uma 7ª linha espúria.
+     */
+    private Object[] extrairParametrosBioma(RegistroAprovadoSilver apr) {
+        Map<String, Object> attrs = apr.atributosTransformados();
+        RegistroBruto reg = apr.registroBruto();
+
+        String codigo = extrairString(attrs, "codigo", "nome", "nm_bioma");
+        Long biomaId = resolverIdReferencia("bioma", codigo);
+        if (biomaId == null) {
+            throw new IllegalStateException(
+                    "Registro não corresponde a nenhum dos biomas já cadastrados em silver.bioma: \""
+                            + codigo + "\" (registro_bruto_id="
+                            + (reg != null ? reg.getId() : null) + ")");
+        }
+
+        String geomWkt = apr.geometriaWkt();
+        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
+
+        return new Object[] {
+            biomaId,
+            geomWkt,
+            atributosOrigem,
+            reg != null ? reg.getFonteDadoId() : null,
+            reg != null ? reg.getLoteIngestaoId() : null,
+            reg != null ? reg.getId() : null,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
     // -------------------------------------------------------------------------
     // Comandos SQL MERGE por Entidade
     // -------------------------------------------------------------------------
@@ -495,7 +540,13 @@ public class PersistidorSilverService {
             case "embargo_ambiental" -> obterSqlEmbargoAmbiental();
             case "desmatamento" -> obterSqlDesmatamento();
             case "foco_calor" -> obterSqlFocoCalor();
-            default -> obterSqlImovelRural();
+            case "bioma" -> obterSqlBioma();
+            default -> throw new IllegalStateException(
+                    "Entidade Silver \"" + entidade + "\" não possui comando MERGE especializado — "
+                            + "configure fonte_dado.entidade_silver com um valor reconhecido "
+                            + "(imovel_rural, municipio, area_protegida, auto_infracao, "
+                            + "embargo_ambiental, desmatamento, foco_calor, bioma) em vez de "
+                            + "deixar cair silenciosamente em imovel_rural.");
         };
     }
 
@@ -985,6 +1036,42 @@ public class PersistidorSilverService {
                     s.atributos_origem, s.lote_ingestao_id, s.registro_bruto_id,
                     SYSTIMESTAMP, s.hash_origem
                 )
+            """.formatted(silverSchema);
+    }
+
+    private String obterSqlBioma() {
+        return """
+            MERGE INTO %s.bioma t
+            USING (
+                SELECT
+                    s.id,
+                    CASE WHEN s.wkt IS NOT NULL THEN SDO_GEOMETRY(s.wkt, 4674) ELSE NULL END AS geometria,
+                    s.atributos_origem,
+                    s.fonte_dado_id,
+                    s.lote_ingestao_id,
+                    s.registro_bruto_id,
+                    s.hash_origem
+                FROM (
+                    SELECT
+                        ? AS id,
+                        TO_CLOB(?) AS wkt,
+                        TO_CLOB(?) AS atributos_origem,
+                        ? AS fonte_dado_id,
+                        ? AS lote_ingestao_id,
+                        ? AS registro_bruto_id,
+                        ? AS hash_origem
+                    FROM dual
+                ) s
+            ) s ON (t.id = s.id)
+            WHEN MATCHED THEN
+                UPDATE SET
+                    t.geometria          = COALESCE(s.geometria, t.geometria),
+                    t.atributos_origem   = s.atributos_origem,
+                    t.fonte_dado_id      = s.fonte_dado_id,
+                    t.lote_ingestao_id   = s.lote_ingestao_id,
+                    t.registro_bruto_id  = s.registro_bruto_id,
+                    t.data_processamento = SYSTIMESTAMP,
+                    t.hash_origem        = s.hash_origem
             """.formatted(silverSchema);
     }
 

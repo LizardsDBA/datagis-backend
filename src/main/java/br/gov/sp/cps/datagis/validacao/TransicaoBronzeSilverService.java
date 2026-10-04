@@ -888,6 +888,8 @@ public class TransicaoBronzeSilverService {
         String nome = fonte.getNome().toLowerCase(Locale.ROOT);
         if (nome.contains("car") || nome.contains("imóvel") || nome.contains("imovel"))
             return "imovel_rural";
+        if (nome.contains("bioma"))
+            return "bioma";
         if (nome.contains("ibge") || nome.contains("município") || nome.contains("municipio"))
             return "municipio";
         if (nome.contains("embargo"))
@@ -913,6 +915,7 @@ public class TransicaoBronzeSilverService {
             case "embargo_ambiental" -> "numero_termo";
             case "area_protegida" -> "codigo_origem";
             case "desmatamento", "foco_calor" -> "identificador_origem";
+            case "bioma" -> "CD_BIOMA";
             default -> "id";
         };
     }
