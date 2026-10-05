@@ -261,17 +261,19 @@ Validar na fatia de cálculo.
 > publicada`, com `geometria_intersecao` em precisão total — artefato de auditoria).
 > **O portal lê só a Gold, nunca a Silver.**
 
-**Ponto crítico ainda em aberto:** o algoritmo de `hash_versao` (amarra dado-fonte +
-regra + resultado) ainda não foi detalhado — a coluna existe, a lógica de cálculo não.
-**Proposta de algoritmo em `docs/gold-procedures-calculo-publicacao.md` §4** (SHA-256
-via `DBMS_CRYPTO` sobre string canônica), a confirmar.
+**`hash_versao` — [RESOLVIDO, 2026-10-04]:** implementado em `pkg_gold_publicacao.
+registrar_resultado` exatamente como proposto em `docs/gold-procedures-calculo-
+publicacao.md` §4 — SHA-256 via `DBMS_CRYPTO.HASH` sobre uma string canônica
+(`cod_imovel|regra_calculo_id|lotes_csv|indicador:valor:area:percentual`). Idempotente:
+recalcular sem mudança de dado-fonte devolve o mesmo `indicador_versao_id` em vez de
+duplicar linha.
 
-**Transição Silver→Gold (cálculo dos indicadores + publicação) — [PROPOSTO: via PL/SQL,
-2026-10-03]**, diferente de Bronze→Silver (que é Java, §9.23-25). Design completo,
-cobertura real por indicador (3 dos 7 sem fonte hoje — ICV, IRL, IAPP), convenção de
-procedure/package e trade-offs em **`docs/gold-procedures-calculo-publicacao.md`**. Nada
-implementado ainda — é documentação anterior ao desenvolvimento, mapeada nas 3 tasks do
-board (Conservação/Territorial/Ambiental).
+**Transição Silver→Gold (cálculo dos indicadores + publicação) — [IMPLEMENTADO em
+PL/SQL, 2026-10-04 — ver §9.33]**, diferente de Bronze→Silver (que é Java, §9.23-25).
+4 dos 7 indicadores calculam de verdade contra dado real (ISAP, IAE, IDesmat, IFC);
+ICV/IRL/IAPP seguem stub (bloqueio SICAR Temas). Testado contra os 4.608 imóveis reais
+do CAR/PR via `POST /api/gold/publicar`. Design original, cobertura por indicador e
+trade-offs em `docs/gold-procedures-calculo-publicacao.md`.
 
 ### 2.7. Schema de controle (transversal)
 - `usuario`, `papel`, `usuario_papel` — RBAC (**adiado**, ver seção 4)
@@ -1511,6 +1513,80 @@ tasks do board (`LIZARDS-31` Conservação, Territorial, Ambiental). Ver
   validar o algoritmo de hash; Quartz+Job vs. `DBMS_SCHEDULER` pra disparar a
   publicação; tolerância de generalização de geometria do mapa; donos de cada
   package/task (tabela em branco no documento, a preencher).
+
+### 9.33. Implementação das procedures Gold + achado crítico de índice espacial — **[FEITO e testado contra o Oracle real, 2026-10-04, `LIZARDS-31`/`LIZARDS-32`/`LIZARDS-33`]**
+Branch `feat/procedures-indicadores`, a partir da `sprint-1`. Implementa de verdade o
+design do §9.32: `pkg_gold_publicacao` (compartilhada) + `pkg_calculo_ambiental`
+(IDesmat, IFC) + `pkg_calculo_territorial` (ISAP, IAE reais; IRL, IAPP stub) +
+`pkg_calculo_conservacao` (ICV stub) — migrations `V043`-`V047`. Orquestração
+"pra cada imóvel, calcula os 4 reais, publica" fica no Java (`GoldPublicacaoService`,
+`GoldPublicacaoController`, `POST /api/gold/publicar` e `.../imoveis/{cod}/recalcular`),
+não em PL/SQL — pacote não pode chamar de volta quem o chama sem dependência circular.
+
+**Achado crítico, só aparece em volume real (não no teste sintético) — `SDO_ANYINTERACT`
+nunca usa índice espacial:** `SDO_ANYINTERACT(a, b) = 'TRUE'` **nunca** aciona índice
+espacial no Oracle desta instância, mesmo com o índice existindo e válido — confirmado
+via `EXPLAIN PLAN`/`DBMS_XPLAN.DISPLAY`, sempre `TABLE ACCESS FULL` com filtro, nunca
+`DOMAIN INDEX`. Só `SDO_RELATE(a, b, 'mask=ANYINTERACT') = 'TRUE'` é reconhecido pelo
+otimizador como acesso indexado. Sem saber disso, calcular ISAP/IAE pra 200 imóveis
+contra os 16 mil `area_protegida`/2,5 mil `embargo_ambiental` reais levava **~42
+minutos**; trocando pra `SDO_RELATE` + índice espacial de verdade (`V049`, silver),
+caiu pra **~1 segundo** (~2.400x). Todo `SDO_ANYINTERACT` da Gold foi trocado por
+`SDO_RELATE(...,'mask=ANYINTERACT')`.
+
+**Criar o índice espacial em si teve 3 pegadinhas de privilégio/recurso reais** (doc
+completo no cabeçalho de `V049__indices_espaciais_calculo.sql`):
+1. `CREATE INDEX ... INDEXTYPE IS MDSYS.SPATIAL_INDEX` roda rotina ODCI interna que
+   precisa de `CREATE TABLE`/`CREATE SEQUENCE`/`UNLIMITED TABLESPACE` **diretos** (não
+   "ANY") no schema **dono da tabela** (`silver`), não no `CONTROLE` que tem privilégio
+   `ANY` de sobra — sem isso dá `ORA-01031`/`ORA-29855`. Mesma exigência pro `DROP`
+   (`DROP ANY INDEX` do `CONTROLE` não basta; precisou conectar como `silver` direto).
+   Grants permanentes adicionados em `infra/oracle-init/01-criar-schemas.sh`.
+2. `area_protegida` tem polígonos nacionais (MMA/SFB) de até **164 mil vértices** —
+   construir o R-tree estourava `PGA_AGGREGATE_LIMIT` (`ORA-04036`) até no default de
+   2G. Resolvido subindo pra **8G**, e precisa subir **primeiro no `CDB$ROOT`, depois
+   no PDB** (senão `ORA-56747`, limite do PDB não pode exceder o do root) — também
+   persistido no init script.
+3. Um índice com `STATUS='VALID'` no catálogo (`all_indexes` e
+   `mdsys.sdo_index_metadata_table`) pode não funcionar de verdade se a criação morreu
+   no meio (ex. pelo `ORA-04036` acima) — só o `EXPLAIN PLAN` mostrando `DOMAIN INDEX`
+   de fato confirma. Confiar só no `STATUS` é enganoso.
+
+**Segundo bug achado testando a publicação completa contra os 4.608 imóveis reais —
+`publicar_camada_mapa` não era resiliente:** fazia um único `INSERT...SELECT` com
+`SDO_UTIL.SIMPLIFY` por linha; uma geometria ruim de `area_protegida` dava
+`ORA-13199: the given geometry cannot be rectified` e abortava a camada inteira (0
+features publicadas, apesar de 16 mil boas). Reescrita linha a linha (`FOR` +
+`BEGIN/EXCEPTION WHEN OTHERS`), mesmo princípio já usado na ingestão Bronze→Silver
+(§5.8 item 2: pula e loga a linha ruim, publica as demais). Resultado real: **16.084 de
+16.086** features de `AREA_PROTEGIDA` publicadas, só 2 geometrias genuinamente
+inválidas puladas (logadas por `id`/`codigo_origem`). Mesmo achado revelou que uma
+geometria pode ser **lenta sem ser inválida** (uma UC de 146 mil vértices levou ~5min
+pra simplificar sozinha, sem erro) — não dá pra prever só pela contagem de vértices.
+
+**Terceiro bug — `publicar_imovel` não era idempotente:** `registrar_resultado` já
+reusa o mesmo `indicador_versao_id` (via `hash_versao`) quando nada mudou, mas
+`publicar_imovel` fazia um `INSERT` direto em `imovel_publicado` — rodar a publicação
+de novo sem mudança de dado violava `UQ_IMOVEL_PUBLICADO`. Corrigido com um guard
+(`SELECT COUNT(*)` antes do insert) que torna republicar um no-op quando a versão já
+foi publicada.
+
+**Resultado final validado contra o Oracle real:** `gold.imovel_publicado` = 4.608
+linhas (100% dos imóveis Silver). Camadas: `MUNICIPIO` 399, `EMBARGO` 2.519,
+`IMOVEL_RURAL` 4.606 (2 a menos = os 2 imóveis com `geometria IS NULL` na Silver,
+esperado), `AREA_PROTEGIDA` 16.084. `DESMATAMENTO` e `FOCO_CALOR` seguem em 0 —
+**não são bug desta sessão**: `silver.desmatamento` está vazia (WFS do PRODES/INPE
+instável, todas as tentativas de ingestão falharam hoje) e `silver.foco_calor` também
+(bug real e separado: o endpoint de liberar quarentena trava em lotes muito grandes —
+333 mil e 152 mil registros — fica pra uma sessão própria). Suíte completa rodada ao
+final: **401 testes, 0 falhas, 1 erro** (o `DatagisApplicationTests` de sempre, §9.3 —
+sem Docker-in-Docker dentro do container do backend), zero regressão.
+
+**Commits divididos pelas 3 tasks do board** conforme o conteúdo de cada um (pacote
+compartilhado + indicadores ambientais + as correções de mapeamento ficaram no
+commit de `LIZARDS-33`; ISAP/IAE + o índice espacial ficaram em `LIZARDS-32`; o stub
+do ICV em `LIZARDS-31`) — não existe uma divisão 1:1 perfeita entre arquivo e task
+porque `pkg_gold_publicacao` é infraestrutura compartilhada pelos 3.
 
 ---
 
