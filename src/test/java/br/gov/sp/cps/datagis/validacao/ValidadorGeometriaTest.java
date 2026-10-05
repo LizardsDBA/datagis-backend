@@ -165,9 +165,12 @@ class ValidadorGeometriaTest {
     // -------------------------------------------------------------------------
 
     @Test
-    @DisplayName("Deve rejeitar polígono com auto-interseção com erro GEOMETRIA_INVALIDA")
-    void deveRejeitarAutoIntersecao() {
-        // Polígono em formato de 'laço/borboleta' (auto-interseção no centro)
+    @DisplayName("Deve reparar polígono com auto-interseção via buffer(0) em vez de rejeitar")
+    void deveRepararAutoIntersecao() {
+        // Achado real no PRODES: 5.740 polígonos de desmatamento, 100% rejeitados por
+        // auto-interseção simples - buffer(0) é o truque padrão de GIS pra reconstruir
+        // uma geometria válida a partir de uma auto-interseccionada, sem perder o dado.
+        // Polígono em formato de 'laço/borboleta' (auto-interseção no centro).
         String bowtie = "POLYGON ((-49.3 -25.5, -49.2 -25.4, -49.2 -25.5, -49.3 -25.4, -49.3 -25.5))";
         ContextoValidacaoCampo ctx = ContextoValidacaoCampo.builder()
                 .colunaOrigem("geometria")
@@ -176,10 +179,8 @@ class ValidadorGeometriaTest {
 
         ResultadoValidacao resultado = validador.validar(bowtie, ctx);
 
-        assertThat(resultado.isValido()).isFalse();
-        assertThat(resultado.tipoErro()).isEqualTo("GEOMETRIA_INVALIDA");
-        assertThat(resultado.campoProblema()).isEqualTo("geometria");
-        assertThat(resultado.motivoRejeicao()).contains("Inconsistência topológica");
+        assertThat(resultado.isValido()).isTrue();
+        assertThat(resultado.valorTransformado()).isNotNull();
     }
 
     // -------------------------------------------------------------------------

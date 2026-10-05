@@ -153,11 +153,16 @@ public class TransicaoBronzeSilverService {
         // REGRA ATÔMICA ALL-OR-NOTHING:
         // Se houver qualquer registro reprovado (>= 1), o lote inteiro é retido e ZERO
         // registros vão para a Silver.
+        int qtdForaDoRecorte = resOrquestracao.totalDescartadosForaDoRecorte();
+        String sufixoRecorte = qtdForaDoRecorte > 0
+                ? " (" + qtdForaDoRecorte + " fora do recorte territorial PR, descartado(s) sem quarentena)"
+                : "";
+
         if (resOrquestracao.temErros()) {
             int qtdErros = resOrquestracao.rejeitados().size();
             log.warn(
-                    "LOTE {} BLOQUEADO: {} inconsistência(s) detectada(s). Regra All-or-Nothing aplicada: 0 registros promovidos para a Silver.",
-                    loteId, qtdErros);
+                    "LOTE {} BLOQUEADO: {} inconsistência(s) detectada(s){}. Regra All-or-Nothing aplicada: 0 registros promovidos para a Silver.",
+                    loteId, qtdErros, sufixoRecorte);
 
             // Persiste inconsistências na Quarentena
             persistidorQuarentenaService.persistirRejeitados(entidadeSilver, resOrquestracao.rejeitados());
@@ -172,14 +177,14 @@ public class TransicaoBronzeSilverService {
                     0,
                     qtdErros,
                     resOrquestracao.descartadosDedup().size(),
-                    "Lote retido na Quarentena com " + qtdErros + " inconsistência(s). 0 registros enviados à Silver.");
+                    "Lote retido na Quarentena com " + qtdErros + " inconsistência(s). 0 registros enviados à Silver." + sufixoRecorte);
         }
 
         // Lote 100% íntegro: promove todos os registros aprovados diretamente para a
         // Silver
         int qtdAprovados = resOrquestracao.aprovados().size();
-        log.info("LOTE {} APROVADO: 100% íntegro. Promovendo {} registro(s) para a Silver ({}.{}).",
-                loteId, qtdAprovados, "SILVER", entidadeSilver);
+        log.info("LOTE {} APROVADO: 100% íntegro. Promovendo {} registro(s) para a Silver ({}.{}){}.",
+                loteId, qtdAprovados, "SILVER", entidadeSilver, sufixoRecorte);
 
         persistidorSilverService.persistirAprovados(entidadeSilver, resOrquestracao.aprovados());
 
@@ -192,7 +197,7 @@ public class TransicaoBronzeSilverService {
                 qtdAprovados,
                 0,
                 resOrquestracao.descartadosDedup().size(),
-                "Lote integralmente aprovado e promovido à Silver.");
+                "Lote integralmente aprovado e promovido à Silver." + sufixoRecorte);
     }
 
     /**
@@ -731,28 +736,32 @@ public class TransicaoBronzeSilverService {
         return descartados;
     }
 
+    /**
+     * Sincroniza payload_original da Quarentena de volta pro Bronze, só pros poucos
+     * registros que o analista realmente editou manualmente. Achado ao vivo tentando
+     * liberar um lote de 333.604 registros (foco_calor): a versão anterior fazia 1
+     * UPDATE por registro via loop Java (333 mil round-trips, cada um reescrevendo o
+     * payload inteiro mesmo quando IDÊNTICO ao que já estava no Bronze - a esmagadora
+     * maioria nunca foi editada) - sessao Oracle presa 21+ minutos em "Allocate PGA
+     * memory from OS", igual ao achado do indice espacial (V049). Trocado por 1 unico
+     * MERGE server-side, com DBMS_LOB.COMPARE pulando linhas onde o payload nao mudou -
+     * mesmo resultado, sem os round-trips desnecessarios.
+     */
     private void sincronizarCorrecoesQuarentenaParaBronze(Long loteId, String entidadeSilver) {
         String tabEspelho = "q_" + normalizarEntidadeSilver(entidadeSilver);
         try {
-            String sql = "SELECT registro_bruto_id, JSON_SERIALIZE(payload_original RETURNING CLOB) AS payload_original "
-                    +
-                    "FROM " + quarentenaSchema + "." + tabEspelho + " " +
-                    "WHERE lote_ingestao_id = ? AND registro_bruto_id IS NOT NULL";
-            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, loteId);
-            for (Map<String, Object> r : rows) {
-                if (r.get("registro_bruto_id") == null)
-                    continue;
-                Long regId = ((Number) r.get("registro_bruto_id")).longValue();
-                String payload = r.get("payload_original") != null ? r.get("payload_original").toString() : null;
-                if (payload != null && !payload.isBlank()) {
-                    try {
-                        jdbcTemplate.update(
-                                "UPDATE " + bronzeSchema + ".registro_bruto SET payload = ? WHERE id = ?",
-                                payload, regId);
-                    } catch (Exception ex) {
-                        log.debug("Aviso ao sincronizar payload no registro_bruto {}: {}", regId, ex.getMessage());
-                    }
-                }
+            String sql = "MERGE INTO " + bronzeSchema + ".registro_bruto br " +
+                    "USING (SELECT registro_bruto_id, JSON_SERIALIZE(payload_original RETURNING CLOB) AS payload_novo " +
+                    "         FROM " + quarentenaSchema + "." + tabEspelho + " " +
+                    "        WHERE lote_ingestao_id = ? AND registro_bruto_id IS NOT NULL " +
+                    "          AND payload_original IS NOT NULL) q " +
+                    "ON (br.id = q.registro_bruto_id) " +
+                    "WHEN MATCHED THEN UPDATE SET br.payload = q.payload_novo " +
+                    "WHERE DBMS_LOB.COMPARE(br.payload, q.payload_novo) != 0";
+            int count = jdbcTemplate.update(sql, loteId);
+            if (count > 0) {
+                log.info("Sincronizados {} payload(s) editado(s) manualmente da quarentena {}.{} pro Bronze (lote {})",
+                        count, quarentenaSchema, tabEspelho, loteId);
             }
         } catch (Exception e) {
             log.debug("Aviso ao sincronizar correções da quarentena {}.{}: {}", quarentenaSchema, tabEspelho,

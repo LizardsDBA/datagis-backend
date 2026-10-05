@@ -128,16 +128,31 @@ public class PersistidorSilverService {
             return inseridos;
         }
 
+        int pulados = 0;
         Connection con = DataSourceUtils.getConnection(ds);
         try (PreparedStatement ps = con.prepareStatement(sql)) {
             for (RegistroAprovadoSilver apr : aprovados) {
-                Object[] params = extrairParametrosMerge(ent, apr);
-                vincularParametrosEExecutar(ps, params);
-                inseridos++;
+                try {
+                    Object[] params = extrairParametrosMerge(ent, apr);
+                    vincularParametrosEExecutar(ps, params);
+                    inseridos++;
+                } catch (Exception linhaEx) {
+                    // Resiliencia de linha: uma geometria que o JTS considera valida mas o
+                    // Oracle Spatial rejeita (ORA-13198, achado ao vivo liberando o lote de
+                    // desmatamento do PRODES apos o reparo via buffer(0) - ver
+                    // ValidadorGeometria.tentarReparar) nao pode derrubar o lote inteiro.
+                    // Mesmo principio ja usado na ingestao (CLAUDE.md §5.8 item 2) e na
+                    // publicacao de camadas da Gold: pula e loga a linha ruim, segue com as
+                    // demais.
+                    pulados++;
+                    Long regId = apr.registroBruto() != null ? apr.registroBruto().getId() : null;
+                    log.warn("Pulando registro (registro_bruto_id={}) na persistência Silver ({}.{}): {}",
+                            regId, silverSchema, ent, linhaEx.getMessage());
+                }
 
-                if (inseridos % 1000 == 0 || inseridos == aprovados.size()) {
-                    log.info("Progresso de persistência Silver ({}.{}): {}/{} registros concluídos...",
-                            silverSchema, ent, inseridos, aprovados.size());
+                if ((inseridos + pulados) % 1000 == 0 || (inseridos + pulados) == aprovados.size()) {
+                    log.info("Progresso de persistência Silver ({}.{}): {}/{} registros concluídos ({} pulado(s))...",
+                            silverSchema, ent, inseridos + pulados, aprovados.size(), pulados);
                 }
             }
         } catch (Exception e) {
@@ -147,7 +162,11 @@ public class PersistidorSilverService {
             DataSourceUtils.releaseConnection(con, ds);
         }
 
-        log.info("Persistidos com sucesso {} registros na camada Silver ({}.{})", inseridos, silverSchema, ent);
+        if (pulados > 0) {
+            log.warn("Persistidos {} e pulados {} registros na camada Silver ({}.{})", inseridos, pulados, silverSchema, ent);
+        } else {
+            log.info("Persistidos com sucesso {} registros na camada Silver ({}.{})", inseridos, silverSchema, ent);
+        }
         return inseridos;
     }
 

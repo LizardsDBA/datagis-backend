@@ -95,6 +95,7 @@ public class OrquestradorValidacao {
 
         List<RegistroAprovadoSilver> aprovados = new ArrayList<>();
         List<RegistroRejeitadoQuarentena> rejeitados = new ArrayList<>();
+        List<RegistroRejeitadoQuarentena> descartadosForaDoRecorte = new ArrayList<>();
 
         // 3. Validação individual de cada registro vencedor
         for (RegistroBruto reg : registrosParaValidar) {
@@ -201,13 +202,21 @@ public class OrquestradorValidacao {
                     if (validador.suporta(contexto)) {
                         ResultadoValidacao resVal = validador.validar(valorCorrente, contexto);
                         if (!resVal.valido()) {
-                            rejeitados.add(new RegistroRejeitadoQuarentena(
+                            RegistroRejeitadoQuarentena descartado = new RegistroRejeitadoQuarentena(
                                     reg,
                                     resVal.tipoErro(),
                                     resVal.campoProblema(),
                                     resVal.valorRecebido(),
                                     resVal.motivoRejeicao()
-                            ));
+                            );
+                            if (ValidadorGeometria.ERRO_FORA_RECORTE_PR.equals(resVal.tipoErro())) {
+                                // Nao e inconsistencia de dado - a fonte e nacional/sem filtro
+                                // geografico (ex.: INPE Queimadas Brasil). Descarta sem ir pra
+                                // quarentena e sem bloquear o lote pela regra All-or-Nothing.
+                                descartadosForaDoRecorte.add(descartado);
+                            } else {
+                                rejeitados.add(descartado);
+                            }
                             falhou = true;
                             break;
                         }
@@ -237,10 +246,16 @@ public class OrquestradorValidacao {
             }
         }
 
+        if (!descartadosForaDoRecorte.isEmpty()) {
+            log.info("orquestrarLote fonte={}: {} registro(s) fora do recorte territorial (PR) descartados sem ir pra quarentena",
+                    fonteDadoId, descartadosForaDoRecorte.size());
+        }
+
         return new ResultadoOrquestracao(
                 aprovados,
                 rejeitados,
                 descartadosDedup,
+                descartadosForaDoRecorte,
                 registros.size(),
                 aprovados.size(),
                 rejeitados.size(),

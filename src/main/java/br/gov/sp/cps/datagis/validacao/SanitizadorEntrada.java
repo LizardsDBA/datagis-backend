@@ -3,6 +3,8 @@ package br.gov.sp.cps.datagis.validacao;
 import java.util.Locale;
 import java.util.Set;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * 2.1. Sanitizador de Entrada & Falsos Nulos.
@@ -28,6 +30,8 @@ public class SanitizadorEntrada implements ValidadorCampo {
             "-"
     );
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     @Override
     public boolean suporta(ContextoValidacaoCampo contexto) {
         // O sanitizador atua em todos os campos mapeados
@@ -37,6 +41,9 @@ public class SanitizadorEntrada implements ValidadorCampo {
     @Override
     public ResultadoValidacao validar(Object valor, ContextoValidacaoCampo contexto) {
         Object valorSanitizado = sanitizarObjeto(valor);
+        if (valorSanitizado != null && ehValorSentinela(valorSanitizado.toString(), contexto)) {
+            valorSanitizado = null;
+        }
 
         if (valorSanitizado == null && contexto != null && contexto.obrigatorio()) {
             String nomeCampo = contexto.colunaOrigem() != null ? contexto.colunaOrigem() : "campo";
@@ -82,5 +89,35 @@ public class SanitizadorEntrada implements ValidadorCampo {
             return sanitizar(str);
         }
         return valor;
+    }
+
+    /**
+     * Valores-sentinela são falsos nulos específicos de uma coluna (ex.: o INPE usa
+     * {@code -999} em {@code risco_fogo} pra "não calculado à noite", achado ao vivo
+     * testando focos de calor reais - a validação de faixa mínima rejeitava isso como
+     * erro, quando na verdade é a mesma semântica de "N/A"). Diferente dos falsos nulos
+     * globais (que valem pra qualquer coluna texto), estes são configurados por coluna
+     * via {@code controle.mapeamento_coluna.regras_extras}, formato
+     * {@code {"valores_nulos": ["-999", "-999.0"]}}.
+     */
+    private boolean ehValorSentinela(String valor, ContextoValidacaoCampo contexto) {
+        if (contexto == null || contexto.regrasExtras() == null || contexto.regrasExtras().isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode raiz = objectMapper.readTree(contexto.regrasExtras());
+            JsonNode valoresNulos = raiz.get("valores_nulos");
+            if (valoresNulos == null || !valoresNulos.isArray()) {
+                return false;
+            }
+            for (JsonNode item : valoresNulos) {
+                if (valor.equalsIgnoreCase(item.asString())) {
+                    return true;
+                }
+            }
+        } catch (RuntimeException e) {
+            // regras_extras mal formado nao deve derrubar a validacao do campo - ignora.
+        }
+        return false;
     }
 }
