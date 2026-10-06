@@ -1,13 +1,19 @@
 # Silver → Gold via PL/SQL: cálculo dos indicadores e publicação
 
-> Documento de **design, anterior ao desenvolvimento** — nada aqui ainda foi
-> implementado. Objetivo: decidir a forma antes de escrever a primeira procedure.
-> Relacionado: `CLAUDE.md` §2.6 (Gold), `docs/modelagem-silver-gold-quarentena.md` §5
-> (schema da Gold já aplicado — `V016`/`V018`/`V019`/`V020`). Tasks de origem:
-> `LIZARDS-31` (Conservação) + "Criação de Procedures Territorial" + "Criação de
-> Procedures Ambiental".
+> Documento de **design** — escrito antes do desenvolvimento, **atualizado em
+> 2026-10-04/05 após a implementação real** pra registrar o que foi confirmado, o que
+> mudou no caminho e o que ainda segue em aberto. As seções abaixo mantêm o raciocínio
+> original (útil pra quem chega depois entender o *porquê*); onde a realidade divergiu
+> da proposta, há uma nota `[CONFIRMADO]`/`[MUDOU]`/`[AINDA EM ABERTO]` ao lado.
+> Relacionado: `CLAUDE.md` §2.6 (Gold) e §9.33 (implementação, achado crítico de índice
+> espacial, reparo de geometria), `docs/modelagem-silver-gold-quarentena.md` §5 (schema
+> da Gold já aplicado — `V016`/`V018`/`V019`/`V020`). Tasks de origem: `LIZARDS-31`
+> (Conservação), `LIZARDS-32` (Territorial), `LIZARDS-33` (Ambiental).
 
-**Status:** [PROPOSTO — a validar com a equipe antes de codar]
+**Status:** [IMPLEMENTADO — `V043`-`V047` (packages), `V049` (índices espaciais),
+`V050`/`V051` (correções de quarentena achadas testando contra dado real). 4 dos 7
+indicadores calculam de verdade (ISAP, IAE, IDesmat, IFC); ICV/IRL/IAPP seguem stub,
+ver §2.]
 
 ---
 
@@ -130,36 +136,54 @@ mesma migration.
 
 ### 3.3. Assinatura padrão de uma procedure de cálculo
 
-Proposta de contrato comum (a confirmar quando a primeira for escrita de verdade):
+**[CONFIRMADO — bateu com a proposta, com 1 ajuste]**
 
 ```sql
 PROCEDURE calcular_isap(
-    p_cod_imovel        IN  VARCHAR2,   -- NULL = recalcula TODOS os imóveis (uso em lote)
-    p_regra_calculo_id  IN  NUMBER,
-    p_indicador_versao_id OUT NUMBER    -- ou 0/NULL se o indicador nao for calculavel p/ esse imovel
+    p_cod_imovel          IN  VARCHAR2,  -- 1 imovel por chamada (ver nota abaixo)
+    p_regra_calculo_id    IN  NUMBER,
+    p_indicador_versao_id OUT NUMBER     -- NULL se o indicador nao for calculavel p/ esse imovel (stub)
 );
 ```
 
-- Uma chamada por imóvel OU um laço interno quando `p_cod_imovel IS NULL` (cálculo em
-  lote, usado pela primeira publicação / republicação geral).
-- Não aborta a execução inteira por causa de 1 imóvel com problema (mesmo princípio da
-  ingestão — geometria malformada não derruba o lote, CLAUDE.md §5.8 item 2): captura
-  exceção por imóvel, loga, segue para o próximo.
-- Erros reais (não "sem dado pra calcular", que é um resultado `NULL` válido) vão para
-  uma tabela de log de execução — ver §6.
+- **Mudou em relação à proposta:** `p_cod_imovel IS NULL` pra "recalcula todos" **não
+  foi implementado** — o laço "pra cada imóvel, chama os 4 `calcular_*` reais, publica"
+  ficou no **Java** (`GoldPublicacaoService.publicarTudo()`), não dentro da procedure.
+  Motivo prático, achado ao escrever: `pkg_gold_publicacao` não pode chamar
+  `pkg_calculo_territorial`/`pkg_calculo_ambiental` (que chamam de volta
+  `registrar_resultado`) sem criar dependência circular entre packages — o Java já tem
+  esse papel de orquestrador no resto do projeto (Quartz/`AgendadorInicializacaoRunner`),
+  então foi mais simples manter o padrão do que resolver a circularidade em PL/SQL puro.
+- Resiliência por imóvel confirmada, mas também no nível certo: `publicarTudo()` captura
+  exceção por imóvel no **Java** (não dentro da procedure) e segue pro próximo — mesmo
+  resultado prático do §3.3 original.
+- Erros reais acabam no log da aplicação (`GoldPublicacaoService`), não numa tabela
+  própria de log de execução — não foi necessário criar uma; o volume (1 chamada HTTP
+  manual por vez) não justificou.
 
 ### 3.4. Teste
 
-Sem mock pra PL/SQL. Caminho: reaproveitar o padrão `*OracleIT` já estabelecido
-(CLAUDE.md §9.28) — teste JUnit que sobe contra o Oracle real do compose
-(`DATAGIS_ORACLE_IT=true`), popula um imóvel + uma área protegida de teste na Silver,
-chama a procedure via `CallableStatement`, confere o resultado na Gold, limpa no final.
-Mesma disciplina do `IngestaoAgendadaOracleIT`: só roda com a flag, não quebra o
-`mvn test` de quem não tem Oracle de pé.
+**[CONFIRMADO]** Sem mock pra PL/SQL, exatamente como proposto. `GoldCalculoOracleIT`
+(`DATAGIS_ORACLE_IT=true`) popula 1 imóvel + 1 área protegida + 1 embargo + 1
+desmatamento + 2 focos de calor sintéticos (geometrias conhecidas, ex.: UC cobrindo
+exatamente metade do imóvel → ISAP esperado ≈50%), chama `GoldPublicacaoService.
+recalcularImovel(...)` (mesmo caminho do endpoint HTTP) e confere os 4 indicadores reais
++ a publicação do Bloco 3. 2/2 passando, validado contra dado sintético e, à parte,
+contra os 4.608 imóveis reais do CAR/PR via `POST /api/gold/publicar` — ver CLAUDE.md
+§9.33 pros números finais.
 
 ---
 
 ## 4. `hash_versao` — fechando o ponto em aberto do `CLAUDE.md` §2.6
+
+**[CONFIRMADO — implementado exatamente como proposto abaixo, incluindo a recomendação
+do último item]** `pkg_gold_publicacao.registrar_resultado` monta a string canônica
+**em memória**, a partir dos parâmetros recebidos (não faz o `UPDATE` em 2 passos — era
+a opção recomendada no fim desta seção). Bônus descoberto na prática: como o hash
+depende só de `cod_imovel`+`regra`+`lotes`+`valor`, recalcular um imóvel sem nenhuma
+mudança de dado-fonte devolve o **mesmo** `indicador_versao_id` em vez de duplicar linha
+— isso virou a base da idempotência de `publicar_imovel` (achado ao vivo rodando a
+publicação completa 2x sobre o mesmo imóvel, ver CLAUDE.md §9.33).
 
 As procedures de cálculo **não têm como gravar `indicador_versao` sem isso** — a coluna
 é `NOT NULL UNIQUE`. Proposta concreta (até agora só "precisa amarrar dado-fonte +
@@ -210,17 +234,34 @@ também viram responsabilidade das procedures nessa decisão:
 3. `pkg_gold_publicacao.publicar_camada_mapa` — independente, roda sempre que a Silver
    daquele fenômeno mudar (não precisa esperar cálculo de indicador)
 
-**[EM ABERTO]** `SDO_UTIL.SIMPLIFY` tem uma tolerância (equivalente ao
-`maxAllowableOffset` já usado na ingestão do IAT, CLAUDE.md §9.31) — qual valor usar
-pra generalização do mapa? Mesma ordem de grandeza da ingestão (~5m) é o ponto de
-partida razoável, mas precisa validar visualmente no Leaflet antes de fixar.
+**[PARCIALMENTE RESOLVIDO]** Tolerância fixada em `0.00005` (~5m, mesma ordem de
+grandeza do `maxAllowableOffset` da ingestão do IAT, CLAUDE.md §9.31) —
+`c_tolerancia_mapa` em `pkg_gold_publicacao`. **Validação visual no Leaflet ainda não
+foi feita** (não há tela de mapa consumindo `feature_publicada` ainda) — segue como
+item em aberto real, só o valor numérico deixou de ser incógnita.
+
+**Achado não previsto nesta seção, descoberto publicando contra dado real:**
+`publicar_camada_mapa` nasceu como um único `INSERT...SELECT` por camada — e uma única
+geometria ruim (`ORA-13199`, ou simplesmente uma geometria *lenta* de simplificar, não
+necessariamente inválida) derrubava a camada inteira (`AREA_PROTEGIDA` publicou 0 de 16
+mil features na primeira tentativa real). Reescrita linha a linha com captura de
+exceção por feature — mesmo princípio do item 1 acima, aplicado onde a proposta
+original não tinha previsto que fosse necessário. Detalhe completo: CLAUDE.md §9.33.
 
 ---
 
 ## 6. Como é disparado
 
-**[EM ABERTO — decisão de arquitetura, não só de PL/SQL]** Duas opções, mesmo
-princípio do agendamento de ingestão (CLAUDE.md §3.2):
+**[PARCIALMENTE RESOLVIDO]** Disparo manual implementado e é o único que existe hoje:
+`POST /api/gold/publicar` (recalcula + publica todos os imóveis + todas as camadas) e
+`POST /api/gold/imoveis/{codImovel}/recalcular` (1 imóvel), ambos em
+`GoldPublicacaoController`/`GoldPublicacaoService` — exatamente como descrito no fim
+desta seção. **O agendamento automático (Job do Quartz, opção A abaixo) não foi
+implementado** — decisão consciente de escopo (mesmo espírito da fatia 1 de ingestão,
+que também nasceu sem agendamento, CLAUDE.md §5.2), não um esquecimento. Segue em
+aberto pra quando publicação periódica virar necessidade real.
+
+Duas opções, mesmo princípio do agendamento de ingestão (CLAUDE.md §3.2):
 
 - **A — Quartz chama a procedure** (mesmo padrão do `IngestaoAgendadaJob`, §9.28): um
   `Job` novo (`PublicacaoGoldJob`) que abre um `CallableStatement` e chama
@@ -240,27 +281,45 @@ Disparo manual (sem esperar o cron) também precisa existir, mesmo princípio do
 
 ---
 
-## 7. Dono de cada frente (preencher)
+## 7. Dono de cada frente
 
-| Task | Indicadores | Procedures | Responsável |
+Implementado e commitado por Fagner (branch `feat/procedures-indicadores`), com os 3
+commits divididos pelo conteúdo real de cada task do board — `pkg_gold_publicacao`
+(infraestrutura compartilhada) entrou junto do commit de `LIZARDS-33` por ter sido
+construída primeiro, junto dos indicadores ambientais:
+
+| Task | Indicadores | Procedures | Commit |
 |---|---|---|---|
-| `LIZARDS-31` — Conservação | ICV (stub, sem fonte) | `pkg_calculo_conservacao` | — |
-| Territorial | IRL/IAPP (stub) + ISAP/IAE (reais) | `pkg_calculo_territorial` | — |
-| Ambiental | IDesmat + IFC (reais, as 2 completas) | `pkg_calculo_ambiental` | — |
-| Publicação (compartilhado) | Blocos 2 e 3 | `pkg_gold_publicacao` | — |
+| `LIZARDS-33` — Ambiental | IDesmat + IFC (reais) | `pkg_calculo_ambiental` + `pkg_gold_publicacao` | `40db286` |
+| `LIZARDS-32` — Territorial | IRL/IAPP (stub) + ISAP/IAE (reais) | `pkg_calculo_territorial` | `7c91102` |
+| `LIZARDS-31` — Conservação | ICV (stub, sem fonte) | `pkg_calculo_conservacao` | `f7ac6b5` |
+| Índice espacial + resiliência de camada (achados testando contra dado real) | — | `pkg_gold_publicacao` (ajustes) + `V049` | `7c91102` (junto do Territorial, onde o problema de performance apareceu primeiro) |
 
 ---
 
 ## 8. Itens em aberto, resumo
 
-1. **Confirmar com o time**: Silver→Gold vira mesmo PL/SQL (este doc assume que sim, a
-   partir da sua mensagem — formalizar).
-2. `hash_versao`: validar a proposta do §4 (string canônica + SHA-256 via
-   `DBMS_CRYPTO`) ou ajustar.
-3. Disparo: Quartz+Job (recomendado, §6) vs. `DBMS_SCHEDULER`.
-4. Tolerância de generalização de geometria pro mapa (§5) — validar visualmente.
-5. **Conservação (`LIZARDS-31`) e metade de Territorial (IRL/IAPP) não têm fonte** — a
-   task vira "estrutura pronta, stub", não "calculando de verdade", até a API SICAR
-   Temas (ou alternativa) destravar.
-6. Teste: confirmar que o padrão `*OracleIT` (§3.4) é aceitável pra cobertura de
-   procedure, já que não tem equivalente a mock aqui.
+1. ~~Confirmar com o time: Silver→Gold vira mesmo PL/SQL~~ — **feito**, implementado.
+2. ~~`hash_versao`: validar a proposta do §4~~ — **confirmado**, implementado como
+   proposto (string em memória, sem `UPDATE` em 2 passos).
+3. **Disparo: segue só manual** (`POST /api/gold/publicar`). Quartz+Job (recomendado no
+   §6) vs. `DBMS_SCHEDULER` continua em aberto pra quando publicação periódica virar
+   necessidade — hoje ninguém pediu isso ainda.
+4. **Tolerância de generalização de geometria pro mapa**: valor fixado (`0.00005`), mas
+   **validação visual no Leaflet ainda não aconteceu** (não há tela de mapa consumindo
+   `feature_publicada` hoje).
+5. **Conservação (`LIZARDS-31`) e metade de Territorial (IRL/IAPP) seguem sem fonte** —
+   stub implementado e commitado, vira cálculo real quando a API SICAR Temas (ou
+   alternativa) destravar. Nenhuma mudança desde a análise original.
+6. ~~Teste: confirmar que o padrão `*OracleIT` é aceitável~~ — **confirmado**,
+   `GoldCalculoOracleIT` segue exatamente esse padrão, 2/2 passando.
+7. **Novo, não previsto neste documento original**: `SDO_ANYINTERACT` nunca aciona
+   índice espacial no Oracle desta instância (confirmado via `EXPLAIN PLAN` — sempre
+   `TABLE ACCESS FULL`). Trocado por `SDO_RELATE(...,'mask=ANYINTERACT')` em toda
+   consulta espacial da Gold + índice espacial real criado nas 4 tabelas de restrição
+   da Silver (`V049`). Sem isso, calcular ISAP/IAE pra todos os imóveis seria
+   inviável em produção (~42min pra 200 imóveis → ~1s). Detalhe completo e as 3
+   pegadinhas de privilégio pra criar o índice: CLAUDE.md §9.33.
+8. **Novo, não previsto**: `publicar_camada_mapa` precisou ser reescrita linha a linha
+   (não mais `INSERT...SELECT` em massa) porque uma única geometria ruim (ou só lenta)
+   derrubava a camada inteira. Ver §5 e CLAUDE.md §9.33.
