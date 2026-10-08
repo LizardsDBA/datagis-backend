@@ -4,6 +4,7 @@ import java.util.Locale;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.util.GeometryFixer;
 import org.locationtech.jts.io.ParseException;
 import org.locationtech.jts.io.WKTReader;
 import org.locationtech.jts.io.WKTWriter;
@@ -166,18 +167,21 @@ public class ValidadorGeometria implements ValidadorCampo {
     }
 
     /**
-     * Tenta reparar uma geometria topologicamente inválida via {@code buffer(0)} -
-     * truque padrão de GIS que força o JTS a reconstruir os anéis a partir de uma
-     * geometria auto-interseccionada. Só aceita o resultado se continuar sendo uma
-     * geometria de área (Polygon/MultiPolygon), não-vazia e agora válida; caso
-     * contrário retorna {@code null} e quem chamou mantém o erro original.
+     * Tenta reparar uma geometria topologicamente inválida via {@link GeometryFixer} -
+     * classe oficial do JTS (desde 1.18.2) pra isso, que substitui o truque antigo de
+     * {@code buffer(0)}. O {@code buffer(0)} foi descartado porque a versão do JTS
+     * fixada no projeto (1.20.0, CLAUDE.md §4.4) tem bug conhecido de descartar
+     * polígono de dentro de um MultiPolygon em certos casos de auto-interseção. Só
+     * aceita o resultado se continuar sendo uma geometria de área (Polygon/
+     * MultiPolygon), não-vazia e agora válida; caso contrário retorna {@code null} e
+     * quem chamou mantém o erro original.
      */
     private Geometry tentarReparar(Geometry geometria) {
         if (geometria == null || !(geometria instanceof org.locationtech.jts.geom.Polygonal)) {
             return null;
         }
         try {
-            Geometry reparada = geometria.buffer(0);
+            Geometry reparada = GeometryFixer.fix(geometria);
             if (reparada == null || reparada.isEmpty()) {
                 return null;
             }
