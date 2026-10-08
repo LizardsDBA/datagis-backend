@@ -1178,10 +1178,20 @@ Branch `feat/upload-shp`. Detalhe completo, achados e itens em aberto em
   meio do recebimento, não devolve resposta HTTP).
 - **Testado com arquivo de produção real**: 218MB, 559.899 registros, ~3 min,
   processamento síncrono (sem chunk/batch) sem erro.
-- **Achado real comparando com a fonte via WFS**: o Shapefile bulk traz o **histórico
-  completo** do CAR (`situacao_imovel` = `AT`/`CA`/`PE`), o WFS só devolve o vigente.
-  Refina a regra de dedup do §3.5 do doc de modelagem — duplicata **dentro do mesmo
-  lote** (não entre lotes) precisa de regra própria (manter só `AT`).
+- **Achado real comparando com a fonte via WFS**: o Shapefile bulk traz o histórico
+  completo do CAR (`situacao_imovel` = `AT`/`CA`/`PE`). Refina a regra de dedup do §3.5
+  do doc de modelagem — duplicata **dentro do mesmo lote** (não entre lotes) precisa de
+  regra própria (manter só `AT`).
+  **[CORRIGIDO em 2026-10-07]** A premissa original aqui ("o WFS só devolve o vigente")
+  estava **errada** — testado ao vivo comparando as 2 fontes (`docs/tutorial-acesso-
+  fontes-pendentes.md` §0-bis): o WFS, sem filtro nenhum, já devolve AT+PE+CA+SU
+  (confirmado via `CQL_FILTER` por status, soma bate exato com o total sem filtro —
+  557.854 em 2026-10-07). Ou seja, o WFS automatizado (fonte `#1`, já ativa) **já tem o
+  histórico completo que achávamos que só o Shapefile manual (`#12`) trazia** — a
+  necessidade de upload manual pra esse propósito específico é bem menor do que
+  documentado aqui originalmente. A regra de dedup continua válida (os dois têm
+  histórico, então os dois precisam dela), mas a justificativa de "por que cadastramos
+  o upload manual" deixa de ser "é a única fonte com histórico".
 
 ### 9.13. Regras de validação em mapeamento_coluna — [FEITO, 2026-09-13, `V029`]
 Migration `V029__evoluir_mapeamento_coluna_regras_validacao.sql` adiciona suporte
@@ -1587,6 +1597,44 @@ compartilhado + indicadores ambientais + as correções de mapeamento ficaram no
 commit de `LIZARDS-33`; ISAP/IAE + o índice espacial ficaram em `LIZARDS-32`; o stub
 do ICV em `LIZARDS-31`) — não existe uma divisão 1:1 perfeita entre arquivo e task
 porque `pkg_gold_publicacao` é infraestrutura compartilhada pelos 3.
+
+### 9.34. IAPP/IRL/ICV deixam de ser gap — fonte achada e cadastrada, sem credenciamento — **[FONTE CADASTRADA, 2026-10-07, `LIZARDS-24`]**
+Os 3 indicadores que só tinham stub nas procedures Gold (§9.33) por falta de fonte
+ganharam fonte real, achada a partir de uma URL do portal ArcGIS do IAT/PR. Detalhe
+completo, verificação ao vivo e os 4 passos (cadastrar → ingerir → modelar Silver →
+calcular) em `docs/tutorial-acesso-fontes-pendentes.md` §0-bis — resumo aqui:
+
+- **Serviço**: `00_PUBLICACOES/Base_Geo_Cadastro_Ambiental_rural` no geoportal IAT/PR
+  (`geopr.iat.pr.gov.br`), público, sem credenciamento. 9 camadas do CAR; as 3
+  relevantes pros indicadores: `APP Total` (381.962 polígonos → IAPP), `Reserva Legal`
+  (347.867 → IRL), `Vegetação Nativa` (393.153 → ICV + numerador do IAPP via
+  interseção com APP Total).
+- **Verificado via `curl` direto no ArcGIS REST**, não suposição: geometria real com
+  `outSR=4674`, `cod_imovel` no mesmo formato de `silver.imovel_rural.cod_imovel`,
+  `des_condic` com o mesmo texto do SICAR que `ValidadorDominio` já resolve (§9.17).
+- **Comparação de confiabilidade feita ao vivo** (mesma sessão) entre as 3 fontes de
+  *perímetro* de imóvel disponíveis (WFS `#1`, Shapefile `#12`, e a camada `Área
+  Imóvel` deste mesmo serviço IAT): WFS SICAR (`#1`) é a mais confiável — domínio
+  oficial direto (`geoserver.car.gov.br`), `cod_municipio_ibge` numérico como chave
+  (evita erro de nome de município, já visto nesta sessão), e teste cruzado do mesmo
+  `cod_imovel` entre WFS e IAT deu área/geometria idênticas (24 vértices nos dois). A
+  camada `Área Imóvel` do IAT **não foi cadastrada** por ser redundante e menos
+  completa (sem status `CA`).
+- **Achado que corrige §9.12**: o WFS SICAR, testado sem filtro, já devolve
+  AT+PE+CA+SU (não só o vigente como a nota antiga dizia) — ver correção em §9.12.
+- **Cadastrado em `V053__seed_fontes_car_app_rl_vegetacao_nativa.sql`**: as 3 fontes
+  (`API_REST`/`GEOJSON`, mesma família ArcGIS já suportada por
+  `IngestaoGeoJsonExecutor`, zero código novo) + `mapeamento_coluna` deliberadamente
+  mínimo (mesmo motivo do `V041`/MMA-SFB: ativar integridade cruzada com
+  `imovel_rural` agora quarentenaria quase tudo, já que a Silver só tem os ~4.608
+  imóveis do circuito de homologação, não os ~350-390 mil que essas camadas cobrem).
+- **[EM ABERTO]** Nada ingerido ainda. Faltam os passos 2-4 do tutorial §0-bis: rodar
+  ingestão de teste real, decidir a modelagem Silver (tabelas novas tipo
+  `silver.reserva_legal`/`silver.app_declarada`/`silver.vegetacao_nativa_declarada`,
+  cada uma com FK pra `imovel_rural`), e implementar `calcular_irl`/`calcular_iapp`/
+  `calcular_icv` de verdade (hoje stub, `pkg_calculo_territorial`/`pkg_calculo_
+  conservacao`) usando `SDO_RELATE` desde o início (não repetir o achado do
+  `SDO_ANYINTERACT`, §9.33).
 
 ---
 
