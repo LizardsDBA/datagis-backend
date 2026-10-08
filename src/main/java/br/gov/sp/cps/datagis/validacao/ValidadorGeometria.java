@@ -114,9 +114,8 @@ public class ValidadorGeometria implements ValidadorCampo {
         IsValidOp validOp = new IsValidOp(geometria);
         if (!validOp.isValid()) {
             // Auto-interseção/anel desconexo (achado real no PRODES - 5.740 poligonos de
-            // desmatamento, 100% rejeitados por isso) costuma ser reparavel com o truque
-            // padrao de GIS: buffer(0) forca o JTS a reconstruir uma geometria valida a
-            // partir de uma auto-interseccionada, sem mudar a area de forma relevante.
+            // desmatamento, 100% rejeitados por isso) costuma ser reparavel via
+            // GeometryFixer (ver tentarReparar), sem mudar a area de forma relevante.
             // So aceita o reparo se o resultado continuar sendo geometria de area
             // (Polygon/MultiPolygon) e nao-vazia - senao mantem o erro original.
             Geometry reparada = tentarReparar(geometria);
