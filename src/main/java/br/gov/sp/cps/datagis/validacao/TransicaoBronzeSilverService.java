@@ -924,6 +924,12 @@ public class TransicaoBronzeSilverService {
             case "embargo_ambiental" -> "numero_termo";
             case "area_protegida" -> "codigo_origem";
             case "desmatamento", "foco_calor" -> "identificador_origem";
+            // reserva_legal/app_declarada/vegetacao_nativa_declarada: identificador_origem
+            // (objectid do ArcGIS), NAO cod_imovel - um imovel pode ter varios poligonos
+            // de RL/APP/vegetacao nao-contiguos, confirmado ao vivo contra o servico real
+            // (docs/tutorial-acesso-fontes-pendentes.md §0-bis). cod_imovel como chave
+            // natural descartaria fragmentos reais como se fossem duplicata.
+            case "reserva_legal", "app_declarada", "vegetacao_nativa_declarada" -> "identificador_origem";
             case "bioma" -> "CD_BIOMA";
             default -> "id";
         };

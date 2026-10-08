@@ -225,11 +225,14 @@ public class PersistidorSilverService {
             case "desmatamento" -> extrairParametrosDesmatamento(apr);
             case "foco_calor" -> extrairParametrosFocoCalor(apr);
             case "bioma" -> extrairParametrosBioma(apr);
+            case "reserva_legal", "app_declarada", "vegetacao_nativa_declarada" ->
+                    extrairParametrosAtributoCarPorPoligono(entidade, apr);
             default -> throw new IllegalStateException(
                     "Entidade Silver \"" + entidade + "\" não possui persistidor especializado — "
                             + "configure fonte_dado.entidade_silver com um valor reconhecido "
                             + "(imovel_rural, municipio, area_protegida, auto_infracao, "
-                            + "embargo_ambiental, desmatamento, foco_calor, bioma) em vez de "
+                            + "embargo_ambiental, desmatamento, foco_calor, bioma, reserva_legal, "
+                            + "app_declarada, vegetacao_nativa_declarada) em vez de "
                             + "deixar cair silenciosamente em imovel_rural.");
         };
     }
@@ -487,6 +490,50 @@ public class PersistidorSilverService {
         };
     }
 
+    /**
+     * Comum às 3 tabelas de fato do CAR achadas em 2026-10-07 (reserva_legal,
+     * app_declarada, vegetacao_nativa_declarada) - mesmo schema de origem (serviço
+     * ArcGIS único, 00_PUBLICACOES/Base_Geo_Cadastro_Ambiental_rural), só a tabela
+     * destino muda. fonteIdPadrao é só o fallback de teste unitário (RegistroBruto sem
+     * fonteDadoId); em produção o real vem de reg.getFonteDadoId() (fontes 21/22/23,
+     * ver V053/V055).
+     */
+    private Object[] extrairParametrosAtributoCarPorPoligono(String entidade, RegistroAprovadoSilver apr) {
+        Map<String, Object> attrs = apr.atributosTransformados();
+        RegistroBruto reg = apr.registroBruto();
+
+        long fonteIdPadrao = switch (entidade) {
+            case "app_declarada" -> 21L;
+            case "reserva_legal" -> 22L;
+            default -> 23L; // vegetacao_nativa_declarada
+        };
+        Long fonteId = reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : fonteIdPadrao;
+        String identificadorOrigem = extrairString(attrs, "identificador_origem", "objectid", "id");
+        if (identificadorOrigem == null && reg != null) {
+            identificadorOrigem = entidade.toUpperCase(Locale.ROOT) + "-" + reg.getId();
+        }
+        String codImovel = extrairString(attrs, "cod_imovel");
+        BigDecimal areaHa = extrairBigDecimal(attrs, "area_ha", "num_area");
+        String situacaoBruto = extrairString(attrs, "situacao_bruto", "ind_status");
+        String condicaoBruto = extrairString(attrs, "condicao_bruto", "des_condic");
+        String geomWkt = apr.geometriaWkt();
+        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
+
+        return new Object[] {
+            fonteId,
+            identificadorOrigem,
+            codImovel,
+            areaHa,
+            situacaoBruto,
+            condicaoBruto,
+            geomWkt,
+            atributosOrigem,
+            reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
+            reg != null && reg.getId() != null ? reg.getId() : 1L,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
     private Object[] extrairParametrosFocoCalor(RegistroAprovadoSilver apr) {
         Map<String, Object> attrs = apr.atributosTransformados();
         RegistroBruto reg = apr.registroBruto();
@@ -576,11 +623,15 @@ public class PersistidorSilverService {
             case "desmatamento" -> obterSqlDesmatamento();
             case "foco_calor" -> obterSqlFocoCalor();
             case "bioma" -> obterSqlBioma();
+            case "reserva_legal" -> obterSqlReservaLegal();
+            case "app_declarada" -> obterSqlAppDeclarada();
+            case "vegetacao_nativa_declarada" -> obterSqlVegetacaoNativaDeclarada();
             default -> throw new IllegalStateException(
                     "Entidade Silver \"" + entidade + "\" não possui comando MERGE especializado — "
                             + "configure fonte_dado.entidade_silver com um valor reconhecido "
                             + "(imovel_rural, municipio, area_protegida, auto_infracao, "
-                            + "embargo_ambiental, desmatamento, foco_calor, bioma) em vez de "
+                            + "embargo_ambiental, desmatamento, foco_calor, bioma, reserva_legal, "
+                            + "app_declarada, vegetacao_nativa_declarada) em vez de "
                             + "deixar cair silenciosamente em imovel_rural.");
         };
     }
@@ -1004,6 +1055,82 @@ public class PersistidorSilverService {
                     s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
             """.formatted(silverSchema);
+    }
+
+    private String obterSqlReservaLegal() {
+        return obterSqlAtributoCarPorPoligono("reserva_legal");
+    }
+
+    private String obterSqlAppDeclarada() {
+        return obterSqlAtributoCarPorPoligono("app_declarada");
+    }
+
+    private String obterSqlVegetacaoNativaDeclarada() {
+        return obterSqlAtributoCarPorPoligono("vegetacao_nativa_declarada");
+    }
+
+    /**
+     * As 3 tabelas de fato do CAR achadas em 2026-10-07 (reserva_legal, app_declarada,
+     * vegetacao_nativa_declarada - docs/tutorial-acesso-fontes-pendentes.md §0-bis) tem
+     * schema idêntico (mesmo serviço ArcGIS, mesmos campos cod_imovel/num_area/
+     * ind_status/des_condic) - mesmo MERGE parametrizado só pelo nome da tabela, em vez
+     * de 3 métodos quase idênticos copiados e colados.
+     */
+    private String obterSqlAtributoCarPorPoligono(String tabela) {
+        return """
+            MERGE INTO %s.%s t
+            USING (
+                SELECT
+                    s.fonte_dado_id,
+                    s.identificador_origem,
+                    s.cod_imovel,
+                    s.area_ha,
+                    s.situacao_bruto,
+                    s.condicao_bruto,
+                    CASE WHEN s.wkt IS NOT NULL THEN SDO_GEOMETRY(s.wkt, 4674) ELSE NULL END AS geometria,
+                    s.atributos_origem,
+                    s.lote_ingestao_id,
+                    s.registro_bruto_id,
+                    s.hash_origem
+                FROM (
+                    SELECT
+                        ? AS fonte_dado_id,
+                        ? AS identificador_origem,
+                        ? AS cod_imovel,
+                        ? AS area_ha,
+                        ? AS situacao_bruto,
+                        ? AS condicao_bruto,
+                        TO_CLOB(?) AS wkt,
+                        TO_CLOB(?) AS atributos_origem,
+                        ? AS lote_ingestao_id,
+                        ? AS registro_bruto_id,
+                        ? AS hash_origem
+                    FROM dual
+                ) s
+            ) s ON (t.fonte_dado_id = s.fonte_dado_id AND t.identificador_origem = s.identificador_origem)
+            WHEN MATCHED THEN
+                UPDATE SET
+                    t.cod_imovel         = s.cod_imovel,
+                    t.area_ha            = s.area_ha,
+                    t.situacao_bruto     = s.situacao_bruto,
+                    t.condicao_bruto     = s.condicao_bruto,
+                    t.geometria          = COALESCE(s.geometria, t.geometria),
+                    t.atributos_origem   = s.atributos_origem,
+                    t.lote_ingestao_id   = s.lote_ingestao_id,
+                    t.registro_bruto_id  = s.registro_bruto_id,
+                    t.data_processamento = SYSTIMESTAMP,
+                    t.hash_origem        = s.hash_origem
+            WHEN NOT MATCHED THEN
+                INSERT (
+                    fonte_dado_id, identificador_origem, cod_imovel, area_ha,
+                    situacao_bruto, condicao_bruto, geometria, atributos_origem,
+                    lote_ingestao_id, registro_bruto_id, data_processamento, hash_origem
+                ) VALUES (
+                    s.fonte_dado_id, s.identificador_origem, s.cod_imovel, s.area_ha,
+                    s.situacao_bruto, s.condicao_bruto, s.geometria, s.atributos_origem,
+                    s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
+                )
+            """.formatted(silverSchema, tabela);
     }
 
     private String obterSqlFocoCalor() {
