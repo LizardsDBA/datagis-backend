@@ -19,9 +19,17 @@
 > do que as 2 fontes INCRA separadas (quilombolas/assentamentos) trariam. Com isso, a
 > linha 6 do slide está **efetivamente coberta** (ICMBio + FUNAI + MMA + SFB
 > cadastrados e funcionando) — INCRA como fonte própria vira opcional, não bloqueio.
-> **As únicas fontes que realmente faltam agora são as 3 do CAR (linhas 2/3/4),
-> travadas no credenciamento SICAR Temas (§1)** — não é mais pesquisa nem cadastro,
-> é um processo institucional externo.
+>
+> **🎉 Atualização 2026-10-07 — os 3 gaps reais (linhas 2/3/4, indicadores IAPP/IRL/ICV)
+> foram RESOLVIDOS, sem precisar do credenciamento SICAR Temas.** Achado um serviço
+> ArcGIS público no próprio geoportal IAT/PR (`00_PUBLICACOES/Base_Geo_Cadastro_
+> Ambiental_rural`) com 9 camadas do CAR, incluindo **Reserva Legal, APP Total e
+> Vegetação Nativa** — exatamente os 3 temas que faltavam. Verificado ao vivo via
+> `curl` direto no ArcGIS REST (não é suposição): geometria real, `outSR=4674`
+> funcionando, `cod_imovel` no mesmo formato da nossa Silver, `des_condic` com o
+> mesmo texto que o `ValidadorDominio` já resolve. Ver **§0-bis** (nova seção, logo
+> abaixo) para o achado completo — **as seções §1 e §2 abaixo ficam como registro
+> histórico da investigação anterior, já não bloqueiam nada.**
 
 ## 0. Slide oficial × o que está cadastrado hoje × o que falta
 
@@ -33,10 +41,10 @@ versão original deste cruzamento e hoje, ver nota na própria linha.
 
 | # | Dado necessário (slide) | Fonte pedida (slide) | Indicador(es) | Cadastrado no sistema hoje? |
 |---|---|---|---|---|
-| 1 | Imóvel rural (perímetro) | CAR | Todos | ✅ **2 fontes** — `#1` API/WFS (recorte por município) + `#12` Shapefile/upload (histórico completo, inclui imóveis cancelados) |
-| 2 | APP declarada | CAR | IAPP, ICV | ❌ **não cadastrada** — bloqueada por credenciamento, §1 |
-| 3 | Reserva Legal declarada | CAR | IRL | ❌ **não cadastrada** — mesmo bloqueio |
-| 4 | Vegetação nativa | CAR | ICV, IAPP | ❌ **não cadastrada** — Plano B investigado hoje, não funciona ainda, §2 |
+| 1 | Imóvel rural (perímetro) | CAR | Todos | ✅ **3 fontes** — `#1` API/WFS (recorte por município) + `#12` Shapefile/upload (histórico completo) + `Área Imóvel (CAR)` via o serviço achado em 2026-10-07 (§0-bis), ainda não cadastrada por ser redundante |
+| 2 | APP declarada | CAR | IAPP, ICV | ✅ **resolvido em 2026-10-07** — `APP Total (CAR)`, 381.962 polígonos, ver §0-bis (ainda não cadastrada no `fonte_dado`, serviço confirmado) |
+| 3 | Reserva Legal declarada | CAR | IRL | ✅ **resolvido em 2026-10-07** — `Reserva Legal (CAR)`, 347.867 polígonos, ver §0-bis |
+| 4 | Vegetação nativa | CAR | ICV, IAPP | ✅ **resolvido em 2026-10-07** — `Vegetação Nativa (CAR)`, 393.153 polígonos, ver §0-bis (o Plano B antigo do §2, de 2026-10-03, era um serviço diferente e sem geometria — esse achado é outro item do portal) |
 | 5 | Limites de biomas | IBGE | IRL | ✅ **cadastrada e ingerida em 2026-10-04** — `DOWNLOAD_URL`+`SHAPEFILE` (precisou implementar suporte a `DOWNLOAD_URL` no `IngestaoShapefileExecutor`, que só aceitava `UPLOAD_MANUAL` até então). Geometria dos 6 biomas **virou seed fixo** (`V040`, mesmo padrão do município/`V037`) — ambiente novo já sobe com tudo geolocalizado, sem precisar disparar ingestão manual |
 | 6 | Áreas protegidas e territórios especiais | ICMBio, MMA, FUNAI, **INCRA**, SFB | ISAP | ✅ **4 de 5 nominalmente cadastrados e testados em 2026-10-04** — ICMBio (`#2`), FUNAI (`#8`), MMA/CNUC nacional e SFB/CNFP (16.059 registros promovidos, 100%). INCRA não tem fonte própria cadastrada, mas **67% do SFB já resolve como `orgao=INCRA`** (assentamentos/glebas) — cobertura efetiva, não é mais gap real |
 | 7 | Embargos ambientais | IBAMA, ICMBio | IAE | ✅ **4 fontes cadastradas** — `#5`/`#9` embargos (IBAMA/ICMBio) + `#10`/`#11` autos de infração (dado extra, não pedido literalmente pelo slide, mas do mesmo tema) |
@@ -44,10 +52,9 @@ versão original deste cruzamento e hoje, ver nota na própria linha.
 | 9 | Focos de calor | INPE (Queimadas) | IFC | ✅ **2 fontes** — `#4` IAT/PR (granular, preferida) + `#6` CSV nacional mensal (fallback) |
 | 10 | Malha municipal | IBGE | Agregação | ✅ `#7` |
 
-**Resumindo em 3 baldes:**
-- ✅ **8 das 10 linhas** do slide cobertas (1, 5, 6, 7, 8, 9, 10 — a 6 com os 4
-  órgãos nominais cadastrados e o 5º coberto via sobreposição real de dado, não só
-  "poderia cadastrar").
+**Resumindo em 3 baldes (atualizado 2026-10-07):**
+- ✅ **10 das 10 linhas** do slide com fonte confirmada** — todas cobertas, incluindo
+  as 3 do CAR (2, 3, 4) que até ontem eram gap real. Ver §0-bis pro achado de hoje.
 - 🟡 **INCRA como fonte própria é opcional, não gap** — as 2 URLs abaixo continuam
   válidas e testáveis (`DOWNLOAD_URL`/`SHAPEFILE` já funciona de ponta a ponta, mesmo
   caminho usado pra biomas/MMA/SFB) se algum dia quiserem o dado "oficial" do INCRA
@@ -58,29 +65,139 @@ versão original deste cruzamento e hoje, ver nota na própria linha.
   | INCRA — Territórios quilombolas | `DOWNLOAD_URL` | `https://www.gov.br/insa/pt-br/centrais-de-conteudo/mapas/mapas-em-shapefile/quilombos-incra.zip` | `SHAPEFILE` |
   | INCRA — Assentamentos | `DOWNLOAD_URL` | `https://www.gov.br/insa/pt-br/centrais-de-conteudo/mapas/mapas-em-shapefile/assentamentos-sab-incra.zip` | `SHAPEFILE` |
 
-- 🔴 **3 linhas são gap de verdade** (2, 3, 4) — **as únicas que realmente faltam
-  hoje.** Dependem da API SICAR Temas, sem alternativa equivalente confirmada ainda.
-  Não é mais pesquisa nem cadastro — é o credenciamento institucional do §1. Ver §1 e
-  §2 abaixo.
+- ⚪ **Nenhuma linha é gap real hoje.** As 3 que dependiam do CAR (2, 3, 4) foram
+  resolvidas em 2026-10-07 por um serviço público do IAT/PR, sem precisar do
+  credenciamento SICAR Temas — ver §0-bis. **Falta só cadastrar as fontes e
+  implementar o cálculo** (trabalho de engenharia normal, não mais bloqueio
+  institucional).
+
+---
+
+## 0-bis. RESOLVIDO em 2026-10-07 — CAR completo via geoportal IAT/PR, sem credenciamento
+
+Achado a partir de uma URL do portal ArcGIS do IAT/PR compartilhada diretamente:
+`https://geopr.iat.pr.gov.br/portal/home/item.html?id=7cbabc15fd334a149e158ef2b4a46fa7`
+— item **"Cadastro Ambiental Rural - CAR (Base Geo)"**, público (`access: public`),
+mantido pelo próprio IAT/PR (mesmo geoportal que já usamos pra focos de calor,
+embargos, autos de infração e terras indígenas — `CLAUDE.md` §5.7/§9.4).
+
+### O serviço
+
+```
+https://geopr.iat.pr.gov.br/server/rest/services/00_PUBLICACOES/Base_Geo_Cadastro_Ambiental_rural/FeatureServer
+```
+
+**9 camadas, todas `esriGeometryPolygon`**, verificadas ao vivo via `curl` direto no
+ArcGIS REST (não é suposição nem resumo de IA — a primeira tentativa via `WebFetch`
+não conseguiu ler a página do portal, que é renderizada via JavaScript; a confirmação
+real veio consultando a API REST do ArcGIS diretamente):
+
+| ID | Camada | Registros (PR inteiro) | Resolve |
+|---|---|---:|---|
+| 0 | Hidrografia (CAR) | — | fora do escopo dos 7 indicadores |
+| 1 | **APP Total (CAR)** | **381.962** | **IAPP** (denominador — área total de APP) |
+| 2 | **Reserva Legal (CAR)** | **347.867** | **IRL** |
+| 3 | **Vegetação Nativa (CAR)** | **393.153** | **ICV** + numerador do IAPP (interseção APP ∩ Vegetação Nativa = "APP com vegetação nativa") |
+| 4 | Área Consolidada (CAR) | — | fora do escopo dos 7 indicadores |
+| 5 | Área Pousio (CAR) | — | fora do escopo |
+| 6 | Servidão Administrativa (CAR) | — | fora do escopo |
+| 7 | Uso Restrito (CAR) | — | fora do escopo |
+| 8 | Área Imóvel (CAR) | 551.292 | 3ª fonte de perímetro do imóvel (redundante com `#1`/`#12`, não cadastrar por ora) |
+
+### Por que esse achado é confiável (checklist de verificação, não só "parece bom")
+
+1. **Geometria real, não resumo estatístico.** O dead-end anterior (`Vegetacao_
+   Nativa_IAT_2021`, documentado em §2) tinha atributos ricos mas `"layers":[]` —
+   zero geometria consultável. Este serviço é o oposto: testei
+   `FeatureServer/2/query?...&outSR=4674&resultRecordCount=1&f=geojson` e voltou um
+   `MultiPolygon` de verdade, coordenadas dentro do Paraná (`lon ≈ -54.12, lat ≈
+   -24.66`), já no `crs: EPSG:4674` — confirma que o serviço aceita reprojeção pro
+   nosso SRID padrão.
+2. **`cod_imovel` em todas as 9 camadas, no mesmo formato da nossa Silver.** Exemplo
+   real retornado: `PR-4114609-EDA00CDD383C46A9B56852EDB3B074AE` — bate exatamente
+   com o padrão de `silver.imovel_rural.cod_imovel` (UF + código IBGE do município +
+   hash). Junta direto, sem trabalho de reconciliação de chave.
+3. **`des_condic` com o texto oficial do SICAR que o validador já conhece.** Valor
+   real retornado: `"Analisado, em conformidade com a Lei n 12.651/2012"` — é
+   literalmente um dos sinônimos que `ValidadorDominio` já resolve pra
+   `ANALISADO_SEM_PENDENCIAS` (`CLAUDE.md` §9.17, implementado em 2026-09-13/14).
+   Zero trabalho novo de normalização de domínio pra esse campo.
+4. **Mesma família de serviço que já sabemos processar.** É ArcGIS REST com
+   `maxRecordCount: 2000` por página — exatamente o padrão que `PaginadorUrlGeoJson`
+   já pagina (`resultOffset`+`resultRecordCount`) pras 6+ fontes do IAT/PR já
+   cadastradas. **Não precisa de código novo** — `IngestaoGeoJsonExecutor` processa
+   assim que a fonte for cadastrada com `tipo_aquisicao=API_REST`,
+   `formato_esperado=GEOJSON`, mesma URL + `outSR=4674` (padrão do §5.6/§9.4) + filtro
+   de UF/PR se o serviço cobrir mais de um estado (a confirmar ao cadastrar — o
+   geoportal é do IAT **do Paraná**, então é provável que já seja só PR, mas vale
+   conferir contra o total antes de assumir).
+5. **Público, sem credenciamento.** `access: public` no metadado do item — não
+   depende do processo pesado do §1 (Conecta Gov, certificado ICP-Brasil, pedido
+   institucional à SGD/ME).
+
+### Como cada indicador fica calculável agora
+
+- **IRL** = área de `Reserva Legal (CAR)` do imóvel ÷ área do imóvel, comparada ao
+  mínimo do bioma — direto, 1 camada.
+- **ICV** = área de `Vegetação Nativa (CAR)` do imóvel ÷ área do imóvel — direto, 1
+  camada.
+- **IAPP** = área de `APP Total (CAR)` ∩ `Vegetação Nativa (CAR)` (a "APP conservada")
+  ÷ área total de `APP Total (CAR)` do imóvel — precisa interseccionar as 2 camadas,
+  não é 1 camada só. Ainda assim, direto: ambas já trazem `cod_imovel`, dá pra
+  recortar as duas pro mesmo imóvel e rodar `SDO_GEOM.SDO_INTERSECTION` /
+  `SDO_RELATE`, mesmo padrão já usado em `pkg_calculo_territorial`/`pkg_calculo_
+  ambiental` (`docs/gold-procedures-calculo-publicacao.md`).
+
+### O que ainda falta fazer (trabalho de engenharia normal, não mais pesquisa)
+
+1. Cadastrar as 3 fontes (`fonte_dado`) — `APP Total`, `Reserva Legal`, `Vegetação
+   Nativa` do CAR, via `POST /api/fontes` ou seed de migration, mesmo padrão das
+   fontes já existentes do IAT/PR.
+2. Rodar uma ingestão de teste real (`POST /api/fontes/{id}/executar`) e conferir
+   volume completo, tempo de paginação (300-400 mil registros cada, maior que
+   qualquer fonte já ingerida hoje — `imovel_rural` tem ~4.600 reais do circuito, CAR
+   completo via WFS tem 556 mil mas nunca foi ingerido de ponta a ponta) e se cai
+   limpo ou gera quarentena.
+3. Decidir o mapeamento Silver: essas 3 camadas não são "entidades de fato" novas
+   tipo `embargo_ambiental` — são **atributos do próprio imóvel** (RL/APP/vegetação
+   declaradas). Modelagem mais provável: tabelas novas tipo `silver.reserva_legal`,
+   `silver.app_declarada`, `silver.vegetacao_nativa_declarada`, cada uma com
+   `imovel_rural_id` (FK) + geometria + `num_area` + `ind_status`/`des_condic` — a
+   confirmar antes de escrever a migration (mesmo cuidado de modelagem de
+   `docs/modelagem-silver-gold-quarentena.md`).
+4. Implementar `calcular_irl`, `calcular_iapp`, `calcular_icv` de verdade em
+   `pkg_calculo_territorial`/`pkg_calculo_conservacao` (hoje stub, só `p_indicador_
+   versao_id := NULL` — `docs/gold-procedures-calculo-publicacao.md` §2/§3.3),
+   seguindo o mesmo padrão `SDO_RELATE`+índice espacial já validado pra ISAP/IAE/
+   IDesmat/IFC (`CLAUDE.md` §9.33) — **não repetir o erro do `SDO_ANYINTERACT`**, usar
+   `SDO_RELATE(...,'mask=ANYINTERACT')` desde o início.
+
+**Nada disso foi feito ainda nesta atualização — só a descoberta e verificação da
+fonte. Implementação fica para quando o time decidir priorizar.**
 
 ---
 
 ## TL;DR
 
-| Indicador | Falta | Caminho A (oficial) | Caminho B (sem depender de terceiros) |
-|---|---|---|---|
-| **IAPP** | APP declarada do CAR | 🔒 API SICAR Temas — credenciamento pesado, ver §1 | ❌ não há alternativa equivalente conhecida |
-| **IRL** | Reserva Legal declarada do CAR | 🔒 idem | ❌ idem |
-| **ICV** | Vegetação nativa | 🔒 idem (tema do CAR) | ⚠️ camada do IAT existe, mas **hoje achei um problema novo**: a instância testada não tem geometria consultável — ver §2 |
+| Indicador | Antes | **Agora (2026-10-07)** |
+|---|---|---|
+| **IAPP** | 🔒 API SICAR Temas — credenciamento pesado | ✅ `APP Total (CAR)` + `Vegetação Nativa (CAR)` (interseção), geoportal IAT/PR — ver §0-bis |
+| **IRL** | 🔒 idem | ✅ `Reserva Legal (CAR)`, geoportal IAT/PR — ver §0-bis |
+| **ICV** | 🔒 idem / Plano B do IAT sem geometria | ✅ `Vegetação Nativa (CAR)`, geoportal IAT/PR — ver §0-bis |
 
-**Nenhum dos dois caminhos está pronto para uso agora.** O Caminho A tem um processo real,
-mas pesado (abaixo). O Caminho B precisa de mais um passo de investigação que não
-estava previsto — façam ou não o credenciamento, vale separar alguém pra isso essa
-semana.
+**Os 3 indicadores têm fonte de dado confirmada agora.** O que falta é cadastro +
+implementação (§0-bis, passos 1-4), não mais pesquisa ou credenciamento externo. As
+seções §1 e §2 abaixo documentam o caminho que **não** foi necessário no fim — mantidas
+como registro histórico da investigação, não como próximo passo.
 
 ---
 
-## 1. Caminho oficial — API SICAR Temas (Conecta Gov / Serpro)
+## 1. [HISTÓRICO, SUPERADO EM 2026-10-07 — ver §0-bis] Caminho oficial — API SICAR Temas (Conecta Gov / Serpro)
+
+> Esta seção documenta o caminho que a equipe investigou **antes** de achar o serviço
+> público do IAT/PR (§0-bis). Não é mais necessário segui-la — mantida só como
+> registro de que o credenciamento institucional foi considerado e por que decidimos
+> não seguir por ele.
 
 ### O que essa API dá, se conseguirmos acesso
 
@@ -133,7 +250,14 @@ processo.
 
 ---
 
-## 2. Caminho alternativo — vegetação nativa via geoportal do IAT (Plano B)
+## 2. [HISTÓRICO, SUPERADO EM 2026-10-07 — ver §0-bis] Caminho alternativo — vegetação nativa via geoportal do IAT (Plano B)
+
+> Esta seção documenta a investigação de 2026-10-03, que testou o serviço **errado**
+> do geoportal IAT (`Vegetacao_Nativa_IAT_2021`, sem geometria consultável) e concluiu
+> "não está pronto". O serviço certo (`00_PUBLICACOES/Base_Geo_Cadastro_Ambiental_
+> rural`, com geometria real) é **outro item do mesmo portal**, achado em 2026-10-07 —
+> ver §0-bis. Mantida como registro de que o caminho errado foi tentado primeiro,
+> pra quem for procurar de novo não repetir o mesmo teste.
 
 Esse caminho só cobre **ICV** (ainda assim calculado por nós, cruzando perímetro do
 imóvel × polígono de vegetação — não é o "tema pronto" do CAR). **Não ajuda IAPP nem
@@ -175,16 +299,9 @@ sabemos que **esse candidato específico, do jeito que está exposto, não serve
 
 ## 3. Lista final — "quais fontes faltam", direto ao ponto
 
-Pra quem só quer a resposta objetiva da pergunta do título, **em 2026-10-04 isso
-ficou simples: só as 3 linhas do CAR (2, 3, 4) continuam faltando de verdade.**
-Todo o resto do slide tem fonte cadastrada e testada (ver tabela completa §0).
-
-**Gaps de verdade (pesquisa não resolve sozinha — depende de credenciamento externo):**
-- **APP declarada** (indicador IAPP) — falta. Só a API SICAR Temas resolve. Credenciamento pesado (§1).
-- **Reserva Legal declarada** (indicador IRL) — falta. Mesma API, mesmo bloqueio.
-- **Vegetação nativa** (indicador ICV) — falta. API SICAR Temas resolveria; Plano B
-  (IAT) **investigado e ainda não funciona** (§2) — precisa de mais um passo antes
-  de declarar resolvido ou descartado.
+**Atualizado em 2026-10-07: nenhuma fonte falta mais.** As 10 linhas do slide oficial
+têm caminho técnico confirmado (ver tabela completa §0). O que resta é cadastro +
+implementação, não pesquisa — ver §0-bis, passos 1-4.
 
 **Resolvido em 2026-10-04:**
 - **Limites de biomas** (IBGE, indicador IRL) — cadastrada, ingerida, geometria virou
@@ -194,25 +311,36 @@ Todo o resto do slide tem fonte cadastrada e testada (ver tabela completa §0).
   registros promovidos. INCRA como fonte própria fica opcional (§0) — 67% do SFB já
   resolve como `orgao=INCRA`.
 
-Os 3 gaps de verdade bloqueiam especificamente os packages `pkg_calculo_conservacao` e
-metade do `pkg_calculo_territorial` do desenho em
-`docs/gold-procedures-calculo-publicacao.md` — travam só quando chegar a hora de
-implementar ICV/IRL/IAPP de verdade, não antes. Nenhuma outra procedure de cálculo
-(ISAP, IAE, IDesmat, IFC) depende mais de fonte faltando.
+**Resolvido em 2026-10-07:**
+- **APP declarada, Reserva Legal declarada e Vegetação nativa** (indicadores IAPP,
+  IRL, ICV) — serviço público do IAT/PR achado e verificado ao vivo, sem precisar do
+  credenciamento SICAR Temas. Ver §0-bis pro achado completo e os 4 passos que ainda
+  faltam (cadastrar fonte → ingerir → modelar Silver → implementar `calcular_*`).
+
+Os 3 indicadores que bloqueavam `pkg_calculo_conservacao` e metade do
+`pkg_calculo_territorial` (`docs/gold-procedures-calculo-publicacao.md`) agora têm
+fonte — a implementação real fica pra quando o time priorizar (§0-bis, passos 1-4).
+Nenhuma procedure de cálculo dos 7 indicadores oficiais depende mais de fonte faltando.
 
 ---
 
-## 4. Ação recomendada esta semana
+## 4. Ação recomendada
 
-1. **Alguém fala com o Prof. Garcia e/ou a Visiona hoje/amanhã** sobre o credenciamento
-   Conecta Gov (§1) — é o único item que ainda bloqueia alguma coisa, e tem prazo
-   externo fora do nosso controle. Quanto antes abrir, melhor.
-2. **Alguém retesta o Plano B** (§2, item 1 e 2) — é trabalho técnico que a própria
-   equipe resolve sozinha, sem depender de terceiros, caso o credenciamento demore.
-3. Enquanto isso não resolve: **ICV, IRL e IAPP ficam como stub** nas procedures
-   (`docs/gold-procedures-calculo-publicacao.md` §2) — ninguém mais trava esperando
-   fonte de dado, só esses 3 indicadores específicos.
-4. Decidir, sem pressa (não bloqueia nada): categorização fina de `area_protegida`
+1. **Cadastrar as 3 fontes do CAR achadas em 2026-10-07** (`APP Total`, `Reserva
+   Legal`, `Vegetação Nativa`) e rodar uma ingestão de teste real — ver §0-bis passos
+   1-2. Isso é trabalho que a própria equipe resolve sozinha, sem depender de
+   terceiros nem de credenciamento.
+2. **Decidir a modelagem Silver** pras 3 camadas novas (§0-bis passo 3) antes de
+   escrever a migration — são atributos do imóvel (RL/APP/vegetação declaradas), não
+   uma entidade de fato nova como `embargo_ambiental`.
+3. **Implementar `calcular_irl`, `calcular_iapp`, `calcular_icv` de verdade**
+   (§0-bis passo 4), usando `SDO_RELATE` desde o início (não repetir o achado do
+   `SDO_ANYINTERACT`, `CLAUDE.md` §9.33).
+4. O processo de credenciamento Conecta Gov (§1) e o retest do Plano B antigo (§2)
+   **não são mais necessários** — podem ser descartados da lista de pendências do
+   time, a menos que surja outro motivo pra precisar da API oficial do SICAR
+   (ex.: algum tema que o serviço do IAT não cubra).
+5. Decidir, sem pressa (não bloqueia nada): categorização fina de `area_protegida`
    pro MMA/SFB (`categoria_area_protegida`/`tipo_area_protegida` ainda não cobrem
    Projeto de Assentamento/Território Quilombola/Gleba Arrecadada) e se vale cadastrar
    o INCRA separado ou deixar só a cobertura via SFB.
