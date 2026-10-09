@@ -1,14 +1,11 @@
--- Achado real: embargo_ambiental (fontes 5 e 9) referencia auto_infracao via
--- num_auto_infracao/numero_ai (integridade cruzada). Os crons de embargos e de
--- autos de infracao disparavam no MESMO instante (0 0 3 ? * MON) - o Quartz nao
--- garante ordem de execucao entre jobs diferentes com o mesmo trigger, entao o
--- embargo podia rodar e validar ANTES do auto_infracao correspondente estar na
--- Silver, derrubando o lote inteiro por REFERENCIA_NAO_ENCONTRADA (achado nesta
--- sessao: 2.263 dos 2.316 registros de embargo em quarentena eram exatamente isso).
---
--- Correcao: atrasa os embargos em 30min (3h30 em vez de 3h), dando folga de sobra
--- pros autos de infracao (fontes bem menores, nao chegam perto do volume que
--- levaria minutos pra processar) terminarem ingestao + validacao + promocao antes.
-UPDATE ${controleSchema}.fonte_dado
-   SET cron_expressao = '0 30 3 ? * MON'
- WHERE id IN (5, 9);
+-- [SEM EFEITO - ver V035] Atrasava o cron dos embargos em 30min pra garantir que
+-- rodassem depois dos autos de infracao (integridade cruzada entre
+-- embargo_ambiental e auto_infracao). Sem efeito desde que a V035 passou a
+-- no-op (nenhuma fonte roda por agendamento automatico - so disparo manual) - a
+-- ordem entre essas 2 fontes so importa quando ambas disparam sozinhas via
+-- Quartz; disparo manual fica a cargo de quem opera decidir a ordem. Mantida
+-- como no-op (em vez de apagada) pra nao furar a sequencia de versoes do Flyway;
+-- o achado real (2.263 de 2.316 embargos rejeitados por REFERENCIA_NAO_ENCONTRADA
+-- quando a ordem nao era garantida) fica no historico do git, relevante se o
+-- agendamento automatico voltar.
+-- (migration sem nenhum statement executavel - Flyway so marca como aplicada)

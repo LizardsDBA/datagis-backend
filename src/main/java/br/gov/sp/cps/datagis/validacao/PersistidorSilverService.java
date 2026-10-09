@@ -495,17 +495,17 @@ public class PersistidorSilverService {
      * app_declarada, vegetacao_nativa_declarada) - mesmo schema de origem (serviço
      * ArcGIS único, 00_PUBLICACOES/Base_Geo_Cadastro_Ambiental_rural), só a tabela
      * destino muda. fonteIdPadrao é só o fallback de teste unitário (RegistroBruto sem
-     * fonteDadoId); em produção o real vem de reg.getFonteDadoId() (fontes 21/22/23,
-     * ver V053/V055).
+     * fonteDadoId); em produção o real vem de reg.getFonteDadoId() (fontes 4/5/6,
+     * ver V003 e V053).
      */
     private Object[] extrairParametrosAtributoCarPorPoligono(String entidade, RegistroAprovadoSilver apr) {
         Map<String, Object> attrs = apr.atributosTransformados();
         RegistroBruto reg = apr.registroBruto();
 
         long fonteIdPadrao = switch (entidade) {
-            case "app_declarada" -> 21L;
-            case "reserva_legal" -> 22L;
-            default -> 23L; // vegetacao_nativa_declarada
+            case "app_declarada" -> 4L;
+            case "reserva_legal" -> 5L;
+            default -> 6L; // vegetacao_nativa_declarada
         };
         Long fonteId = reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : fonteIdPadrao;
         String identificadorOrigem = extrairString(attrs, "identificador_origem", "objectid", "id");

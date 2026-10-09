@@ -1636,6 +1636,82 @@ calcular) em `docs/tutorial-acesso-fontes-pendentes.md` §0-bis — resumo aqui:
   conservacao`) usando `SDO_RELATE` desde o início (não repetir o achado do
   `SDO_ANYINTERACT`, §9.33).
 
+### 9.35. Catálogo de fontes reordenado por ordem de ingestão + nenhuma fonte com cron — **[DECIDIDO e aplicado, 2026-10-09]**
+As 18 fontes nasciam com o ID na ordem em que foram descobertas/cadastradas ao
+longo das sprints (espalhadas por 7 migrations: `V003`, `V006`, `V009`, `V025`,
+`V039`, `V041`, `V053`). Pedido do time: reordenar pra refletir a **ordem desejável
+de ingestão** (pré-requisitos primeiro) em vez da ordem histórica de descoberta, e
+tirar o `cron_expressao` de todas (nenhuma fonte roda mais por agendamento
+automático por ora — só disparo manual, até o fluxo de cálculo/publicação da Gold
+estar fechado de ponta a ponta).
+
+**IDs novos (consolidados em `V003`, que passou de "cadastro manual do CAR" pra
+seed único de todo o catálogo):**
+
+| ID | Fonte | ID antigo |
+|---|---|---|
+| 1 | IBGE - Malha Municipal (PR) | 7 |
+| 2 | IBGE - Limites de biomas | 13 |
+| 3 | CAR - Imóveis (PR) | 1 |
+| 4 | IAT/PR - APP Total (CAR) | 16 |
+| 5 | IAT/PR - Reserva Legal (CAR) | 17 |
+| 6 | IAT/PR - Vegetação Nativa (CAR) | 18 |
+| 7 | ICMBio - Unidades de Conservação (PR) | 2 |
+| 8 | IAT/PR - Terras Indígenas (FUNAI) | 8 |
+| 9 | MMA - Unidades de Conservacao (CNUC nacional) | 14 |
+| 10 | SFB - Cadastro Nacional de Florestas Publicas (CNFP) | 15 |
+| 11 | IAT/PR - Embargos IBAMA | 5 |
+| 12 | IAT/PR - Embargos ICMBio | 9 |
+| 13 | IAT/PR - Autos de Infração IBAMA | 10 |
+| 14 | IAT/PR - Autos de Infração ICMBio | 11 |
+| 15 | INPE (PRODES) - Desmatamento Mata Atlântica (PR) | 3 |
+| 16 | IAT/PR - Focos de Calor (INPE) | 4 |
+| 17 | INPE (Queimadas) - Focos de calor, Brasil (mensal) | 6 |
+| 18 | CAR - Imóveis (PR) via Shapefile (upload) | 12 |
+
+**3 pegadinhas reais achadas fazendo isso (nenhuma óbvia antes de tentar) — guardar
+pra não repetir o retrabalho:**
+1. **`fonte_dado.entidade_silver` e `campo_geometria_lat`/`campo_geometria_lon` não
+   existem ainda no ponto em que o seed consolidado roda** (`V003`, a migration
+   mais antiga que semeia `fonte_dado`) — essas colunas só nascem em `V010`
+   (`ADD entidade_silver`) e `V005` (`ADD campo_geometria_lat/lon`), ambas
+   numericamente DEPOIS de `V003`. Botar essas colunas direto no `INSERT` do `V003`
+   quebra com `ORA-00904: invalid identifier`. Corrigido: `V003` só usa as colunas
+   que já existiam desde `V001`; `entidade_silver` passou a ser setado em bloco no
+   `V031` (que já roda depois do `V010`), **por NOME, não por id** — e
+   `campo_geometria_lat/lon` da fonte CSV do INPE em um `UPDATE` no `V006` (que já
+   roda depois do `V005`). Regra geral: ao consolidar um seed na migration mais
+   antiga possível, cada coluna usada no `INSERT` tem que já existir **naquela
+   versão**, não na versão atual da tabela.
+2. **`V031__seed_mapeamentos_fontes_padrao.sql` tinha ~90 ocorrências de
+   `fonte_dado_id` **hard-coded por número** (`WHERE id IN (1, 12)`,
+   `VALUES (2, 'cnuc', ...)` etc.), um padrão bem diferente do resto do projeto
+   (que resolve por `nome` via subquery) — passou batido numa primeira varredura
+   por grep porque o padrão de busca procurava `fonte_dado_id = N`, não `f.id IN
+   (N)`/`VALUES (N,`. **Lição**: ao reordenar/renumerar qualquer catálogo com ID
+   `IDENTITY`, rodar pelo menos 2 buscas (uma pelo nome da coluna FK, outra por
+   `VALUES (` seguido de número pequeno) antes de assumir que achou todas as
+   referências. Corrigido com substituição em passe único (script Python, evitando
+   colisão entre id antigo e novo no meio da troca) + reescrita do bloco de
+   `entidade_silver` pra usar nome em vez de id (elimina a fragilidade de vez).
+3. **`V048` e `V051` também tinham `fonte_dado_id` fixo por número** (correções de
+   mapeamento achadas testando ingestão real, ex. `WHERE fonte_dado_id = 2`) -
+   atualizados pros IDs novos, com o número antigo anotado em comentário pra
+   rastreabilidade.
+
+Migrations que perderam efeito prático (`V035`, `V052` — preenchiam/ajustavam cron;
+`V055`, `V056`, `V058` — fixes das 3 fontes novas do CAR, agora já corretas desde o
+cadastro) foram mantidas como **no-op documentado** (comentário `[SEM EFEITO - ver
+X]`), não apagadas — apagar um número de versão já no histórico do Flyway é pior
+que deixar um arquivo sem statement executável.
+
+**Verificado ao vivo, banco resetado do zero**: `docker compose down` + `docker
+volume rm` + `up -d` aplica as 61 migrations limpo; `fonte_dado` confere exatamente
+a tabela acima, nenhuma linha com `cron_expressao`; ingestão de teste no CAR (novo
+id 3) e na APP Total (novo id 4) promovem pra Silver normalmente (4.611 e 3.180
+registros, bate com os números já conhecidos); suíte completa **401 testes, 0
+falhas, 1 erro** (o `DatagisApplicationTests` de sempre, §9.3).
+
 ---
 
 ## 10. Git — branches, commits e fluxo de PR — **[DECIDIDO, padrão da equipe LizardsDBA]**

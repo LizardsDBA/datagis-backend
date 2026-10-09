@@ -26,21 +26,9 @@
 -- uma fracao dos registros. Os 2 payloads brutos completos continuam preservados em
 -- atributos_origem/payload de qualquer forma - decidir a categorizacao fina depois
 -- de ver o resultado real da ingestao.
-INSERT INTO ${controleSchema}.fonte_dado (
-    nome, orgao, tipo_aquisicao, url_origem, formato_esperado, ativo, entidade_silver
-) VALUES (
-    'MMA - Unidades de Conservacao (CNUC nacional)', 'MMA', 'DOWNLOAD_URL',
-    'https://dados.mma.gov.br/dataset/44b6dc8a-dc82-4a84-8d95-1b0da7c85dac/resource/20327e02-d4fe-4a1b-bd12-e381ab461d97/download/shp_cnuc_2025_03.zip',
-    'SHAPEFILE', 1, 'area_protegida'
-);
-
-INSERT INTO ${controleSchema}.fonte_dado (
-    nome, orgao, tipo_aquisicao, url_origem, formato_esperado, ativo, entidade_silver
-) VALUES (
-    'SFB - Cadastro Nacional de Florestas Publicas (CNFP)', 'SFB', 'DOWNLOAD_URL',
-    'https://mapas.florestal.gov.br/portal/sharing/rest/content/items/2b752dfbf9254920bf8990ce363918af/data',
-    'SHAPEFILE', 1, 'area_protegida'
-);
+-- [fonte_dado ja seedada no V003 - ver la] Os 2 inserts de fonte_dado que existiam
+-- aqui (MMA e SFB) moveram pro seed consolidado (reordenacao do catalogo de
+-- fontes). O mapeamento_coluna abaixo continua aqui - resolve por NOME.
 
 INSERT INTO ${controleSchema}.mapeamento_coluna (
     fonte_dado_id, coluna_origem, atributo_destino, destino_tipo, tipo_dado, obrigatorio,

@@ -1,3 +1,6 @@
+-- [Numeros de fonte abaixo sao os ORIGINAIS, anteriores a reordenacao do catalogo
+-- no V003 - ver la pros IDs atuais (4->16, 6->17, 9->12, 10->13, 11->14).]
+--
 -- Achado testando foco_calor real contra as fontes 4 e 6: o INPE usa -999 em
 -- risco_fogo pra "nao calculado" (ex.: foco noturno, sem calculo de risco de fogo),
 -- nao um valor de risco de verdade. A validacao de faixa minima (valor_minimo=0)

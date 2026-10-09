@@ -1,27 +1,10 @@
--- Cadastra a fonte "IBGE - Limites de biomas" (gap identificado no tutorial
--- docs/tutorial-acesso-fontes-pendentes.md §0 - fonte ja validada tecnicamente desde a
--- v2 do levantamento, mas nunca tinha virado controle.fonte_dado de verdade).
+-- [fonte_dado ja seedada no V003 - ver la] Esta migration originalmente cadastrava
+-- "IBGE - Limites de biomas" aqui (gap identificado no tutorial
+-- docs/tutorial-acesso-fontes-pendentes.md §0). Com a reordenacao do catalogo de
+-- fontes, o insert de fonte_dado moveu pro V003 (seed consolidado, ordem de
+-- ingestao); o mapeamento_coluna abaixo continua aqui porque resolve a fonte por
+-- NOME (independe de qual ID ela recebeu).
 --
--- DOWNLOAD_URL porque o IBGE publica um .zip estatico e estavel direto no FTP deles
--- (sem SPA/sessao no meio, diferente do CAR em consultapublica.car.gov.br) - dá pra
--- automatizar (ver IngestaoShapefileExecutor.descompactarDeDownload).
---
--- entidade_silver='bioma' explicito (nunca deixar em branco pra essa fonte): o nome
--- contem "ibge", e o heuristico de resolverEntidadeSilver (sem entidade_silver
--- setada) bateria em "ibge" antes de qualquer outra coisa e mandaria pra 'municipio'
--- por engano - ver TransicaoBronzeSilverService.resolverEntidadeSilver.
---
--- Sem cron_expressao de proposito: biomas do IBGE mudam raramente (edicao anterior a
--- 2025 era de anos atras); agendar re-download automatico nao traz valor e so gasta
--- banda - fica so disparo manual por enquanto, igual outras fontes de baixa mudanca.
-INSERT INTO ${controleSchema}.fonte_dado (
-    nome, orgao, tipo_aquisicao, url_origem, formato_esperado, ativo, entidade_silver
-) VALUES (
-    'IBGE - Limites de biomas', 'IBGE', 'DOWNLOAD_URL',
-    'http://geoftp.ibge.gov.br/informacoes_ambientais/estudos_ambientais/biomas/vetores/2025_Biomas-e-Sistema-Costeiro-Marinho-do-Brasil-1-250000_shp.zip',
-    'SHAPEFILE', 1, 'bioma'
-);
-
 -- NM_BIOMA -> 'codigo': tabela_referencia='bioma' faz o ValidadorDominio confirmar que
 -- o nome (ex.: "Mata Atlântica") é um dos 6 já semeados na V011 e TRANSFORMA o valor
 -- pro codigo canonico (ex.: 'MATA_ATLANTICA') antes de chegar em
