@@ -12,7 +12,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -30,15 +29,6 @@ import tools.jackson.databind.ObjectMapper;
  */
 @Service
 public class ConjuntosDadosService {
-
-    /**
-     * Mesmo conjunto de entidades que {@code QuarentenaService.TABELAS_ESPELHO} conhece —
-     * mantido aqui porque o nome da tabela Silver é literalmente o nome da entidade
-     * (não precisa de um de-para separado como a Quarentena tem pros seus q_*).
-     */
-    private static final Set<String> ENTIDADES_SILVER_VALIDAS = Set.of(
-            "imovel_rural", "area_protegida", "embargo_ambiental", "auto_infracao",
-            "desmatamento", "foco_calor", "municipio", "bioma");
 
     private final LoteIngestaoRepository loteIngestaoRepository;
     private final FonteDadoRepository fonteDadoRepository;
@@ -151,12 +141,30 @@ public class ConjuntosDadosService {
         }
     }
 
+    /**
+     * Reconhece a entidade automaticamente consultando o catálogo do Oracle (mesma
+     * ideia de {@link #montarInfoTabela}), em vez de manter uma lista fixa de nomes
+     * conhecidos — uma tabela Silver nova passa a funcionar aqui sem precisar lembrar
+     * de atualizar este arquivo (achado ao vivo: a lista estática ficou pra trás
+     * quando app_declarada/reserva_legal/vegetacao_nativa_declarada foram criadas).
+     * O regex é defesa extra contra SQL injection, já que {@code tabela} vira literal
+     * concatenado no SQL de {@link #colunasSelecionaveis}/{@link #joinsAdicionais}
+     * (nome de tabela não pode ser bind variable) — mesmo padrão de
+     * {@code ValidadorIntegridadeCruzada}.
+     */
     private String resolverTabelaSilver(FonteDado fonte) {
         String entidade = transicaoService.resolverEntidadeSilver(fonte);
-        if (!ENTIDADES_SILVER_VALIDAS.contains(entidade)) {
+        if (entidade == null || !entidade.matches("[a-z_]+") || !tabelaSilverExiste(entidade)) {
             throw new IllegalStateException("Entidade Silver desconhecida pra fonte \"" + fonte.getNome() + "\": " + entidade);
         }
         return entidade;
+    }
+
+    private boolean tabelaSilverExiste(String tabela) {
+        Integer total = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM all_tables WHERE owner = 'SILVER' AND table_name = ?",
+                Integer.class, tabela.toUpperCase(Locale.ROOT));
+        return total != null && total > 0;
     }
 
     /**

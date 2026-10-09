@@ -54,6 +54,9 @@ public class QuarentenaService {
         TABELAS_ESPELHO.put("desmatamento", new TabelaEspelhoConfig("q_desmatamento", "CAST(q.id AS VARCHAR2(50))"));
         TABELAS_ESPELHO.put("foco_calor", new TabelaEspelhoConfig("q_foco_calor", "CAST(q.id AS VARCHAR2(50))"));
         TABELAS_ESPELHO.put("municipio", new TabelaEspelhoConfig("q_municipio", "q.cod_ibge"));
+        TABELAS_ESPELHO.put("app_declarada", new TabelaEspelhoConfig("q_app_declarada", "q.identificador_origem"));
+        TABELAS_ESPELHO.put("reserva_legal", new TabelaEspelhoConfig("q_reserva_legal", "q.identificador_origem"));
+        TABELAS_ESPELHO.put("vegetacao_nativa_declarada", new TabelaEspelhoConfig("q_vegetacao_nativa_declarada", "q.identificador_origem"));
     }
 
     public record TabelaEspelhoConfig(String nomeTabela, String expressaoChave) {}
