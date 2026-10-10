@@ -11,9 +11,13 @@
 > (Conservação), `LIZARDS-32` (Territorial), `LIZARDS-33` (Ambiental).
 
 **Status:** [IMPLEMENTADO — `V043`-`V047` (packages), `V049` (índices espaciais),
-`V050`/`V051` (correções de quarentena achadas testando contra dado real). 4 dos 7
-indicadores calculam de verdade (ISAP, IAE, IDesmat, IFC); ICV/IRL/IAPP seguem stub,
-ver §2.]
+`V050`/`V051` (correções de quarentena achadas testando contra dado real), `V059`/`V060`
+(achado testando contra dado real em escala: ISAP/IAE zeravam mesmo com sobreposição
+real, geometria "inválida" quebrava o dissolver — corrigido). **4 dos 7 indicadores
+calculam de verdade e corretamente** (ISAP, IAE, IDesmat, IFC — IDesmat/IFC só não têm
+dado hoje, não é bug de código). ICV/IRL/IAPP seguem stub — mas **a razão original
+("sem fonte") ficou obsoleta em 2026-10-07**, ver §2 e §9 (roadmap atualizado
+2026-10-10).]
 
 ---
 
@@ -65,38 +69,34 @@ publicação) passa a ser PL/SQL**, dividido em pacotes por bloco de indicador.
 
 ## 2. Cobertura real — antes de desenhar qualquer procedure
 
-As 3 tasks cobrem os 7 indicadores, mas **nem todos têm dado pra calcular hoje**. Isso
-já está registrado no schema (`gold.tipo_indicador.tem_fonte = 0`) e no doc de
-modelagem (§5.1) — reproduzindo aqui porque muda o escopo real de cada task:
+**[HISTÓRICO — ver §9 pro estado atual, 2026-10-10]** As 3 tasks cobrem os 7
+indicadores, mas quando este documento foi escrito **nem todos tinham dado pra
+calcular**. Isso estava registrado no schema (`gold.tipo_indicador.tem_fonte = 0`) e no
+doc de modelagem (§5.1):
 
-| Task (board) | Indicador | Fonte Silver | Calculável hoje? |
-|---|---|---|---|
-| **Conservação** (`LIZARDS-31`) | ICV — cobertura vegetal nativa | — | ❌ **sem fonte** |
-| **Territorial** | IRL — Reserva Legal | — | ❌ **sem fonte** |
-| **Territorial** | IAPP — APP conservada | — | ❌ **sem fonte** |
-| **Territorial** | ISAP — sobreposição c/ áreas protegidas | `area_protegida` × `imovel_rural` | ✅ |
-| **Territorial** | IAE — área embargada | `embargo_ambiental` × `imovel_rural` | ✅ |
-| **Ambiental** | IDesmat — desmatamento | `desmatamento` × `imovel_rural` | ✅ |
-| **Ambiental** | IFC — focos de calor | `foco_calor` × `imovel_rural` | ✅ |
+| Task (board) | Indicador | Fonte Silver | Calculável em 2026-10-04? | Calculável hoje (2026-10-10)? |
+|---|---|---|---|---|
+| **Conservação** (`LIZARDS-31`) | ICV — cobertura vegetal nativa | `vegetacao_nativa_declarada` | ❌ sem fonte | ⚠️ **fonte existe e já foi ingerida** (`LIZARDS-24`) — só falta implementar, ver §9 |
+| **Territorial** | IRL — Reserva Legal | `reserva_legal` | ❌ sem fonte | ⚠️ **idem** |
+| **Territorial** | IAPP — APP conservada | `app_declarada` × `vegetacao_nativa_declarada` | ❌ sem fonte | ⚠️ **idem** |
+| **Territorial** | ISAP — sobreposição c/ áreas protegidas | `area_protegida` × `imovel_rural` | ✅ | ✅ (corrigido `V060` — zerava com dado real, ver §9) |
+| **Territorial** | IAE — área embargada | `embargo_ambiental` × `imovel_rural` | ✅ | ✅ (mesmo fix `V060`) |
+| **Ambiental** | IDesmat — desmatamento | `desmatamento` × `imovel_rural` | ✅ | ✅ código, ❌ dado (PRODES não ingere em volume, ver §9) |
+| **Ambiental** | IFC — focos de calor | `foco_calor` × `imovel_rural` | ✅ | ✅ código, ❌ dado (mesmo motivo, Focos de Calor 333k registros) |
 
-**O motivo do bloqueio** (já documentado em `docs/checklist-cobertura-fontes.md` e
-`docs/fontes-de-dados-v2.md`): ICV, IRL e IAPP dependem de APP/Reserva Legal/vegetação
-nativa **declaradas no CAR**, cuja única fonte oficial (`api-sicar-tema`) exige
-credenciamento OAuth2 + allowlist de IP no Serpro — fora do alcance da equipe sem apoio
-externo da Visiona.
+**O motivo do bloqueio original** (`docs/checklist-cobertura-fontes.md`,
+`docs/fontes-de-dados-v2.md`): ICV, IRL e IAPP dependiam de APP/Reserva Legal/vegetação
+nativa declaradas no CAR, cuja fonte **que a gente sabia** (`api-sicar-tema`) exige
+credenciamento OAuth2 + allowlist de IP no Serpro.
 
-**Consequência pra esse trabalho:**
-- **`LIZARDS-31` (Conservação) não tem o que calcular ainda.** Dá pra escrever a
-  procedure **vazia/stub** (estrutura pronta, só o corpo do cálculo faltando) pra não
-  travar quando a fonte aparecer, mas não há como testar contra dado real hoje.
-- **Territorial fica pela metade**: ISAP e IAE têm fonte e dá pra implementar de
-  verdade; IRL e IAPP ficam na mesma situação do ICV (stub).
-- **Ambiental é a única task 100% executável hoje** (IDesmat e IFC têm fonte completa).
-
-Se isso for novidade pra quem está pegando essas tasks, vale alinhar com o time/board
-antes de estimar — "2d 4h" faz sentido pra Ambiental, mas Conservação e metade de
-Territorial não têm dado pra validar contra, então "feito" ali significa
-"estrutura pronta, aguardando fonte", não "calculando de verdade".
+**Isso mudou em 2026-10-07** (`LIZARDS-24`, `docs/tutorial-acesso-fontes-pendentes.md`
+§0-bis): achado um serviço ArcGIS **público, sem credenciamento**, no geoportal do
+IAT/PR com as 3 camadas (`APP Total`, `Reserva Legal`, `Vegetação Nativa`, todas com
+`cod_imovel` e geometria real). Cadastradas, modeladas na Silver
+(`silver.app_declarada`/`reserva_legal`/`vegetacao_nativa_declarada`, `V054`) e
+ingeridas com sucesso no circuito de homologação (2.777/3.180/3.182 registros). **O
+bloqueio deixou de ser "sem fonte" e passou a ser "sem implementação"** — puramente
+trabalho de PL/SQL, zero pesquisa pendente. Ver §9 pro plano de implementação.
 
 ---
 
@@ -323,3 +323,120 @@ construída primeiro, junto dos indicadores ambientais:
 8. **Novo, não previsto**: `publicar_camada_mapa` precisou ser reescrita linha a linha
    (não mais `INSERT...SELECT` em massa) porque uma única geometria ruim (ou só lenta)
    derrubava a camada inteira. Ver §5 e CLAUDE.md §9.33.
+
+---
+
+## 9. Roadmap: os 7 indicadores funcionando, de forma eficiente — [2026-10-10]
+
+Depois de ingerir as fontes reais em volume e testar a publicação completa contra
+4.608 imóveis, 3 achados mudam o que falta (nenhum é mais "pesquisa", todos são
+engenharia com escopo claro). Ordenados pela dependência real entre eles, não pelo
+board:
+
+### 9.1. IRL/IAPP/ICV — implementar de verdade (sem bloqueio técnico)
+
+**Por que vem primeiro:** zero dependência de infraestrutura, zero pesquisa pendente —
+a fonte já existe, já foi ingerida (circuito), já está modelada na Silver. É o maior
+ganho pelo menor esforço do roadmap inteiro: 3 de 7 indicadores, só escrevendo PL/SQL.
+
+Fórmulas já levantadas em `docs/tutorial-acesso-fontes-pendentes.md` (seção "Como cada
+indicador fica calculável agora"):
+
+| Indicador | Fórmula | Precisa de interseção espacial? |
+|---|---|---|
+| **IRL** | `SUM(area_ha)` de `silver.reserva_legal` WHERE `cod_imovel` ÷ área do imóvel, comparado ao mínimo exigido pelo bioma (Mata Atlântica = 20%, `silver.bioma`/`silver.municipio.bioma_predominante_id`) | **Não** — soma de atributo direto |
+| **ICV** | `SUM(area_ha)` de `silver.vegetacao_nativa_declarada` WHERE `cod_imovel` ÷ área do imóvel | **Não** — idem |
+| **IAPP** | `SDO_INTERSECTION` entre `app_declarada` e `vegetacao_nativa_declarada` do mesmo imóvel (a "APP com vegetação nativa") ÷ `SUM(area_ha)` de `app_declarada` do imóvel | **Sim** — única das 3 que precisa de geometria |
+
+**Pegadinha já conhecida a evitar desde o início** (achada corrigindo ISAP/IAE, `V060`
+— não repetir): para IAPP, **nunca** dissolver (`SDO_AGGR_UNION`) as geometrias
+originais de `app_declarada`/`vegetacao_nativa_declarada` antes de interseccionar —
+uma geometria com defeito de vértice duplicado quebra o dissolver (`ORA-13050`) mesmo
+funcionando bem num `SDO_INTERSECTION` direto. Usar o mesmo padrão corrigido: pra cada
+par (fragmento de APP, fragmento de Vegetação Nativa) do mesmo `cod_imovel`,
+interseccionar individualmente (protegido por `EXCEPTION WHEN OTHERS`, pula só o par
+problemático), dissolver só os **resultados** da interseção no final.
+
+**Pegadinha herdada da modelagem (já resolvida, só lembrar):** `cod_imovel` **não é
+chave única** nessas 3 tabelas — um imóvel pode ter várias geometrias fragmentadas de
+RL/APP/vegetação (confirmado ao vivo, `V055`). IRL/ICV precisam agregar por
+`cod_imovel` (não pegar "a primeira linha"); IAPP precisa cruzar **todos** os
+fragmentos de APP contra **todos** os de vegetação nativa do mesmo imóvel, não só o
+primeiro de cada.
+
+**Passos concretos:**
+1. Confirmar a fórmula exata do mínimo por bioma (IRL) contra a pág. 6 do PDF oficial
+   do desafio antes de travar o número (20% já é a regra conhecida pra Mata Atlântica,
+   CLAUDE.md §1, mas a fórmula completa de "indicador" pode ser uma razão simples ou
+   algo tipo `MIN(1, area_rl / area_minima_exigida)` — checar antes de implementar).
+2. Nova migration (`V061` ou próxima livre) substituindo os stubs de `calcular_irl`,
+   `calcular_iapp` (`pkg_calculo_territorial`) e `calcular_icv`
+   (`pkg_calculo_conservacao`) pela lógica real.
+3. Estender `GoldCalculoOracleIT` com os 3 novos cálculos (dado sintético com resultado
+   conhecido, mesmo padrão dos 4 indicadores já testados).
+4. Re-ingerir `app_declarada`/`reserva_legal`/`vegetacao_nativa_declarada` no circuito
+   (o volume foi resetado trocando pro Oracle Enterprise Edition) e validar contra
+   imóvel real antes de considerar fechado.
+
+### 9.2. PRODES e Focos de Calor — ingestão sem travar (IDesmat/IFC com dado real)
+
+**Por que não é bloqueio de armazenamento:** a troca pro Oracle Enterprise Edition
+(§ "liberar o Oracle sem o limite de 12GB") resolve espaço, não resolve isso. O que
+trava aqui é a transição Bronze→Silver inteira (validação de cada registro) rodar
+**numa transação só, sem divisão em lotes/chunks** — já era uma lacuna conhecida desde
+o início do projeto (CLAUDE.md §3.3: Spring Batch está no `pom.xml` mas nunca foi
+implementado de verdade; `LoteIngestaoWriter` faz esse papel "na marra"). Testado ao
+vivo: PRODES (38.296 registros) levou **mais de 40 minutos** só na validação, memória
+subindo o tempo todo, sem terminar; Focos de Calor IAT tem **333.604 registros** — a
+mesma ordem de grandeza do bug já documentado em CLAUDE.md §9.33 ("o endpoint de
+liberar quarentena trava em lotes muito grandes — 333 mil e 152 mil registros").
+
+**Duas saídas, não mutuamente exclusivas:**
+
+- **Rápida (escopo reduzido, mesmo princípio do circuito do CAR):** filtrar PRODES e
+  Focos de Calor pelos mesmos 3 municípios do circuito (`cod_municipio_ibge` ou bbox),
+  do mesmo jeito que já foi feito pras 3 fontes novas do CAR (`V056`). Resolve o
+  volume sem tocar em código Java. Única ressalva: desmatamento/focos de calor fora do
+  imóvel também importam pro indicador (mancha de desmatamento vizinha pode
+  interseccionar o imóvel mesmo sem o "centro" dela estar no município do imóvel) —
+  um filtro só por município pode cortar geometria relevante que cruza a borda. Testar
+  com um buffer de margem, não só o município exato.
+- **Estrutural (fecha a lacuna de verdade, maior esforço):** implementar
+  `Job`/`Step`/`SkipListener` reais do Spring Batch pra transição Bronze→Silver,
+  processando em chunks com commit intermediário em vez de tudo numa transação só.
+  Resolve pra qualquer fonte grande futura também, não só essas 2 — mas é a mudança
+  arquitetural que o projeto vem adiando desde o `LIZARDS-5`.
+
+**Recomendação:** fazer a saída rápida primeiro (desbloqueia IDesmat/IFC com dado real
+num prazo curto), registrar a estrutural como item de roadmap separado — não misturar
+as duas numa única entrega.
+
+### 9.3. Performance da publicação Gold em escala
+
+Achado testando a publicação completa contra os 4.608 imóveis do circuito: a taxa de
+gravação em `gold.indicador_resultado` **caiu de ~36 linhas/s pra ~1 linha/s** ao
+longo da execução (não foi instável, foi uma desaceleração progressiva e consistente).
+Ainda não investigado a fundo — candidatos: estatísticas desatualizadas depois dos
+`INSERT`s grandes (`DBMS_STATS` nunca rodou), crescimento de índice sem reotimizar, ou
+contenção de lock entre a chamada HTTP (Java, 1 imóvel por vez) e o resto do sistema.
+
+**Isso só importa de verdade se o plano for calcular pra mais que o circuito** (Paraná
+inteiro = ~557 mil imóveis — nessa escala, a taxa observada tornaria a publicação
+completa inviável, iria de minutos para dias). Pra ficar no circuito de homologação,
+o tempo atual (dezenas de minutos pra 4.608 imóveis) é aceitável pro propósito do
+projeto. Decisão de escopo (CLAUDE.md §3.4/conversa sobre armazenamento) ainda
+determina se isso precisa ser resolvido agora ou fica pra quando/se o projeto for de
+verdade pra produção em escala estadual.
+
+### 9.4. Ordem recomendada
+
+1. **§9.1 (IRL/IAPP/ICV)** — maior ganho, menor esforço, zero bloqueio. Fazer primeiro.
+2. **§9.2, saída rápida (escopo reduzido pra PRODES/Focos de Calor)** — desbloqueia
+   IDesmat/IFC com dado real sem exigir a reescrita do Spring Batch.
+3. **§9.2, saída estrutural (Spring Batch de verdade)** — fica como débito técnico
+   registrado, não bloqueia os 7 indicadores funcionarem no circuito.
+4. **§9.3 (performance em escala)** — só relevante se/quando o projeto decidir ir além
+   do circuito de homologação.
+
+Com 1 e 2 feitos, os 7 indicadores calculam de verdade no circuito de homologação —
+que já é o escopo que o próprio desafio autoriza explicitamente (CLAUDE.md §5.2).
