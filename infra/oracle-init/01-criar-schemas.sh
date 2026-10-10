@@ -1,7 +1,12 @@
 #!/bin/bash
 # Roda uma vez so, na primeira inicializacao do container Oracle (banco vazio),
-# conectado como SYS. Nesse ponto o usuario do APP_USER/APP_USER_PASSWORD ja foi
-# criado no PDB pelo proprio entrypoint da imagem.
+# conectado como SYS.
+#
+# [ATUALIZADO - troca pra Oracle Enterprise Edition, ver docs/tutorial-oracle-
+# enterprise-dev-local.md] A imagem gvenzl/oracle-free criava o APP_USER
+# automaticamente a partir de APP_USER/APP_USER_PASSWORD - a imagem oficial da
+# Oracle (container-registry.oracle.com/database/enterprise) NAO tem esse
+# mecanismo, entao agora este script tambem cria o APP_USER.
 #
 # Ideia: 7 schemas, 1 usuario de conexao so.
 #   - APP_USER (CONTROLE no .env) e o schema de controle e tambem quem o Spring
@@ -14,6 +19,7 @@
 set -euo pipefail
 
 : "${APP_USER:?defina APP_USER no .env}"
+: "${APP_USER_PASSWORD:?defina APP_USER_PASSWORD no .env}"
 : "${SCHEMA_PASSWORD:?defina SCHEMA_PASSWORD no .env}"
 
 sqlplus -s "/ as sysdba" <<EOSQL
@@ -28,6 +34,16 @@ ALTER SYSTEM SET PGA_AGGREGATE_LIMIT = 8G SCOPE = BOTH;
 
 ALTER SESSION SET CONTAINER = FREEPDB1;
 ALTER SYSTEM SET PGA_AGGREGATE_LIMIT = 8G SCOPE = BOTH;
+
+-- A imagem Enterprise Edition nao cria o usuario de conexao do Spring
+-- automaticamente (diferente da gvenzl/oracle-free, que criava via
+-- APP_USER/APP_USER_PASSWORD) - criado aqui na mao. CONNECT+RESOURCE cobre
+-- CREATE SESSION e criar objeto (tabela/sequence/procedure/trigger/view) no
+-- PROPRIO schema (CONTROLE); os GRANT ... ANY ... abaixo cobrem os outros 6
+-- schemas.
+CREATE USER ${APP_USER} IDENTIFIED BY "${APP_USER_PASSWORD}" DEFAULT TABLESPACE USERS QUOTA UNLIMITED ON USERS;
+GRANT CONNECT, RESOURCE TO ${APP_USER};
+GRANT UNLIMITED TABLESPACE TO ${APP_USER};
 
 CREATE USER bronze     IDENTIFIED BY "${SCHEMA_PASSWORD}" DEFAULT TABLESPACE USERS QUOTA UNLIMITED ON USERS;
 CREATE USER silver     IDENTIFIED BY "${SCHEMA_PASSWORD}" DEFAULT TABLESPACE USERS QUOTA UNLIMITED ON USERS;
