@@ -50,6 +50,19 @@ public class ValidadorCpfCnpj implements ValidadorCampo {
             return ResultadoValidacao.sucesso(null);
         }
 
+        // Fontes que mandam CPF/CNPJ como NUMERO (nao string) no JSON/GeoJSON
+        // perdem zero(s) a esquerda no parsing - achado ao vivo nos Embargos
+        // IBAMA/ICMBio: "4579237927" chegando com 10 digitos (falta 1 zero),
+        // "365707961" com 9 (faltam 2). Repoe o(s) zero(s) perdido(s) antes de
+        // validar - o digito verificador (modulo 11) abaixo continua sendo a
+        // prova real: se o valor com zero reposto nao bater o checksum, segue
+        // invalido do mesmo jeito, nao aceita qualquer coisa.
+        if (digitos.length() == 9 || digitos.length() == 10) {
+            digitos = "0".repeat(11 - digitos.length()) + digitos;
+        } else if (digitos.length() == 12 || digitos.length() == 13) {
+            digitos = "0".repeat(14 - digitos.length()) + digitos;
+        }
+
         boolean valido = false;
         if (digitos.length() == 11) {
             valido = isCpfValido(digitos);

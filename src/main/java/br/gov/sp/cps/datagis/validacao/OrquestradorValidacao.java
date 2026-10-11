@@ -452,10 +452,19 @@ public class OrquestradorValidacao {
         if (atributoDestino == null || atributoDestino.isBlank()) {
             return null;
         }
+        // "num_auto_infracao" removido da inferencia (LIZARDS-50) - achado ao vivo
+        // reprocessando Embargos IBAMA/ICMBio apos corrigir o CPF: o campo
+        // num_auto_infracao do EMBARGO nao e o mesmo identificador do Auto de
+        // Infracao de verdade (testado contra o servico real do IAT/PR - Embargos
+        // IBAMA e alfanumerico tipo "DBK2XZIO", Autos IBAMA e sempre numerico puro
+        // tipo "368471" - formatos incompativeis, nunca vai casar). A config
+        // explicita em controle.mapeamento_coluna (V071, referencia_entidade_silver
+        // = NULL pras fontes 11/12) e quem deveria decidir isso - essa inferencia
+        // por nome de atributo estava SOBRESCREVENDO a config explicita e
+        // reaplicando a checagem mesmo com ela desligada no banco.
         String a = atributoDestino.trim().toLowerCase(java.util.Locale.ROOT);
         return switch (a) {
             case "municipio", "cod_municipio_ibge", "municipio_id" -> "municipio";
-            case "auto_infracao", "num_auto_infracao", "auto_infracao_id" -> "auto_infracao";
             default -> null;
         };
     }

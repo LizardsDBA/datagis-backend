@@ -206,12 +206,17 @@ class OrquestradorValidacaoTest {
     }
 
     @Test
-    @DisplayName("Deve inferir município e auto de infração como referência à entidade Silver (integridade cruzada)")
-    void deveInferirMunicipioEAutoInfracaoComoIntegridadeCruzada() {
+    @DisplayName("Deve inferir município como referência à entidade Silver (integridade cruzada)")
+    void deveInferirMunicipioComoIntegridadeCruzada() {
         assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("municipio")).isEqualTo("municipio");
         assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("cod_municipio_ibge")).isEqualTo("municipio");
-        assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("num_auto_infracao")).isEqualTo("auto_infracao");
-        assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("auto_infracao")).isEqualTo("auto_infracao");
+        // num_auto_infracao NAO infere mais auto_infracao (LIZARDS-50) - o campo do
+        // Embargo nao e o mesmo identificador do Auto de Infracao de verdade
+        // (testado contra o servico real do IAT/PR: formatos incompativeis). A
+        // config explicita em controle.mapeamento_coluna (V071) e quem decide isso
+        // agora, nao mais uma inferencia por nome de atributo.
+        assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("num_auto_infracao")).isNull();
+        assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("auto_infracao")).isNull();
     }
 
     // -------------------------------------------------------------------------
