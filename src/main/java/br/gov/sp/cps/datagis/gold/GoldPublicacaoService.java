@@ -121,14 +121,18 @@ public class GoldPublicacaoService {
     }
 
     /**
-     * Calcula os 4 indicadores reais (ISAP, IAE, IDesmat, IFC — ICV/IRL/IAPP são stub,
-     * não fazem nada hoje) e publica o detalhe congelado para 1 imóvel.
+     * Calcula os 7 indicadores (ISAP, IAE, IRL, IAPP, IDesmat, IFC, ICV — todos reais
+     * desde {@code V072}/{@code V073}, LIZARDS-24) e publica o detalhe congelado para
+     * 1 imóvel.
      */
     public void recalcularImovel(String codImovel) {
         chamarCalculo("pkg_calculo_territorial", "calcular_isap", codImovel);
         chamarCalculo("pkg_calculo_territorial", "calcular_iae", codImovel);
+        chamarCalculo("pkg_calculo_territorial", "calcular_irl", codImovel);
+        chamarCalculo("pkg_calculo_territorial", "calcular_iapp", codImovel);
         chamarCalculo("pkg_calculo_ambiental", "calcular_idesmat", codImovel);
         chamarCalculo("pkg_calculo_ambiental", "calcular_ifc", codImovel);
+        chamarCalculo("pkg_calculo_conservacao", "calcular_icv", codImovel);
         chamarPublicarImovel(codImovel);
     }
 
