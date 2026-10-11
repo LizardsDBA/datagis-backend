@@ -1712,6 +1712,157 @@ id 3) e na APP Total (novo id 4) promovem pra Silver normalmente (4.611 e 3.180
 registros, bate com os números já conhecidos); suíte completa **401 testes, 0
 falhas, 1 erro** (o `DatagisApplicationTests` de sempre, §9.3).
 
+### 9.36. 4 indicadores funcionando de ponta a ponta no circuito + simplificação de mapa migrada pra Java/JTS — **[FEITO e validado contra o Oracle real, 2026-10-11, `LIZARDS-24`/`LIZARDS-50`]**
+Sessão longa, trocou Oracle Free por Enterprise Edition (§9.34/tutorial próprio),
+filtrou os endpoints restantes pelo circuito (`V061`) e destravou os 4 indicadores
+com fonte (ISAP, IAE, IDesmat, IFC) de verdade contra dado real, não só sintético.
+Design original e formulário em `docs/gold-procedures-calculo-publicacao.md` §9.
+
+**Bug 1 — ISAP/IAE/IDesmat zerando ou explodindo com imóvel real (`V060`/`V063`/`V064`):**
+- `V060` já corrigia o padrão "dissolver antes de interseccionar quebra com geometria
+  'inválida' real" pra ISAP/IAE (achado anterior a esta sessão). `V064` replicou o
+  mesmo fix pro IDesmat, que tinha o mesmo bug e nunca tinha sido corrigido lá.
+- **Achado novo nesta sessão**: alguns imóveis tinham `SDO_GEOM.SDO_AREA` da própria
+  geometria do imóvel devolvendo um valor absurdo (12,75 **bilhões** de hectares pra
+  um imóvel de 0,18 ha segundo `area_ha`, calculado em Java/JTS na ingestão) —
+  geometria com vértice duplicado faz o Oracle devolver área/interseção sem sentido
+  **sem lançar erro**. Como `area_ha` (JTS) já é confiável, a correção (`V063`/
+  `V064`) é um sanity clamp: a área de interseção nunca pode exceder a área do
+  próprio imóvel — se `SDO_GEOM` devolver mais que isso, trunca pra `area_ha`, nunca
+  propaga um percentual impossível (chegava a 12 milhões% antes do fix).
+
+**Bug 2 — camada de mapa DESMATAMENTO travando/estourando memória (resolvido
+removendo a causa, não contornando) — `LIZARDS-50`:**
+Publicar a camada de mapa (bloco 2, `SDO_UTIL.SIMPLIFY` em PL/SQL) contra os 1.428
+polígonos reais do PRODES expôs, em sequência, 4 sintomas que pareciam problemas
+diferentes mas eram o mesmo limite de fundo:
+1. 1 geometria com 634 mil ordenadas fazia o `SIMPLIFY` sozinho estourar
+   `ORA-04036` (PGA 8GB) — tentativas de mitigar (pular por tamanho de vértice,
+   lote pequeno + timeout, liberar memória de sessão a cada N linhas) reduziam o
+   estrago mas nunca resolviam de vez, porque **outras** geometrias, isoladas,
+   também estouravam sozinhas (não era 1 outlier, era o motor de `SIMPLIFY` do
+   Oracle sendo caro demais em memória pra geometria complexa em geral).
+2. **Decisão de negócio: nenhum registro pode ser descartado** (nem o mais pesado)
+   — forçou resolver de verdade, não mascarar. Solução: `SimplificadorGeometriaMapa`
+   (Java/JTS, `TopologyPreservingSimplifier`) substitui o `SDO_UTIL.SIMPLIFY` **só**
+   na publicação de camada de mapa (não nos cálculos de indicador, que continuam em
+   PL/SQL — fazem interseção espacial de verdade, perto do dado). Roda no heap da
+   JVM do backend (`-Xmx8g`), memória separada do PGA do Oracle. `V070` removeu a
+   procedure `publicar_camada_mapa_lote` (ficou sem uso).
+3. Daí dois bugs secundários, achados só depois que o motor de memória parou de
+   ser o problema: `ORA-01461` (WKT simplificado >4000 caracteres não pode ser bind
+   de `String` comum — corrigido com `java.sql.Clob`, mesmo padrão já usado em
+   `PersistidorSilverService`) e colisão de número de versão (`ORA-00001`) com dado
+   publicado **antes** da tabela de controle de versão existir — corrigido calculando
+   a próxima versão como `GREATEST` entre `gold.publicacao_camada_mapa` e
+   `gold.feature_publicada`, não só a primeira.
+- **Resultado final**: as 6 camadas de mapa publicam 100%, 0 pulados (399 município,
+  16.059 área protegida, 1.428 desmatamento, 4.611 imóvel, 2.949 foco de calor,
+  incluindo a geometria de 634 mil ordenadas que antes era sempre descartada).
+- **Controle de execução novo** (`V067`): `gold.publicacao_camada_mapa`
+  (status/andamento — `total_processado`/`total_publicado`/`total_pulado`) +
+  `gold.publicacao_camada_mapa_erro` (1 linha por registro pulado, sempre com
+  motivo — nunca mais só `DBMS_OUTPUT.PUT_LINE` que ninguém olhava). Endpoints:
+  `POST /api/gold/mapa-camadas/{codigo}/publicar`,
+  `GET /api/gold/mapa-camadas/{codigo}/status`,
+  `GET /api/gold/publicacoes/{id}/erros`. A versão nova só fica "visível" (quem for
+  ler depois filtra por `status='CONCLUIDA'`) se processar inteira — nunca aparece
+  pela metade.
+
+**Bug 3 — CPF/CNPJ sem zero à esquerda rejeitando Embargos/Autos de verdade:**
+Fontes que mandam CPF/CNPJ como **número** (não string) no JSON/GeoJSON perdem
+zero(s) à esquerda no parsing (`"4579237927"` chegando com 10 dígitos em vez de 11,
+`"365707961"` com 9). `ValidadorCpfCnpj` agora repõe o(s) zero(s) perdido(s) antes
+de validar — o dígito verificador (módulo 11) continua sendo a prova real, se não
+bater mesmo com o zero reposto segue inválido. Resolveu Autos ICMBio (30/30
+promovido) de primeira.
+
+**Bug 4 — referência `num_auto_infracao` nos Embargos bloqueando mesmo sem CPF
+inválido, causa raiz diferente da esperada:**
+Depois do fix de CPF, Embargos IBAMA/ICMBio continuavam retidos por
+`REFERENCIA_NAO_ENCONTRADA` (`num_auto_infracao` → `silver.auto_infracao`).
+Cruzando contra os serviços reais do IAT/PR: o campo `num_auto_infracao` do
+**Embargo IBAMA** é alfanumérico (`"DBK2XZIO"`), mas o `num_auto_infracao` real dos
+**Autos IBAMA** é sempre numérico puro (`"368471"`) — formatos incompatíveis, nunca
+foi o mesmo identificador (provavelmente um código interno do GIS do IAT/PR, não
+uma FK de verdade). Pro ICMBio a referência é legítima (mesmo formato alfanumérico
+dos dois lados), só incompleta pelo recorte do circuito. Como o campo não é
+necessário pro cálculo do IAE (usa a geometria, não essa referência), relaxado nos
+dois (`V071`, `referencia_entidade_silver = NULL`). **Achado no caminho**: só mudar
+a config no banco não bastou — `OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico`
+tinha um fallback hardcoded que reaplicava a checagem por nome de atributo mesmo
+com a config explícita desligada; removido o caso `num_auto_infracao`/`auto_infracao`
+dessa inferência (teste `OrquestradorValidacaoTest` ajustado).
+**Novo endpoint** `POST /api/lotes/{id}/reprocessar` (`LoteIngestaoController`) —
+revalida um lote já ingerido contra a esteira de validação **atual**, sem precisar
+que a fonte externa mude (a detecção de "sem mudança", RN018, bloquearia uma nova
+ingestão real) — útil sempre que um bug de validação for corrigido depois que um
+lote já foi pra quarentena.
+
+**Resultado final, `POST /api/gold/publicar` completo contra os 4.611 imóveis**:
+4.611/4.611 publicados, 0 falha; 6/6 camadas publicadas, 0 falha. Indicadores com
+valor real (versão mais recente por imóvel, não histórico acumulado): ISAP 782
+imóveis, IAE 24, IDesmat 1.670, IFC 10. `silver.embargo_ambiental` = 124 registros
+(era 0 a sessão inteira). ICV/IRL/IAPP seguem stub — ver §9.37 pro gap achado
+analisando o que falta pra implementar de verdade.
+
+### 9.37. IRL/IAPP/ICV — implementados, decisão do percentual mínimo de RL tomada — **[FEITO, 2026-10-11, `V072`/`V073`]**
+`docs/gold-procedures-calculo-publicacao.md` §9.1 (2026-10-10) já mapeava a fórmula
+e confirmava a fonte ingerida (`app_declarada` 3.180, `reserva_legal` 2.777,
+`vegetacao_nativa_declarada` 3.182 — conferido de novo ao vivo em 2026-10-11, bate
+exato). **Achado analisando o que faltava pra implementar de verdade**: a fórmula do
+IRL pede comparar `SUM(area_ha)` de `reserva_legal` contra "o mínimo exigido pelo
+bioma" — mas `silver.bioma` **não tem nenhuma coluna de percentual mínimo**, e
+**nenhum dos 399 municípios tem `bioma_predominante_id` preenchido** (tudo NULL).
+Esse vínculo nunca foi populado. **Decisão tomada**: fixar 20% como constante na
+procedure (`c_percentual_minimo_mata_atlantica`, `V072`) em vez de popular o vínculo
+de verdade — defensável porque o recorte territorial do desafio **é** Paraná, bioma
+predominante Mata Atlântica (CLAUDE.md §1). Reversível com esforço pequeno e
+contido se o projeto um dia sair desse recorte (3 passos documentados no comentário
+da migration: coluna nova em `silver.bioma`, popular `bioma_predominante_id` via
+`SDO_RELATE` município×bioma, trocar a constante por JOIN na procedure - nenhum
+deles afeta os outros 6 indicadores nem invalida resultado já publicado, graças ao
+versionamento por hash). IAPP (`V072`, interseção `app_declarada` × `vegetacao_nativa_declarada`,
+mesmo padrão de intersecção-individual-depois-dissolve da V060) e ICV (`V073`, razão
+direta de área) não dependiam dessa peça - implementados junto. **Testado ao vivo**:
+imóvel real deu ICV=20,27%, IAPP=99,71%, IRL=18,93% (abaixo do mínimo de 20% - caso
+real de não conformidade, exatamente o que o indicador deve capturar). Os 7
+indicadores do desafio agora calculam de verdade no circuito de homologação.
+
+### 9.38. Roadmap: rastreamento de status/andamento ainda só existe na Gold, falta em Ingestão e Bronze→Silver
+Construído nesta sessão (§9.36) um padrão de controle de execução pra publicação Gold
+(indicadores + camadas de mapa): tabela de controle com status
+`EM_ANDAMENTO`/`CONCLUIDA`/`FALHOU`, contadores de andamento, tabela de erro por
+registro, endpoint `GET` de status. Motivo: o time vai construir uma tela de
+acompanhamento de processos, e precisa saber o que está rodando e o estado atual sem
+adivinhar.
+
+**Achado que expõe a mesma lacuna em outros 2 lugares**: tanto a execução de
+ingestão (`IngestaoController`/`IngestaoExecucaoService.executar`, dispara fetch +
+grava Bronze) quanto a transição Bronze→Silver (`TransicaoBronzeSilverService.processarLote`,
+chamada automaticamente ao fim de cada ingestão, e manualmente via
+`POST /api/lotes/{id}/reprocessar`, §9.36) são **100% síncronas, sem rastreamento
+nenhum** - a chamada HTTP só retorna quando tudo termina, e nada fica gravado como
+"em andamento" enquanto roda. Confirmado em código (sem `@Async`,
+sem `CompletableFuture`): se o usuário atualizar a tela no meio, o processo **continua
+rodando no backend** (não depende do navegador), mas a tela fica cega até o processo
+terminar sozinho e gravar o resultado final - não tem como saber que algo está
+rodando, só esperar.
+
+**Decisão de abordagem, já validada 2x nesta sessão (indicadores, camadas de mapa)**:
+envolver por fora, nunca mexer na lógica interna que já funciona e já foi testada a
+fundo (ingestão contra as 18 fontes reais, Bronze→Silver com toda a resiliência
+documentada em §5.8/§9.23-25). Concretamente: grava uma linha "EM_ANDAMENTO" antes
+de chamar o método existente, grava o resultado final depois (sucesso ou erro,
+relançando a exceção original pro `TratadorDeErro` continuar convertendo em
+400/502 do jeito que já faz hoje), nunca muda a assinatura nem o corpo do método
+existente, nunca muda a resposta do endpoint HTTP já consumido pela tela atual - o
+status novo é um efeito colateral consultável por um endpoint `GET` separado.
+
+**[EM ABERTO, registrado como roadmap, não implementado ainda]** - decisão da equipe
+de focar primeiro em fechar o que falta na Gold (ver §9.36/§9.37, "endpoint de status
+unificado" em andamento) antes de estender esse padrão pra Ingestão e Bronze→Silver.
+
 ---
 
 ## 10. Git — branches, commits e fluxo de PR — **[DECIDIDO, padrão da equipe LizardsDBA]**

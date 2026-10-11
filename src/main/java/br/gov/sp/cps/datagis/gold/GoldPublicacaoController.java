@@ -56,4 +56,27 @@ public class GoldPublicacaoController {
             @PathVariable long publicacaoId) {
         return ResponseEntity.ok(service.listarErros(publicacaoId));
     }
+
+    /** Status/andamento da última execução de recálculo de indicadores (todos os imóveis). */
+    @GetMapping("/publicacoes-indicadores/status")
+    public ResponseEntity<GoldPublicacaoService.StatusPublicacaoIndicadores> statusPublicacaoIndicadores() {
+        return ResponseEntity.ok(service.obterStatusPublicacaoIndicadores());
+    }
+
+    /** Imóveis que falharam numa execução de recálculo de indicadores (sempre com motivo). */
+    @GetMapping("/publicacoes-indicadores/{publicacaoIndicadoresId}/erros")
+    public ResponseEntity<List<GoldPublicacaoService.ErroPublicacao>> errosPublicacaoIndicadores(
+            @PathVariable long publicacaoIndicadoresId) {
+        return ResponseEntity.ok(service.listarErrosIndicadores(publicacaoIndicadoresId));
+    }
+
+    /**
+     * Status de tudo que é publicação Gold (recálculo de indicadores + as 6 camadas
+     * de mapa) numa consulta só - pensado pra uma futura tela de acompanhamento de
+     * processos (CLAUDE.md §9.38).
+     */
+    @GetMapping("/status")
+    public ResponseEntity<GoldPublicacaoService.StatusGoldConsolidado> statusConsolidado() {
+        return ResponseEntity.ok(service.obterStatusConsolidado());
+    }
 }

@@ -136,25 +136,71 @@ public class GoldPublicacaoService {
         chamarPublicarImovel(codImovel);
     }
 
+    /** Progresso em {@code gold.publicacao_indicadores} é atualizado a cada N imóveis - frequente o
+     *  suficiente pra uma tela de acompanhamento ver andamento real, sem gravar a cada imóvel. */
+    private static final int LOTE_PROGRESSO_INDICADORES = 50;
+
     /**
      * Recalcula todo {@code silver.imovel_rural} e publica todas as camadas de mapa
      * ativas. Pode levar minutos num volume real - pensado pra disparo manual ou
-     * agendado, não pra resposta HTTP instantânea.
+     * agendado, não pra resposta HTTP instantânea. Status/andamento consultável em
+     * {@code gold.publicacao_indicadores} (ver {@link #obterStatusPublicacaoIndicadores()})
+     * - importante pra uma futura tela de acompanhamento de processos.
      */
     public ResultadoPublicacaoTudo publicarTudo() {
         List<String> codigosImovel = jdbcTemplate.queryForList(
                 "SELECT cod_imovel FROM silver.imovel_rural", String.class);
 
+        long publicacaoIndicadoresId = inserirControlePublicacaoIndicadores(codigosImovel.size());
+
         int sucesso = 0;
         List<String> falhas = new ArrayList<>();
-        for (String codImovel : codigosImovel) {
-            try {
-                recalcularImovel(codImovel);
-                sucesso++;
-            } catch (Exception e) {
-                log.warn("publicarTudo: falhou pro imóvel {}: {}", codImovel, e.getMessage());
-                falhas.add(codImovel);
+        try {
+            int processadosDesdeUltimaAtualizacao = 0;
+            for (String codImovel : codigosImovel) {
+                try {
+                    recalcularImovel(codImovel);
+                    sucesso++;
+                } catch (Exception e) {
+                    log.warn("publicarTudo: falhou pro imóvel {}: {}", codImovel, e.getMessage());
+                    falhas.add(codImovel);
+                    jdbcTemplate.update(
+                            """
+                            INSERT INTO gold.publicacao_indicadores_erro
+                                (publicacao_indicadores_id, cod_imovel, motivo)
+                            VALUES (?, ?, ?)
+                            """,
+                            publicacaoIndicadoresId, codImovel, truncar(e.getMessage(), 500));
+                }
+                processadosDesdeUltimaAtualizacao++;
+                if (processadosDesdeUltimaAtualizacao >= LOTE_PROGRESSO_INDICADORES) {
+                    atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucesso, falhas.size());
+                    processadosDesdeUltimaAtualizacao = 0;
+                }
             }
+            if (processadosDesdeUltimaAtualizacao > 0) {
+                atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucesso, falhas.size());
+            }
+
+            jdbcTemplate.update(
+                    """
+                    UPDATE gold.publicacao_indicadores
+                       SET status = 'CONCLUIDA', concluido_em = SYSTIMESTAMP
+                     WHERE id = ?
+                    """,
+                    publicacaoIndicadoresId);
+        } catch (Exception e) {
+            // So chega aqui por falha de infraestrutura (ex.: conexao caiu) - falha
+            // de 1 imovel especifico ja e tratada acima e nao propaga ate aqui.
+            log.warn("publicarTudo: recalculo de indicadores falhou de vez", e);
+            jdbcTemplate.update(
+                    """
+                    UPDATE gold.publicacao_indicadores
+                       SET status = 'FALHOU', mensagem_erro = ?, concluido_em = SYSTIMESTAMP
+                     WHERE id = ?
+                    """,
+                    truncar(e.getMessage(), 4000), publicacaoIndicadoresId);
+            throw new IllegalStateException("Falha no recálculo de indicadores", e);
         }
 
         List<String> camadasPublicadas = new ArrayList<>();
@@ -358,6 +404,91 @@ public class GoldPublicacaoService {
                 "SELECT COUNT(*) FROM " + tabela + " WHERE geometria IS NOT NULL", Long.class);
     }
 
+    private long inserirControlePublicacaoIndicadores(int totalEstimado) {
+        jdbcTemplate.update(
+                "INSERT INTO gold.publicacao_indicadores (status, total_estimado) VALUES ('EM_ANDAMENTO', ?)",
+                totalEstimado);
+        return jdbcTemplate.queryForObject(
+                "SELECT MAX(id) FROM gold.publicacao_indicadores", Long.class);
+    }
+
+    private void atualizarProgressoIndicadores(long publicacaoIndicadoresId, int processados, int sucessoAcumulado, int falhaAcumulada) {
+        jdbcTemplate.update(
+                """
+                UPDATE gold.publicacao_indicadores
+                   SET total_processado = total_processado + ?,
+                       total_sucesso = ?,
+                       total_falha = ?
+                 WHERE id = ?
+                """,
+                processados, sucessoAcumulado, falhaAcumulada, publicacaoIndicadoresId);
+    }
+
+    /** "NUNCA_EXECUTADO" quando o recálculo nunca rodou ainda - nunca 404/500, sempre uma resposta consultável. */
+    public StatusPublicacaoIndicadores obterStatusPublicacaoIndicadores() {
+        List<StatusPublicacaoIndicadores> linhas = jdbcTemplate.query(
+                """
+                SELECT id, status, total_estimado, total_processado, total_sucesso, total_falha,
+                       mensagem_erro, iniciado_em, concluido_em
+                  FROM gold.publicacao_indicadores
+                 ORDER BY id DESC
+                 FETCH FIRST 1 ROW ONLY
+                """,
+                (rs, rowNum) -> {
+                    Number totalEstimado = (Number) rs.getObject("total_estimado");
+                    java.sql.Timestamp iniciadoEm = rs.getTimestamp("iniciado_em");
+                    java.sql.Timestamp concluidoEm = rs.getTimestamp("concluido_em");
+                    return new StatusPublicacaoIndicadores(
+                            rs.getLong("id"),
+                            rs.getString("status"),
+                            totalEstimado == null ? null : totalEstimado.longValue(),
+                            rs.getLong("total_processado"),
+                            rs.getLong("total_sucesso"),
+                            rs.getLong("total_falha"),
+                            rs.getString("mensagem_erro"),
+                            iniciadoEm == null ? null : iniciadoEm.toLocalDateTime(),
+                            concluidoEm == null ? null : concluidoEm.toLocalDateTime());
+                });
+        return linhas.isEmpty()
+                ? new StatusPublicacaoIndicadores(0, "NUNCA_EXECUTADO", null, 0, 0, 0, null, null, null)
+                : linhas.get(0);
+    }
+
+    /**
+     * Status consolidado de TUDO que é publicação Gold (indicadores + as 6 camadas
+     * de mapa) numa consulta só - pensado pra uma futura tela de acompanhamento de
+     * processos não precisar fazer 7 chamadas separadas (CLAUDE.md §9.38).
+     */
+    public StatusGoldConsolidado obterStatusConsolidado() {
+        StatusPublicacaoIndicadores indicadores = obterStatusPublicacaoIndicadores();
+        List<StatusPublicacaoCamada> camadas = CODIGOS_MAPA_CAMADA.stream()
+                .map(this::obterStatusPublicacao)
+                .toList();
+        boolean algumEmAndamento = "EM_ANDAMENTO".equals(indicadores.status())
+                || camadas.stream().anyMatch(c -> "EM_ANDAMENTO".equals(c.status()));
+        return new StatusGoldConsolidado(algumEmAndamento, indicadores, camadas);
+    }
+
+    /** Todo imóvel que falhou numa execução de recálculo - sempre com motivo. */
+    public List<ErroPublicacao> listarErrosIndicadores(long publicacaoIndicadoresId) {
+        return jdbcTemplate.query(
+                """
+                SELECT cod_imovel, motivo, data_add
+                  FROM gold.publicacao_indicadores_erro
+                 WHERE publicacao_indicadores_id = ?
+                 ORDER BY id
+                """,
+                (rs, rowNum) -> {
+                    java.sql.Timestamp dataAdd = rs.getTimestamp("data_add");
+                    return new ErroPublicacao(
+                            null,
+                            rs.getString("cod_imovel"),
+                            rs.getString("motivo"),
+                            dataAdd == null ? null : dataAdd.toLocalDateTime());
+                },
+                publicacaoIndicadoresId);
+    }
+
     private long inserirControlePublicacao(Long mapaCamadaId, long versaoPublicacao, Long totalEstimado) {
         jdbcTemplate.update(
                 """
@@ -395,9 +526,9 @@ public class GoldPublicacaoService {
             Long loteIngestaoId
     ) {}
 
-    /** Última execução de publicação (qualquer status) de 1 camada - status + andamento. */
+    /** "NUNCA_EXECUTADO" quando a camada nunca foi publicada ainda - nunca 404/500, sempre uma resposta consultável. */
     public StatusPublicacaoCamada obterStatusPublicacao(String codigoCamada) {
-        return jdbcTemplate.queryForObject(
+        List<StatusPublicacaoCamada> linhas = jdbcTemplate.query(
                 """
                 SELECT p.id, p.versao_publicacao, p.status, p.total_estimado, p.total_processado,
                        p.total_publicado, p.total_pulado, p.mensagem_erro, p.iniciado_em, p.concluido_em
@@ -425,6 +556,11 @@ public class GoldPublicacaoService {
                             concluidoEm == null ? null : concluidoEm.toLocalDateTime());
                 },
                 codigoCamada);
+        return linhas.isEmpty() ? statusCamadaNuncaExecutado(codigoCamada) : linhas.get(0);
+    }
+
+    private static StatusPublicacaoCamada statusCamadaNuncaExecutado(String codigoCamada) {
+        return new StatusPublicacaoCamada(0, codigoCamada, 0, "NUNCA_EXECUTADO", null, 0, 0, 0, null, null, null);
     }
 
     /** Todo registro pulado/falhado numa execução de publicação - sempre com motivo (ver V067). */
@@ -507,5 +643,24 @@ public class GoldPublicacaoService {
             String identificador,
             String motivo,
             LocalDateTime dataAdd
+    ) {}
+
+    public record StatusPublicacaoIndicadores(
+            long publicacaoId,
+            String status,
+            Long totalEstimado,
+            long totalProcessado,
+            long totalSucesso,
+            long totalFalha,
+            String mensagemErro,
+            LocalDateTime iniciadoEm,
+            LocalDateTime concluidoEm
+    ) {}
+
+    /** Visão consolidada de tudo que é publicação Gold - ver {@link #obterStatusConsolidado()}. */
+    public record StatusGoldConsolidado(
+            boolean algumEmAndamento,
+            StatusPublicacaoIndicadores indicadores,
+            List<StatusPublicacaoCamada> camadasMapa
     ) {}
 }

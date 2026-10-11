@@ -14,10 +14,18 @@
 `V050`/`V051` (correções de quarentena achadas testando contra dado real), `V059`/`V060`
 (achado testando contra dado real em escala: ISAP/IAE zeravam mesmo com sobreposição
 real, geometria "inválida" quebrava o dissolver — corrigido). **4 dos 7 indicadores
-calculam de verdade e corretamente** (ISAP, IAE, IDesmat, IFC — IDesmat/IFC só não têm
-dado hoje, não é bug de código). ICV/IRL/IAPP seguem stub — mas **a razão original
-("sem fonte") ficou obsoleta em 2026-10-07**, ver §2 e §9 (roadmap atualizado
-2026-10-10).]
+calculam de verdade, com dado real, no circuito de homologação completo** (ISAP, IAE,
+IDesmat, IFC — `CLAUDE.md` §9.36, 2026-10-11): `V063`/`V064` corrigiram um sanity clamp
+que faltava (geometria de imóvel corrompida fazia `SDO_GEOM` devolver área absurda sem
+erro); `V061` resolveu a ingestão de PRODES/Focos de Calor (§9.2 abaixo, era bloqueio
+de transação sem chunking, não de armazenamento) filtrando pelo circuito; a publicação
+completa contra os 4.611 imóveis roda 100%, 0 falha. **A publicação de camada de mapa
+(bloco 2) migrou de `SDO_UTIL.SIMPLIFY` (PL/SQL) pra Java/JTS** (`LIZARDS-50`,
+`CLAUDE.md` §9.36) — geometria complexa estourava PGA mesmo isolada, resolvido
+movendo o cálculo pra fora do Oracle, não contornando. ICV/IRL/IAPP seguem stub — a
+fonte já existe e está ingerida (confirmado de novo 2026-10-11), mas a análise achou
+uma peça faltando pro IRL especificamente: `silver.bioma` não tem percentual mínimo
+de RL armazenado, ver `CLAUDE.md` §9.37 e §9.1 abaixo.]
 
 ---
 
@@ -344,7 +352,7 @@ indicador fica calculável agora"):
 
 | Indicador | Fórmula | Precisa de interseção espacial? |
 |---|---|---|
-| **IRL** | `SUM(area_ha)` de `silver.reserva_legal` WHERE `cod_imovel` ÷ área do imóvel, comparado ao mínimo exigido pelo bioma (Mata Atlântica = 20%, `silver.bioma`/`silver.municipio.bioma_predominante_id`) | **Não** — soma de atributo direto |
+| **IRL** | `SUM(area_ha)` de `silver.reserva_legal` WHERE `cod_imovel` ÷ área do imóvel, comparado ao mínimo exigido pelo bioma (Mata Atlântica = 20%, `silver.bioma`/`silver.municipio.bioma_predominante_id`) — **[GAP achado 2026-10-11, `CLAUDE.md` §9.37]** `silver.bioma` não tem coluna de percentual mínimo e `bioma_predominante_id` está NULL em todos os 399 municípios; esse vínculo nunca foi populado. Decidir entre popular de verdade ou fixar 20% como constante (defensável — recorte é Paraná, bioma predominante Mata Atlântica) antes de implementar | **Não** — soma de atributo direto |
 | **ICV** | `SUM(area_ha)` de `silver.vegetacao_nativa_declarada` WHERE `cod_imovel` ÷ área do imóvel | **Não** — idem |
 | **IAPP** | `SDO_INTERSECTION` entre `app_declarada` e `vegetacao_nativa_declarada` do mesmo imóvel (a "APP com vegetação nativa") ÷ `SUM(area_ha)` de `app_declarada` do imóvel | **Sim** — única das 3 que precisa de geometria |
 
@@ -378,7 +386,14 @@ primeiro de cada.
    (o volume foi resetado trocando pro Oracle Enterprise Edition) e validar contra
    imóvel real antes de considerar fechado.
 
-### 9.2. PRODES e Focos de Calor — ingestão sem travar (IDesmat/IFC com dado real)
+### 9.2. PRODES e Focos de Calor — ingestão sem travar (IDesmat/IFC com dado real) — **[RESOLVIDO, 2026-10-11, `V061`]**
+A "saída rápida" recomendada abaixo foi a escolhida: PRODES e Focos de Calor (e as
+demais fontes filtráveis por URL) foram filtradas pelo circuito dos 3 municípios
+(`V061`), mesmo princípio já usado no CAR. PRODES caiu de 38.296 para 1.432
+registros e passou a ingerir em minutos, sem travar. IDesmat e IFC já calculam com
+dado real (`CLAUDE.md` §9.36) — 1.670 e 10 imóveis com valor > 0 respectivamente,
+no circuito completo. A saída estrutural (Spring Batch de verdade) continua como
+débito técnico registrado, não bloqueia mais nada.
 
 **Por que não é bloqueio de armazenamento:** a troca pro Oracle Enterprise Edition
 (§ "liberar o Oracle sem o limite de 12GB") resolve espaço, não resolve isso. O que
@@ -430,13 +445,15 @@ verdade pra produção em escala estadual.
 
 ### 9.4. Ordem recomendada
 
-1. **§9.1 (IRL/IAPP/ICV)** — maior ganho, menor esforço, zero bloqueio. Fazer primeiro.
-2. **§9.2, saída rápida (escopo reduzido pra PRODES/Focos de Calor)** — desbloqueia
-   IDesmat/IFC com dado real sem exigir a reescrita do Spring Batch.
+1. **§9.1 (IRL/IAPP/ICV)** — maior ganho, menor esforço, zero bloqueio técnico; falta
+   só decidir a peça do percentual mínimo de RL (ver gap em §9.1) antes de implementar.
+2. ~~§9.2, saída rápida~~ — **feito** (`V061`, 2026-10-11).
 3. **§9.2, saída estrutural (Spring Batch de verdade)** — fica como débito técnico
    registrado, não bloqueia os 7 indicadores funcionarem no circuito.
 4. **§9.3 (performance em escala)** — só relevante se/quando o projeto decidir ir além
    do circuito de homologação.
 
-Com 1 e 2 feitos, os 7 indicadores calculam de verdade no circuito de homologação —
-que já é o escopo que o próprio desafio autoriza explicitamente (CLAUDE.md §5.2).
+Com 2 feito e 4/7 indicadores calculando com dado real no circuito (ISAP, IAE,
+IDesmat, IFC — `CLAUDE.md` §9.36), só falta o item 1 (IRL/IAPP/ICV) pros 7
+indicadores funcionarem de ponta a ponta no circuito de homologação — que já é o
+escopo que o próprio desafio autoriza explicitamente (CLAUDE.md §5.2).
