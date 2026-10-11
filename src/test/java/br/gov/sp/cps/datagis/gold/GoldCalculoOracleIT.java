@@ -14,7 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Oracle local real — primeiro teste das procedures PL/SQL Silver->Gold
+ * Oracle local real — testa as 7 procedures PL/SQL Silver->Gold
  * (docs/gold-procedures-calculo-publicacao.md). Sem mock pra PL/SQL (§3.4 do doc) -
  * popula um imóvel + restrições sintéticas com geometria conhecida (retângulos,
  * sobreposição exata e previsível), roda a transição real via
@@ -26,6 +26,12 @@ import org.springframework.transaction.annotation.Transactional;
  * Área protegida sintética cobre a metade OESTE (ISAP esperado ~50%). Embargo cobre o
  * quarto LESTE (IAE esperado ~25%). Desmatamento cobre o imóvel inteiro (IDesmat
  * esperado ~100%). 2 focos de calor: 1 dentro, 1 bem fora (IFC = 1 / area_ha * 1000).
+ * Reserva Legal cobre o quarto NORTE (IRL esperado ~25% - LIZARDS-32, V072). APP
+ * declarada cobre a metade SUL, vegetação nativa declarada cobre a metade OESTE - a
+ * interseção dos dois é o quarto SUDOESTE, metade da área da APP (IAPP esperado ~50%
+ * - única dos 3 novos que precisa de interseção espacial). Vegetação nativa também
+ * alimenta o ICV (razão direta de área, mesma metade OESTE, ICV esperado ~50% -
+ * LIZARDS-31, V073).
  */
 @SpringBootTest(properties = {
         "spring.flyway.enabled=false",
@@ -42,6 +48,9 @@ class GoldCalculoOracleIT {
     private static final String WKT_AREA_PROTEGIDA_OESTE = "POLYGON((-51.00 -24.00, -50.995 -24.00, -50.995 -23.99, -51.00 -23.99, -51.00 -24.00))";
     private static final String WKT_EMBARGO_LESTE = "POLYGON((-50.9925 -24.00, -50.99 -24.00, -50.99 -23.99, -50.9925 -23.99, -50.9925 -24.00))";
     private static final String WKT_DESMATAMENTO_TOTAL = "POLYGON((-51.001 -24.001, -50.989 -24.001, -50.989 -23.989, -51.001 -23.989, -51.001 -24.001))";
+    private static final String WKT_RESERVA_LEGAL_NORTE = "POLYGON((-51.00 -23.9925, -50.99 -23.9925, -50.99 -23.99, -51.00 -23.99, -51.00 -23.9925))";
+    private static final String WKT_APP_DECLARADA_SUL = "POLYGON((-51.00 -24.00, -50.99 -24.00, -50.99 -23.995, -51.00 -23.995, -51.00 -24.00))";
+    private static final String WKT_VEGETACAO_NATIVA_OESTE = "POLYGON((-51.00 -24.00, -50.995 -24.00, -50.995 -23.99, -51.00 -23.99, -51.00 -24.00))";
 
     @Autowired private GoldPublicacaoService service;
     @Autowired private JdbcTemplate jdbc;
@@ -86,10 +95,30 @@ class GoldCalculoOracleIT {
                     (identificador_origem, geometria, atributos_origem, fonte_dado_id, lote_ingestao_id, registro_bruto_id)
                 VALUES (?, SDO_GEOMETRY('POINT(-49.000 -22.000)', 4674), '{}', 1, 1, 1)
                 """, COD_IMOVEL + "-FOCO-FORA");
+
+        // LIZARDS-32 (V072)/LIZARDS-31 (V073) - area_ha calculada via SDO_GEOM.SDO_AREA
+        // (não um valor arbitrário) pra bater com o que o cálculo real vai medir.
+        jdbc.update("""
+                INSERT INTO silver.reserva_legal
+                    (identificador_origem, cod_imovel, area_ha, geometria, fonte_dado_id, lote_ingestao_id, registro_bruto_id)
+                VALUES (?, ?, SDO_GEOM.SDO_AREA(SDO_GEOMETRY(?, 4674), 0.05, 'unit=Hectare'), SDO_GEOMETRY(?, 4674), 1, 1, 1)
+                """, COD_IMOVEL + "-RL", COD_IMOVEL, WKT_RESERVA_LEGAL_NORTE, WKT_RESERVA_LEGAL_NORTE);
+
+        jdbc.update("""
+                INSERT INTO silver.app_declarada
+                    (identificador_origem, cod_imovel, area_ha, geometria, fonte_dado_id, lote_ingestao_id, registro_bruto_id)
+                VALUES (?, ?, SDO_GEOM.SDO_AREA(SDO_GEOMETRY(?, 4674), 0.05, 'unit=Hectare'), SDO_GEOMETRY(?, 4674), 1, 1, 1)
+                """, COD_IMOVEL + "-APP", COD_IMOVEL, WKT_APP_DECLARADA_SUL, WKT_APP_DECLARADA_SUL);
+
+        jdbc.update("""
+                INSERT INTO silver.vegetacao_nativa_declarada
+                    (identificador_origem, cod_imovel, area_ha, geometria, fonte_dado_id, lote_ingestao_id, registro_bruto_id)
+                VALUES (?, ?, SDO_GEOM.SDO_AREA(SDO_GEOMETRY(?, 4674), 0.05, 'unit=Hectare'), SDO_GEOMETRY(?, 4674), 1, 1, 1)
+                """, COD_IMOVEL + "-VEG", COD_IMOVEL, WKT_VEGETACAO_NATIVA_OESTE, WKT_VEGETACAO_NATIVA_OESTE);
     }
 
     @Test
-    void calculaOsQuatroIndicadoresReaisEPublicaOImovel() {
+    void calculaOsSeteIndicadoresEPublicaOImovel() {
         service.recalcularImovel(COD_IMOVEL);
 
         Map<String, Map<String, Object>> resultados = jdbc.queryForList("""
@@ -101,7 +130,7 @@ class GoldCalculoOracleIT {
                 """, COD_IMOVEL).stream()
                 .collect(java.util.stream.Collectors.toMap(m -> (String) m.get("CODIGO"), m -> m));
 
-        assertThat(resultados).containsKeys("ISAP", "IAE", "IDESMAT", "IFC");
+        assertThat(resultados).containsKeys("ISAP", "IAE", "IDESMAT", "IFC", "IRL", "IAPP", "ICV");
         assertThat(((Number) resultados.get("ISAP").get("PERCENTUAL_SOBREPOSICAO")).doubleValue())
                 .isCloseTo(50.0, within(3.0));
         assertThat(((Number) resultados.get("IAE").get("PERCENTUAL_SOBREPOSICAO")).doubleValue())
@@ -114,16 +143,26 @@ class GoldCalculoOracleIT {
         double ifcEsperado = 1.0 / areaHa.doubleValue() * 1000;
         assertThat(((Number) resultados.get("IFC").get("VALOR")).doubleValue())
                 .isCloseTo(ifcEsperado, within(0.5));
+        // IRL = reserva_legal (quarto NORTE) / area do imovel
+        assertThat(((Number) resultados.get("IRL").get("PERCENTUAL_SOBREPOSICAO")).doubleValue())
+                .isCloseTo(25.0, within(3.0));
+        // ICV = vegetacao_nativa_declarada (metade OESTE) / area do imovel
+        assertThat(((Number) resultados.get("ICV").get("PERCENTUAL_SOBREPOSICAO")).doubleValue())
+                .isCloseTo(50.0, within(3.0));
+        // IAPP = (APP sul ∩ vegetacao oeste = quarto sudoeste) / area da APP (metade sul)
+        // = (1/4) / (1/2) = 50%
+        assertThat(((Number) resultados.get("IAPP").get("PERCENTUAL_SOBREPOSICAO")).doubleValue())
+                .isCloseTo(50.0, within(5.0));
 
-        // Bloco 3: imovel_publicado com os 4 valores denormalizados + stub (ICV/IRL/IAPP) NULL
+        // Bloco 3: imovel_publicado com os 7 valores denormalizados, todos reais agora
         Map<String, Object> publicado = jdbc.queryForMap("""
                 SELECT valor_isap, valor_iae, valor_idesmat, valor_ifc, valor_icv, valor_irl, valor_iapp
                   FROM gold.imovel_publicado WHERE cod_imovel = ?
                 """, COD_IMOVEL);
         assertThat(((Number) publicado.get("VALOR_ISAP")).doubleValue()).isCloseTo(50.0, within(3.0));
-        assertThat(publicado.get("VALOR_ICV")).isNull();
-        assertThat(publicado.get("VALOR_IRL")).isNull();
-        assertThat(publicado.get("VALOR_IAPP")).isNull();
+        assertThat(((Number) publicado.get("VALOR_ICV")).doubleValue()).isCloseTo(50.0, within(3.0));
+        assertThat(((Number) publicado.get("VALOR_IRL")).doubleValue()).isCloseTo(25.0, within(3.0));
+        assertThat(((Number) publicado.get("VALOR_IAPP")).doubleValue()).isCloseTo(50.0, within(5.0));
 
         // Bloco 3b: sobreposicao_publicada com o detalhe de ISAP/IAE/IDesmat (nao IFC, nao e area)
         List<String> tiposRestricao = jdbc.queryForList("""
