@@ -48,6 +48,7 @@ public class PersistidorSilverService {
 
     private final JdbcTemplate jdbcTemplate;
     private final String silverSchema;
+    private final String controleSchema;
     private final ObjectMapper objectMapper;
 
     /**
@@ -70,18 +71,29 @@ public class PersistidorSilverService {
      */
     private final ConcurrentHashMap<Long, Long> categoriaParaTipoCache = new ConcurrentHashMap<>();
 
+    /**
+     * Cache de fonte_dado_id -> fonte_dado.orgao (controle.fonte_dado), usado como
+     * fallback de orgao_id em area_protegida quando o texto declarado pela fonte não
+     * resolve em nenhum código conhecido (ex.: secretaria estadual/municipal sem
+     * entrada em silver.orgao). Evita o antigo fallback fixo "ICMBIO" pra qualquer
+     * fonte (mislabeava silenciosamente FUNAI, MMA, SFB como se fossem ICMBio).
+     */
+    private final ConcurrentHashMap<Long, String> fonteOrgaoCache = new ConcurrentHashMap<>();
+
     @Autowired
     public PersistidorSilverService(
             JdbcTemplate jdbcTemplate,
             @Value("${spring.flyway.placeholders.silverSchema:SILVER}") String silverSchema,
+            @Value("${spring.flyway.placeholders.controleSchema:CONTROLE}") String controleSchema,
             ObjectMapper objectMapper) {
         this.jdbcTemplate = jdbcTemplate;
         this.silverSchema = (silverSchema != null && !silverSchema.isBlank()) ? silverSchema.trim() : "SILVER";
+        this.controleSchema = (controleSchema != null && !controleSchema.isBlank()) ? controleSchema.trim() : "CONTROLE";
         this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
     }
 
     public PersistidorSilverService(JdbcTemplate jdbcTemplate) {
-        this(jdbcTemplate, "SILVER", new ObjectMapper());
+        this(jdbcTemplate, "SILVER", "CONTROLE", new ObjectMapper());
     }
 
     /**
@@ -116,16 +128,31 @@ public class PersistidorSilverService {
             return inseridos;
         }
 
+        int pulados = 0;
         Connection con = DataSourceUtils.getConnection(ds);
         try (PreparedStatement ps = con.prepareStatement(sql)) {
             for (RegistroAprovadoSilver apr : aprovados) {
-                Object[] params = extrairParametrosMerge(ent, apr);
-                vincularParametrosEExecutar(ps, params);
-                inseridos++;
+                try {
+                    Object[] params = extrairParametrosMerge(ent, apr);
+                    vincularParametrosEExecutar(ps, params);
+                    inseridos++;
+                } catch (Exception linhaEx) {
+                    // Resiliencia de linha: uma geometria que o JTS considera valida mas o
+                    // Oracle Spatial rejeita (ORA-13198, achado ao vivo liberando o lote de
+                    // desmatamento do PRODES apos o reparo via buffer(0) - ver
+                    // ValidadorGeometria.tentarReparar) nao pode derrubar o lote inteiro.
+                    // Mesmo principio ja usado na ingestao (CLAUDE.md §5.8 item 2) e na
+                    // publicacao de camadas da Gold: pula e loga a linha ruim, segue com as
+                    // demais.
+                    pulados++;
+                    Long regId = apr.registroBruto() != null ? apr.registroBruto().getId() : null;
+                    log.warn("Pulando registro (registro_bruto_id={}) na persistência Silver ({}.{}): {}",
+                            regId, silverSchema, ent, linhaEx.getMessage());
+                }
 
-                if (inseridos % 1000 == 0 || inseridos == aprovados.size()) {
-                    log.info("Progresso de persistência Silver ({}.{}): {}/{} registros concluídos...",
-                            silverSchema, ent, inseridos, aprovados.size());
+                if ((inseridos + pulados) % 1000 == 0 || (inseridos + pulados) == aprovados.size()) {
+                    log.info("Progresso de persistência Silver ({}.{}): {}/{} registros concluídos ({} pulado(s))...",
+                            silverSchema, ent, inseridos + pulados, aprovados.size(), pulados);
                 }
             }
         } catch (Exception e) {
@@ -135,7 +162,11 @@ public class PersistidorSilverService {
             DataSourceUtils.releaseConnection(con, ds);
         }
 
-        log.info("Persistidos com sucesso {} registros na camada Silver ({}.{})", inseridos, silverSchema, ent);
+        if (pulados > 0) {
+            log.warn("Persistidos {} e pulados {} registros na camada Silver ({}.{})", inseridos, pulados, silverSchema, ent);
+        } else {
+            log.info("Persistidos com sucesso {} registros na camada Silver ({}.{})", inseridos, silverSchema, ent);
+        }
         return inseridos;
     }
 
@@ -171,6 +202,10 @@ public class PersistidorSilverService {
         executarMerge(obterSqlMerge("foco_calor"), extrairParametrosFocoCalor(apr));
     }
 
+    public void persistirBioma(RegistroAprovadoSilver apr) {
+        executarMerge(obterSqlMerge("bioma"), extrairParametrosBioma(apr));
+    }
+
     public void persistirGenerico(String entidade, RegistroAprovadoSilver apr) {
         log.warn("Entidade Silver '{}' não possui persistidor canônico especializado, delegando para imovel_rural.", entidade);
         persistirImovelRural(apr);
@@ -189,7 +224,16 @@ public class PersistidorSilverService {
             case "embargo_ambiental" -> extrairParametrosEmbargoAmbiental(apr);
             case "desmatamento" -> extrairParametrosDesmatamento(apr);
             case "foco_calor" -> extrairParametrosFocoCalor(apr);
-            default -> extrairParametrosImovelRural(apr);
+            case "bioma" -> extrairParametrosBioma(apr);
+            case "reserva_legal", "app_declarada", "vegetacao_nativa_declarada" ->
+                    extrairParametrosAtributoCarPorPoligono(entidade, apr);
+            default -> throw new IllegalStateException(
+                    "Entidade Silver \"" + entidade + "\" não possui persistidor especializado — "
+                            + "configure fonte_dado.entidade_silver com um valor reconhecido "
+                            + "(imovel_rural, municipio, area_protegida, auto_infracao, "
+                            + "embargo_ambiental, desmatamento, foco_calor, bioma, reserva_legal, "
+                            + "app_declarada, vegetacao_nativa_declarada) em vez de "
+                            + "deixar cair silenciosamente em imovel_rural.");
         };
     }
 
@@ -281,8 +325,12 @@ public class PersistidorSilverService {
         RegistroBruto reg = apr.registroBruto();
 
         String codigoOrigem = extrairString(attrs, "codigo_origem", "cnuc", "terrai_cod", "id");
+        if (codigoOrigem == null && reg != null) {
+            codigoOrigem = "REG-" + reg.getId();
+        }
         String nome = extrairString(attrs, "nome", "nm_uc", "terrai_nom");
-        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "ICMBIO");
+        String orgaoPadraoFonte = resolverOrgaoPadraoFonte(reg != null ? reg.getFonteDadoId() : null);
+        Long orgaoId = resolverIdOrgao(attrs.get("orgao_declarado"), orgaoPadraoFonte);
         Long categoriaAreaId = resolverIdReferencia("categoria_area_protegida", attrs.get("categoria_area_protegida"));
         Long tipoAreaId = null;
         if (categoriaAreaId != null) {
@@ -442,6 +490,50 @@ public class PersistidorSilverService {
         };
     }
 
+    /**
+     * Comum às 3 tabelas de fato do CAR achadas em 2026-10-07 (reserva_legal,
+     * app_declarada, vegetacao_nativa_declarada) - mesmo schema de origem (serviço
+     * ArcGIS único, 00_PUBLICACOES/Base_Geo_Cadastro_Ambiental_rural), só a tabela
+     * destino muda. fonteIdPadrao é só o fallback de teste unitário (RegistroBruto sem
+     * fonteDadoId); em produção o real vem de reg.getFonteDadoId() (fontes 4/5/6,
+     * ver V003 e V053).
+     */
+    private Object[] extrairParametrosAtributoCarPorPoligono(String entidade, RegistroAprovadoSilver apr) {
+        Map<String, Object> attrs = apr.atributosTransformados();
+        RegistroBruto reg = apr.registroBruto();
+
+        long fonteIdPadrao = switch (entidade) {
+            case "app_declarada" -> 4L;
+            case "reserva_legal" -> 5L;
+            default -> 6L; // vegetacao_nativa_declarada
+        };
+        Long fonteId = reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : fonteIdPadrao;
+        String identificadorOrigem = extrairString(attrs, "identificador_origem", "objectid", "id");
+        if (identificadorOrigem == null && reg != null) {
+            identificadorOrigem = entidade.toUpperCase(Locale.ROOT) + "-" + reg.getId();
+        }
+        String codImovel = extrairString(attrs, "cod_imovel");
+        BigDecimal areaHa = extrairBigDecimal(attrs, "area_ha", "num_area");
+        String situacaoBruto = extrairString(attrs, "situacao_bruto", "ind_status");
+        String condicaoBruto = extrairString(attrs, "condicao_bruto", "des_condic");
+        String geomWkt = apr.geometriaWkt();
+        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
+
+        return new Object[] {
+            fonteId,
+            identificadorOrigem,
+            codImovel,
+            areaHa,
+            situacaoBruto,
+            condicaoBruto,
+            geomWkt,
+            atributosOrigem,
+            reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
+            reg != null && reg.getId() != null ? reg.getId() : 1L,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
     private Object[] extrairParametrosFocoCalor(RegistroAprovadoSilver apr) {
         Map<String, Object> attrs = apr.atributosTransformados();
         RegistroBruto reg = apr.registroBruto();
@@ -482,6 +574,41 @@ public class PersistidorSilverService {
         };
     }
 
+    /**
+     * Bioma é tabela de referência pura (6 linhas semeadas na V011, uma por bioma
+     * oficial do IBGE) — esta ingestão nunca cria linha nova, só enriquece as 6 já
+     * existentes com geometria + linhagem. Por isso a chave do MERGE é o {@code id}
+     * já existente (resolvido por nome via {@link #resolverIdReferencia}), não um
+     * texto solto vindo da fonte — evita que uma variação ortográfica do nome do
+     * bioma na origem crie uma 7ª linha espúria.
+     */
+    private Object[] extrairParametrosBioma(RegistroAprovadoSilver apr) {
+        Map<String, Object> attrs = apr.atributosTransformados();
+        RegistroBruto reg = apr.registroBruto();
+
+        String codigo = extrairString(attrs, "codigo", "nome", "nm_bioma");
+        Long biomaId = resolverIdReferencia("bioma", codigo);
+        if (biomaId == null) {
+            throw new IllegalStateException(
+                    "Registro não corresponde a nenhum dos biomas já cadastrados em silver.bioma: \""
+                            + codigo + "\" (registro_bruto_id="
+                            + (reg != null ? reg.getId() : null) + ")");
+        }
+
+        String geomWkt = apr.geometriaWkt();
+        String atributosOrigem = extrairPayloadOuJson(reg, attrs);
+
+        return new Object[] {
+            biomaId,
+            geomWkt,
+            atributosOrigem,
+            reg != null ? reg.getFonteDadoId() : null,
+            reg != null ? reg.getLoteIngestaoId() : null,
+            reg != null ? reg.getId() : null,
+            reg != null ? reg.getHashRegistro() : null
+        };
+    }
+
     // -------------------------------------------------------------------------
     // Comandos SQL MERGE por Entidade
     // -------------------------------------------------------------------------
@@ -495,7 +622,17 @@ public class PersistidorSilverService {
             case "embargo_ambiental" -> obterSqlEmbargoAmbiental();
             case "desmatamento" -> obterSqlDesmatamento();
             case "foco_calor" -> obterSqlFocoCalor();
-            default -> obterSqlImovelRural();
+            case "bioma" -> obterSqlBioma();
+            case "reserva_legal" -> obterSqlReservaLegal();
+            case "app_declarada" -> obterSqlAppDeclarada();
+            case "vegetacao_nativa_declarada" -> obterSqlVegetacaoNativaDeclarada();
+            default -> throw new IllegalStateException(
+                    "Entidade Silver \"" + entidade + "\" não possui comando MERGE especializado — "
+                            + "configure fonte_dado.entidade_silver com um valor reconhecido "
+                            + "(imovel_rural, municipio, area_protegida, auto_infracao, "
+                            + "embargo_ambiental, desmatamento, foco_calor, bioma, reserva_legal, "
+                            + "app_declarada, vegetacao_nativa_declarada) em vez de "
+                            + "deixar cair silenciosamente em imovel_rural.");
         };
     }
 
@@ -920,6 +1057,82 @@ public class PersistidorSilverService {
             """.formatted(silverSchema);
     }
 
+    private String obterSqlReservaLegal() {
+        return obterSqlAtributoCarPorPoligono("reserva_legal");
+    }
+
+    private String obterSqlAppDeclarada() {
+        return obterSqlAtributoCarPorPoligono("app_declarada");
+    }
+
+    private String obterSqlVegetacaoNativaDeclarada() {
+        return obterSqlAtributoCarPorPoligono("vegetacao_nativa_declarada");
+    }
+
+    /**
+     * As 3 tabelas de fato do CAR achadas em 2026-10-07 (reserva_legal, app_declarada,
+     * vegetacao_nativa_declarada - docs/tutorial-acesso-fontes-pendentes.md §0-bis) tem
+     * schema idêntico (mesmo serviço ArcGIS, mesmos campos cod_imovel/num_area/
+     * ind_status/des_condic) - mesmo MERGE parametrizado só pelo nome da tabela, em vez
+     * de 3 métodos quase idênticos copiados e colados.
+     */
+    private String obterSqlAtributoCarPorPoligono(String tabela) {
+        return """
+            MERGE INTO %s.%s t
+            USING (
+                SELECT
+                    s.fonte_dado_id,
+                    s.identificador_origem,
+                    s.cod_imovel,
+                    s.area_ha,
+                    s.situacao_bruto,
+                    s.condicao_bruto,
+                    CASE WHEN s.wkt IS NOT NULL THEN SDO_GEOMETRY(s.wkt, 4674) ELSE NULL END AS geometria,
+                    s.atributos_origem,
+                    s.lote_ingestao_id,
+                    s.registro_bruto_id,
+                    s.hash_origem
+                FROM (
+                    SELECT
+                        ? AS fonte_dado_id,
+                        ? AS identificador_origem,
+                        ? AS cod_imovel,
+                        ? AS area_ha,
+                        ? AS situacao_bruto,
+                        ? AS condicao_bruto,
+                        TO_CLOB(?) AS wkt,
+                        TO_CLOB(?) AS atributos_origem,
+                        ? AS lote_ingestao_id,
+                        ? AS registro_bruto_id,
+                        ? AS hash_origem
+                    FROM dual
+                ) s
+            ) s ON (t.fonte_dado_id = s.fonte_dado_id AND t.identificador_origem = s.identificador_origem)
+            WHEN MATCHED THEN
+                UPDATE SET
+                    t.cod_imovel         = s.cod_imovel,
+                    t.area_ha            = s.area_ha,
+                    t.situacao_bruto     = s.situacao_bruto,
+                    t.condicao_bruto     = s.condicao_bruto,
+                    t.geometria          = COALESCE(s.geometria, t.geometria),
+                    t.atributos_origem   = s.atributos_origem,
+                    t.lote_ingestao_id   = s.lote_ingestao_id,
+                    t.registro_bruto_id  = s.registro_bruto_id,
+                    t.data_processamento = SYSTIMESTAMP,
+                    t.hash_origem        = s.hash_origem
+            WHEN NOT MATCHED THEN
+                INSERT (
+                    fonte_dado_id, identificador_origem, cod_imovel, area_ha,
+                    situacao_bruto, condicao_bruto, geometria, atributos_origem,
+                    lote_ingestao_id, registro_bruto_id, data_processamento, hash_origem
+                ) VALUES (
+                    s.fonte_dado_id, s.identificador_origem, s.cod_imovel, s.area_ha,
+                    s.situacao_bruto, s.condicao_bruto, s.geometria, s.atributos_origem,
+                    s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
+                )
+            """.formatted(silverSchema, tabela);
+    }
+
     private String obterSqlFocoCalor() {
         return """
             MERGE INTO %s.foco_calor t
@@ -985,6 +1198,42 @@ public class PersistidorSilverService {
                     s.atributos_origem, s.lote_ingestao_id, s.registro_bruto_id,
                     SYSTIMESTAMP, s.hash_origem
                 )
+            """.formatted(silverSchema);
+    }
+
+    private String obterSqlBioma() {
+        return """
+            MERGE INTO %s.bioma t
+            USING (
+                SELECT
+                    s.id,
+                    CASE WHEN s.wkt IS NOT NULL THEN SDO_GEOMETRY(s.wkt, 4674) ELSE NULL END AS geometria,
+                    s.atributos_origem,
+                    s.fonte_dado_id,
+                    s.lote_ingestao_id,
+                    s.registro_bruto_id,
+                    s.hash_origem
+                FROM (
+                    SELECT
+                        ? AS id,
+                        TO_CLOB(?) AS wkt,
+                        TO_CLOB(?) AS atributos_origem,
+                        ? AS fonte_dado_id,
+                        ? AS lote_ingestao_id,
+                        ? AS registro_bruto_id,
+                        ? AS hash_origem
+                    FROM dual
+                ) s
+            ) s ON (t.id = s.id)
+            WHEN MATCHED THEN
+                UPDATE SET
+                    t.geometria          = COALESCE(s.geometria, t.geometria),
+                    t.atributos_origem   = s.atributos_origem,
+                    t.fonte_dado_id      = s.fonte_dado_id,
+                    t.lote_ingestao_id   = s.lote_ingestao_id,
+                    t.registro_bruto_id  = s.registro_bruto_id,
+                    t.data_processamento = SYSTIMESTAMP,
+                    t.hash_origem        = s.hash_origem
             """.formatted(silverSchema);
     }
 
@@ -1213,6 +1462,32 @@ public class PersistidorSilverService {
     }
 
     /**
+     * Órgão cadastrado em controle.fonte_dado pra esta fonte (ex.: "MMA", "SFB",
+     * "FUNAI") — usado como fallback de orgao_id quando o texto declarado no próprio
+     * registro não resolve em nenhum código de silver.orgao (ex.: secretaria estadual
+     * ou municipal sem entrada no domínio). "ICMBIO" só entra se a fonte não existir
+     * mais ou não tiver orgao preenchido — mantém o comportamento antigo como
+     * último recurso, nunca como padrão pra toda e qualquer fonte.
+     */
+    private String resolverOrgaoPadraoFonte(Long fonteDadoId) {
+        if (fonteDadoId == null) {
+            return "ICMBIO";
+        }
+        return fonteOrgaoCache.computeIfAbsent(fonteDadoId, id -> {
+            try {
+                String sql = "SELECT orgao FROM " + controleSchema + ".fonte_dado WHERE id = ?";
+                List<String> orgaos = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("orgao"), id);
+                if (!orgaos.isEmpty() && orgaos.get(0) != null && !orgaos.get(0).isBlank()) {
+                    return orgaos.get(0);
+                }
+            } catch (Exception e) {
+                log.debug("Não foi possível resolver o orgao padrão da fonte {}: {}", id, e.getMessage());
+            }
+            return "ICMBIO";
+        });
+    }
+
+    /**
      * Inicializa em memória todo o catálogo dimensional de municípios
      * (código IBGE numérico, nome em caixa alta e nome normalizado sem acentos),
      * eliminando milhares de consultas repetidas ao banco durante a persistência em lote.
@@ -1402,6 +1677,7 @@ public class PersistidorSilverService {
         categoriaParaTipoCache.clear();
         municipioCache.clear();
         municipiosCarregados = false;
+        fonteOrgaoCache.clear();
     }
 }
 

@@ -1,0 +1,9 @@
+-- [SEM EFEITO - ver V003] Limitava a url_origem das 3 fontes (APP/RL/Vegetacao
+-- Nativa) ao circuito de homologacao via UPDATE, depois de achar ao vivo que o
+-- estado inteiro (~350-390 mil registros cada) nao cabe no limite de 12GB do
+-- Oracle Free e nem faz sentido pratico (Silver so tem o circuito). Com a
+-- reordenacao do catalogo de fontes, o V003 ja seeda a URL com o filtro de
+-- circuito desde o cadastro, sem precisar de um UPDATE depois. Mantida como no-op
+-- (em vez de apagada) pra nao furar a sequencia de versoes do Flyway; os numeros
+-- reais testados ao vivo (347.867 -> 2.777 etc.) ficam no historico do git.
+-- (migration sem nenhum statement executavel - Flyway so marca como aplicada)

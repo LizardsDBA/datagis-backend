@@ -4,6 +4,7 @@ import java.util.Locale;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.util.GeometryFixer;
 import org.locationtech.jts.io.ParseException;
 import org.locationtech.jts.io.WKTReader;
 import org.locationtech.jts.io.WKTWriter;
@@ -112,16 +113,26 @@ public class ValidadorGeometria implements ValidadorCampo {
         // 3. Validação Topológica
         IsValidOp validOp = new IsValidOp(geometria);
         if (!validOp.isValid()) {
-            TopologyValidationError err = validOp.getValidationError();
-            String motivo = err != null
-                    ? "Inconsistência topológica: " + err.getMessage() + " em " + err.getCoordinate()
-                    : "Geometria topologicamente inválida";
-            return ResultadoValidacao.erro(
-                    ERRO_GEOMETRIA_INVALIDA,
-                    nomeCampo,
-                    valorOriginal,
-                    motivo
-            );
+            // Auto-interseção/anel desconexo (achado real no PRODES - 5.740 poligonos de
+            // desmatamento, 100% rejeitados por isso) costuma ser reparavel via
+            // GeometryFixer (ver tentarReparar), sem mudar a area de forma relevante.
+            // So aceita o reparo se o resultado continuar sendo geometria de area
+            // (Polygon/MultiPolygon) e nao-vazia - senao mantem o erro original.
+            Geometry reparada = tentarReparar(geometria);
+            if (reparada != null) {
+                geometria = reparada;
+            } else {
+                TopologyValidationError err = validOp.getValidationError();
+                String motivo = err != null
+                        ? "Inconsistência topológica: " + err.getMessage() + " em " + err.getCoordinate()
+                        : "Geometria topologicamente inválida";
+                return ResultadoValidacao.erro(
+                        ERRO_GEOMETRIA_INVALIDA,
+                        nomeCampo,
+                        valorOriginal,
+                        motivo
+                );
+            }
         }
 
         // 4. Validação de Primitivo Compatível
@@ -152,6 +163,34 @@ public class ValidadorGeometria implements ValidadorCampo {
 
         // 6. Sucesso — retorna WKT padronizado
         return ResultadoValidacao.sucesso(wktWriter.write(geometria));
+    }
+
+    /**
+     * Tenta reparar uma geometria topologicamente inválida via {@link GeometryFixer} -
+     * classe oficial do JTS (desde 1.18.2) pra isso, que substitui o truque antigo de
+     * {@code buffer(0)}. O {@code buffer(0)} foi descartado porque a versão do JTS
+     * fixada no projeto (1.20.0, CLAUDE.md §4.4) tem bug conhecido de descartar
+     * polígono de dentro de um MultiPolygon em certos casos de auto-interseção. Só
+     * aceita o resultado se continuar sendo uma geometria de área (Polygon/
+     * MultiPolygon), não-vazia e agora válida; caso contrário retorna {@code null} e
+     * quem chamou mantém o erro original.
+     */
+    private Geometry tentarReparar(Geometry geometria) {
+        if (geometria == null || !(geometria instanceof org.locationtech.jts.geom.Polygonal)) {
+            return null;
+        }
+        try {
+            Geometry reparada = GeometryFixer.fix(geometria);
+            if (reparada == null || reparada.isEmpty()) {
+                return null;
+            }
+            if (!(reparada instanceof org.locationtech.jts.geom.Polygonal)) {
+                return null;
+            }
+            return new IsValidOp(reparada).isValid() ? reparada : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /**

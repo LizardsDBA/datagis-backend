@@ -95,6 +95,20 @@ class ValidadorCpfCnpjTest {
         assertThat(resultado.motivoRejeicao()).contains("inválido ou com dígitos verificadores incorretos");
     }
 
+    @Test
+    @DisplayName("Deve restaurar zero(s) à esquerda perdido(s) quando a fonte era JSON numérico, antes de validar o CPF")
+    void deveRestaurarZeroAEsquerdaDoCpf() {
+        // CPF real "00123456797" chega como "123456797" (9 dígitos) quando a fonte
+        // tipa a coluna como número em vez de texto (achado ao vivo nos Embargos
+        // IBAMA/ICMBio, V072-era LIZARDS-51).
+        ContextoValidacaoCampo ctx = contextoComFlag("cpf_proprietario");
+
+        ResultadoValidacao resultado = validador.validar("123456797", ctx);
+
+        assertThat(resultado.isValido()).isTrue();
+        assertThat(resultado.valorTransformado()).isEqualTo("00123456797");
+    }
+
     // -------------------------------------------------------------------------
     // validar() — CNPJ
     // -------------------------------------------------------------------------
@@ -132,6 +146,19 @@ class ValidadorCpfCnpjTest {
         assertThat(resultado.isValido()).isFalse();
         assertThat(resultado.tipoErro()).isEqualTo("CPF_CNPJ_INVALIDO");
         assertThat(resultado.campoProblema()).isEqualTo("cnpj_empresa");
+    }
+
+    @Test
+    @DisplayName("Deve restaurar zero(s) à esquerda perdido(s) quando a fonte era JSON numérico, antes de validar o CNPJ")
+    void deveRestaurarZeroAEsquerdaDoCnpj() {
+        // CNPJ real "00123456000149" chega como "123456000149" (12 dígitos) pelo
+        // mesmo motivo do caso do CPF acima.
+        ContextoValidacaoCampo ctx = contextoComFlag("cnpj_empresa");
+
+        ResultadoValidacao resultado = validador.validar("123456000149", ctx);
+
+        assertThat(resultado.isValido()).isTrue();
+        assertThat(resultado.valorTransformado()).isEqualTo("00123456000149");
     }
 
     // -------------------------------------------------------------------------

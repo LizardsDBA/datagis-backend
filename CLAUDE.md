@@ -261,8 +261,19 @@ Validar na fatia de cálculo.
 > publicada`, com `geometria_intersecao` em precisão total — artefato de auditoria).
 > **O portal lê só a Gold, nunca a Silver.**
 
-**Ponto crítico ainda em aberto:** o algoritmo de `hash_versao` (amarra dado-fonte +
-regra + resultado) ainda não foi detalhado — a coluna existe, a lógica de cálculo não.
+**`hash_versao` — [RESOLVIDO, 2026-10-04]:** implementado em `pkg_gold_publicacao.
+registrar_resultado` exatamente como proposto em `docs/gold-procedures-calculo-
+publicacao.md` §4 — SHA-256 via `DBMS_CRYPTO.HASH` sobre uma string canônica
+(`cod_imovel|regra_calculo_id|lotes_csv|indicador:valor:area:percentual`). Idempotente:
+recalcular sem mudança de dado-fonte devolve o mesmo `indicador_versao_id` em vez de
+duplicar linha.
+
+**Transição Silver→Gold (cálculo dos indicadores + publicação) — [IMPLEMENTADO em
+PL/SQL, 2026-10-04 — ver §9.33]**, diferente de Bronze→Silver (que é Java, §9.23-25).
+4 dos 7 indicadores calculam de verdade contra dado real (ISAP, IAE, IDesmat, IFC);
+ICV/IRL/IAPP seguem stub (bloqueio SICAR Temas). Testado contra os 4.608 imóveis reais
+do CAR/PR via `POST /api/gold/publicar`. Design original, cobertura por indicador e
+trade-offs em `docs/gold-procedures-calculo-publicacao.md`.
 
 ### 2.7. Schema de controle (transversal)
 - `usuario`, `papel`, `usuario_papel` — RBAC (**adiado**, ver seção 4)
@@ -717,6 +728,20 @@ formatos" do desafio oficial da Visiona**.
   têm fonte de dado funcionando até hoje, por causa do bloqueio de credenciamento acima).
   Demais linhas: atendidas de forma exata ou com formato de acesso equivalente
   (ex.: GeoJSON via API no lugar de `.shp` estático — mesma fonte/órgão, canal diferente).
+- **`docs/tutorial-acesso-fontes-pendentes.md` (2026-10-03, prioridade máxima) —**
+  passo a passo real do credenciamento Conecta Gov (autocadastro + certificado digital
+  ICP-Brasil + pedido formal de órgão à SGD/ME + IP allowlist Serpro — processo pesado,
+  provavelmente exige apoio institucional da FATEC/Visiona, não é algo que o time resolve
+  sozinho) **e** reteste ao vivo do Plano B (vegetação nativa via IAT): achado novo que
+  **muda o status anterior** — o candidato `Vegetacao_Nativa_IAT_2021` é só tabela
+  (197.963 registros, sem geometria consultável), não serve pra interseção geoespacial
+  do jeito que está hoje. Plano B segue em aberto, não resolvido.
+  **Atualizado no mesmo dia** com uma §0 nova: cruzamento das 10 linhas do slide oficial
+  contra o `controle.fonte_dado` **consultado direto no banco** (não documentação) — 6
+  linhas 100% cobertas, 3 gaps de verdade (os de cima), e **2 achados novos que não são
+  gap de pesquisa, só de cadastro**: IBGE (limites de biomas) e INCRA (quilombolas +
+  assentamentos) já tinham fonte validada desde a v2 mas nunca viraram `fonte_dado` —
+  URLs prontas pra cadastrar no próprio tutorial §0.
 
 ### 5.8. Arquitetura de ingestão genérica por formato — **[DECIDIDO e implementado, 2026-09-08/09 — substitui a lógica CAR-específica da §5.2/§5.6]**
 
@@ -1153,10 +1178,20 @@ Branch `feat/upload-shp`. Detalhe completo, achados e itens em aberto em
   meio do recebimento, não devolve resposta HTTP).
 - **Testado com arquivo de produção real**: 218MB, 559.899 registros, ~3 min,
   processamento síncrono (sem chunk/batch) sem erro.
-- **Achado real comparando com a fonte via WFS**: o Shapefile bulk traz o **histórico
-  completo** do CAR (`situacao_imovel` = `AT`/`CA`/`PE`), o WFS só devolve o vigente.
-  Refina a regra de dedup do §3.5 do doc de modelagem — duplicata **dentro do mesmo
-  lote** (não entre lotes) precisa de regra própria (manter só `AT`).
+- **Achado real comparando com a fonte via WFS**: o Shapefile bulk traz o histórico
+  completo do CAR (`situacao_imovel` = `AT`/`CA`/`PE`). Refina a regra de dedup do §3.5
+  do doc de modelagem — duplicata **dentro do mesmo lote** (não entre lotes) precisa de
+  regra própria (manter só `AT`).
+  **[CORRIGIDO em 2026-10-07]** A premissa original aqui ("o WFS só devolve o vigente")
+  estava **errada** — testado ao vivo comparando as 2 fontes (`docs/tutorial-acesso-
+  fontes-pendentes.md` §0-bis): o WFS, sem filtro nenhum, já devolve AT+PE+CA+SU
+  (confirmado via `CQL_FILTER` por status, soma bate exato com o total sem filtro —
+  557.854 em 2026-10-07). Ou seja, o WFS automatizado (fonte `#1`, já ativa) **já tem o
+  histórico completo que achávamos que só o Shapefile manual (`#12`) trazia** — a
+  necessidade de upload manual pra esse propósito específico é bem menor do que
+  documentado aqui originalmente. A regra de dedup continua válida (os dois têm
+  histórico, então os dois precisam dela), mas a justificativa de "por que cadastramos
+  o upload manual" deixa de ser "é a única fonte com histórico".
 
 ### 9.13. Regras de validação em mapeamento_coluna — [FEITO, 2026-09-13, `V029`]
 Migration `V029__evoluir_mapeamento_coluna_regras_validacao.sql` adiciona suporte
@@ -1467,6 +1502,366 @@ disparar.
   Silver. Não confundir com `lote_ingestao.hash_conteudo` (hash do lote inteiro, que
   funciona). Correção: SHA-256 de `payload` + `geometria_wkt` por registro. Combinado
   fazer depois, em branch `fix/` própria.
+
+### 9.32. Design de Silver→Gold via PL/SQL — [DOCUMENTADO, 2026-10-03, pré-desenvolvimento]
+Nada implementado ainda — sessão de documentação, a pedido do time, antes de abrir as 3
+tasks do board (`LIZARDS-31` Conservação, Territorial, Ambiental). Ver
+`docs/gold-procedures-calculo-publicacao.md` (novo) e §2.6.
+
+- **Decisão proposta**: Silver→Gold (cálculo dos 7 indicadores + publicação nos 3
+  blocos da Gold) vira **PL/SQL** (packages por task), diferente de Bronze→Silver
+  (Java). Trade-offs documentados, não só vantagens — time ainda não escreveu PL/SQL
+  neste projeto, teste só via Oracle real (sem mock), mesmo padrão `*OracleIT` do §9.28.
+- **Achado que muda o escopo das 3 tasks**: `LIZARDS-31` (Conservação/ICV) e metade de
+  Territorial (IRL, IAPP) **não têm fonte de dado hoje** (`tipo_indicador.tem_fonte=0`
+  na `V016`, gap já conhecido desde `docs/checklist-cobertura-fontes.md` — API SICAR
+  Temas exige credenciamento Serpro fora do alcance do time). Só ISAP, IAE, IDesmat e
+  IFC são calculáveis de verdade agora; o resto vira stub até a fonte aparecer.
+- Proposta de algoritmo pra `hash_versao` (§2.6) — primeira vez que esse ponto em
+  aberto ganha um desenho concreto.
+- **Itens em aberto que a equipe ainda precisa fechar**: confirmar a ida pra PL/SQL;
+  validar o algoritmo de hash; Quartz+Job vs. `DBMS_SCHEDULER` pra disparar a
+  publicação; tolerância de generalização de geometria do mapa; donos de cada
+  package/task (tabela em branco no documento, a preencher).
+
+### 9.33. Implementação das procedures Gold + achado crítico de índice espacial — **[FEITO e testado contra o Oracle real, 2026-10-04, `LIZARDS-31`/`LIZARDS-32`/`LIZARDS-33`]**
+Branch `feat/procedures-indicadores`, a partir da `sprint-1`. Implementa de verdade o
+design do §9.32: `pkg_gold_publicacao` (compartilhada) + `pkg_calculo_ambiental`
+(IDesmat, IFC) + `pkg_calculo_territorial` (ISAP, IAE reais; IRL, IAPP stub) +
+`pkg_calculo_conservacao` (ICV stub) — migrations `V043`-`V047`. Orquestração
+"pra cada imóvel, calcula os 4 reais, publica" fica no Java (`GoldPublicacaoService`,
+`GoldPublicacaoController`, `POST /api/gold/publicar` e `.../imoveis/{cod}/recalcular`),
+não em PL/SQL — pacote não pode chamar de volta quem o chama sem dependência circular.
+
+**Achado crítico, só aparece em volume real (não no teste sintético) — `SDO_ANYINTERACT`
+nunca usa índice espacial:** `SDO_ANYINTERACT(a, b) = 'TRUE'` **nunca** aciona índice
+espacial no Oracle desta instância, mesmo com o índice existindo e válido — confirmado
+via `EXPLAIN PLAN`/`DBMS_XPLAN.DISPLAY`, sempre `TABLE ACCESS FULL` com filtro, nunca
+`DOMAIN INDEX`. Só `SDO_RELATE(a, b, 'mask=ANYINTERACT') = 'TRUE'` é reconhecido pelo
+otimizador como acesso indexado. Sem saber disso, calcular ISAP/IAE pra 200 imóveis
+contra os 16 mil `area_protegida`/2,5 mil `embargo_ambiental` reais levava **~42
+minutos**; trocando pra `SDO_RELATE` + índice espacial de verdade (`V049`, silver),
+caiu pra **~1 segundo** (~2.400x). Todo `SDO_ANYINTERACT` da Gold foi trocado por
+`SDO_RELATE(...,'mask=ANYINTERACT')`.
+
+**Criar o índice espacial em si teve 3 pegadinhas de privilégio/recurso reais** (doc
+completo no cabeçalho de `V049__indices_espaciais_calculo.sql`):
+1. `CREATE INDEX ... INDEXTYPE IS MDSYS.SPATIAL_INDEX` roda rotina ODCI interna que
+   precisa de `CREATE TABLE`/`CREATE SEQUENCE`/`UNLIMITED TABLESPACE` **diretos** (não
+   "ANY") no schema **dono da tabela** (`silver`), não no `CONTROLE` que tem privilégio
+   `ANY` de sobra — sem isso dá `ORA-01031`/`ORA-29855`. Mesma exigência pro `DROP`
+   (`DROP ANY INDEX` do `CONTROLE` não basta; precisou conectar como `silver` direto).
+   Grants permanentes adicionados em `infra/oracle-init/01-criar-schemas.sh`.
+2. `area_protegida` tem polígonos nacionais (MMA/SFB) de até **164 mil vértices** —
+   construir o R-tree estourava `PGA_AGGREGATE_LIMIT` (`ORA-04036`) até no default de
+   2G. Resolvido subindo pra **8G**, e precisa subir **primeiro no `CDB$ROOT`, depois
+   no PDB** (senão `ORA-56747`, limite do PDB não pode exceder o do root) — também
+   persistido no init script.
+3. Um índice com `STATUS='VALID'` no catálogo (`all_indexes` e
+   `mdsys.sdo_index_metadata_table`) pode não funcionar de verdade se a criação morreu
+   no meio (ex. pelo `ORA-04036` acima) — só o `EXPLAIN PLAN` mostrando `DOMAIN INDEX`
+   de fato confirma. Confiar só no `STATUS` é enganoso.
+
+**Segundo bug achado testando a publicação completa contra os 4.608 imóveis reais —
+`publicar_camada_mapa` não era resiliente:** fazia um único `INSERT...SELECT` com
+`SDO_UTIL.SIMPLIFY` por linha; uma geometria ruim de `area_protegida` dava
+`ORA-13199: the given geometry cannot be rectified` e abortava a camada inteira (0
+features publicadas, apesar de 16 mil boas). Reescrita linha a linha (`FOR` +
+`BEGIN/EXCEPTION WHEN OTHERS`), mesmo princípio já usado na ingestão Bronze→Silver
+(§5.8 item 2: pula e loga a linha ruim, publica as demais). Resultado real: **16.084 de
+16.086** features de `AREA_PROTEGIDA` publicadas, só 2 geometrias genuinamente
+inválidas puladas (logadas por `id`/`codigo_origem`). Mesmo achado revelou que uma
+geometria pode ser **lenta sem ser inválida** (uma UC de 146 mil vértices levou ~5min
+pra simplificar sozinha, sem erro) — não dá pra prever só pela contagem de vértices.
+
+**Terceiro bug — `publicar_imovel` não era idempotente:** `registrar_resultado` já
+reusa o mesmo `indicador_versao_id` (via `hash_versao`) quando nada mudou, mas
+`publicar_imovel` fazia um `INSERT` direto em `imovel_publicado` — rodar a publicação
+de novo sem mudança de dado violava `UQ_IMOVEL_PUBLICADO`. Corrigido com um guard
+(`SELECT COUNT(*)` antes do insert) que torna republicar um no-op quando a versão já
+foi publicada.
+
+**Resultado final validado contra o Oracle real:** `gold.imovel_publicado` = 4.608
+linhas (100% dos imóveis Silver). Camadas: `MUNICIPIO` 399, `EMBARGO` 2.519,
+`IMOVEL_RURAL` 4.606 (2 a menos = os 2 imóveis com `geometria IS NULL` na Silver,
+esperado), `AREA_PROTEGIDA` 16.084. `DESMATAMENTO` e `FOCO_CALOR` seguem em 0 —
+**não são bug desta sessão**: `silver.desmatamento` está vazia (WFS do PRODES/INPE
+instável, todas as tentativas de ingestão falharam hoje) e `silver.foco_calor` também
+(bug real e separado: o endpoint de liberar quarentena trava em lotes muito grandes —
+333 mil e 152 mil registros — fica pra uma sessão própria). Suíte completa rodada ao
+final: **401 testes, 0 falhas, 1 erro** (o `DatagisApplicationTests` de sempre, §9.3 —
+sem Docker-in-Docker dentro do container do backend), zero regressão.
+
+**Commits divididos pelas 3 tasks do board** conforme o conteúdo de cada um (pacote
+compartilhado + indicadores ambientais + as correções de mapeamento ficaram no
+commit de `LIZARDS-33`; ISAP/IAE + o índice espacial ficaram em `LIZARDS-32`; o stub
+do ICV em `LIZARDS-31`) — não existe uma divisão 1:1 perfeita entre arquivo e task
+porque `pkg_gold_publicacao` é infraestrutura compartilhada pelos 3.
+
+### 9.34. IAPP/IRL/ICV deixam de ser gap — fonte achada e cadastrada, sem credenciamento — **[FONTE CADASTRADA, 2026-10-07, `LIZARDS-24`]**
+Os 3 indicadores que só tinham stub nas procedures Gold (§9.33) por falta de fonte
+ganharam fonte real, achada a partir de uma URL do portal ArcGIS do IAT/PR. Detalhe
+completo, verificação ao vivo e os 4 passos (cadastrar → ingerir → modelar Silver →
+calcular) em `docs/tutorial-acesso-fontes-pendentes.md` §0-bis — resumo aqui:
+
+- **Serviço**: `00_PUBLICACOES/Base_Geo_Cadastro_Ambiental_rural` no geoportal IAT/PR
+  (`geopr.iat.pr.gov.br`), público, sem credenciamento. 9 camadas do CAR; as 3
+  relevantes pros indicadores: `APP Total` (381.962 polígonos → IAPP), `Reserva Legal`
+  (347.867 → IRL), `Vegetação Nativa` (393.153 → ICV + numerador do IAPP via
+  interseção com APP Total).
+- **Verificado via `curl` direto no ArcGIS REST**, não suposição: geometria real com
+  `outSR=4674`, `cod_imovel` no mesmo formato de `silver.imovel_rural.cod_imovel`,
+  `des_condic` com o mesmo texto do SICAR que `ValidadorDominio` já resolve (§9.17).
+- **Comparação de confiabilidade feita ao vivo** (mesma sessão) entre as 3 fontes de
+  *perímetro* de imóvel disponíveis (WFS `#1`, Shapefile `#12`, e a camada `Área
+  Imóvel` deste mesmo serviço IAT): WFS SICAR (`#1`) é a mais confiável — domínio
+  oficial direto (`geoserver.car.gov.br`), `cod_municipio_ibge` numérico como chave
+  (evita erro de nome de município, já visto nesta sessão), e teste cruzado do mesmo
+  `cod_imovel` entre WFS e IAT deu área/geometria idênticas (24 vértices nos dois). A
+  camada `Área Imóvel` do IAT **não foi cadastrada** por ser redundante e menos
+  completa (sem status `CA`).
+- **Achado que corrige §9.12**: o WFS SICAR, testado sem filtro, já devolve
+  AT+PE+CA+SU (não só o vigente como a nota antiga dizia) — ver correção em §9.12.
+- **Cadastrado em `V053__seed_fontes_car_app_rl_vegetacao_nativa.sql`**: as 3 fontes
+  (`API_REST`/`GEOJSON`, mesma família ArcGIS já suportada por
+  `IngestaoGeoJsonExecutor`, zero código novo) + `mapeamento_coluna` deliberadamente
+  mínimo (mesmo motivo do `V041`/MMA-SFB: ativar integridade cruzada com
+  `imovel_rural` agora quarentenaria quase tudo, já que a Silver só tem os ~4.608
+  imóveis do circuito de homologação, não os ~350-390 mil que essas camadas cobrem).
+- **[EM ABERTO]** Nada ingerido ainda. Faltam os passos 2-4 do tutorial §0-bis: rodar
+  ingestão de teste real, decidir a modelagem Silver (tabelas novas tipo
+  `silver.reserva_legal`/`silver.app_declarada`/`silver.vegetacao_nativa_declarada`,
+  cada uma com FK pra `imovel_rural`), e implementar `calcular_irl`/`calcular_iapp`/
+  `calcular_icv` de verdade (hoje stub, `pkg_calculo_territorial`/`pkg_calculo_
+  conservacao`) usando `SDO_RELATE` desde o início (não repetir o achado do
+  `SDO_ANYINTERACT`, §9.33).
+
+### 9.35. Catálogo de fontes reordenado por ordem de ingestão + nenhuma fonte com cron — **[DECIDIDO e aplicado, 2026-10-09]**
+As 18 fontes nasciam com o ID na ordem em que foram descobertas/cadastradas ao
+longo das sprints (espalhadas por 7 migrations: `V003`, `V006`, `V009`, `V025`,
+`V039`, `V041`, `V053`). Pedido do time: reordenar pra refletir a **ordem desejável
+de ingestão** (pré-requisitos primeiro) em vez da ordem histórica de descoberta, e
+tirar o `cron_expressao` de todas (nenhuma fonte roda mais por agendamento
+automático por ora — só disparo manual, até o fluxo de cálculo/publicação da Gold
+estar fechado de ponta a ponta).
+
+**IDs novos (consolidados em `V003`, que passou de "cadastro manual do CAR" pra
+seed único de todo o catálogo):**
+
+| ID | Fonte | ID antigo |
+|---|---|---|
+| 1 | IBGE - Malha Municipal (PR) | 7 |
+| 2 | IBGE - Limites de biomas | 13 |
+| 3 | CAR - Imóveis (PR) | 1 |
+| 4 | IAT/PR - APP Total (CAR) | 16 |
+| 5 | IAT/PR - Reserva Legal (CAR) | 17 |
+| 6 | IAT/PR - Vegetação Nativa (CAR) | 18 |
+| 7 | ICMBio - Unidades de Conservação (PR) | 2 |
+| 8 | IAT/PR - Terras Indígenas (FUNAI) | 8 |
+| 9 | MMA - Unidades de Conservacao (CNUC nacional) | 14 |
+| 10 | SFB - Cadastro Nacional de Florestas Publicas (CNFP) | 15 |
+| 11 | IAT/PR - Embargos IBAMA | 5 |
+| 12 | IAT/PR - Embargos ICMBio | 9 |
+| 13 | IAT/PR - Autos de Infração IBAMA | 10 |
+| 14 | IAT/PR - Autos de Infração ICMBio | 11 |
+| 15 | INPE (PRODES) - Desmatamento Mata Atlântica (PR) | 3 |
+| 16 | IAT/PR - Focos de Calor (INPE) | 4 |
+| 17 | INPE (Queimadas) - Focos de calor, Brasil (mensal) | 6 |
+| 18 | CAR - Imóveis (PR) via Shapefile (upload) | 12 |
+
+**3 pegadinhas reais achadas fazendo isso (nenhuma óbvia antes de tentar) — guardar
+pra não repetir o retrabalho:**
+1. **`fonte_dado.entidade_silver` e `campo_geometria_lat`/`campo_geometria_lon` não
+   existem ainda no ponto em que o seed consolidado roda** (`V003`, a migration
+   mais antiga que semeia `fonte_dado`) — essas colunas só nascem em `V010`
+   (`ADD entidade_silver`) e `V005` (`ADD campo_geometria_lat/lon`), ambas
+   numericamente DEPOIS de `V003`. Botar essas colunas direto no `INSERT` do `V003`
+   quebra com `ORA-00904: invalid identifier`. Corrigido: `V003` só usa as colunas
+   que já existiam desde `V001`; `entidade_silver` passou a ser setado em bloco no
+   `V031` (que já roda depois do `V010`), **por NOME, não por id** — e
+   `campo_geometria_lat/lon` da fonte CSV do INPE em um `UPDATE` no `V006` (que já
+   roda depois do `V005`). Regra geral: ao consolidar um seed na migration mais
+   antiga possível, cada coluna usada no `INSERT` tem que já existir **naquela
+   versão**, não na versão atual da tabela.
+2. **`V031__seed_mapeamentos_fontes_padrao.sql` tinha ~90 ocorrências de
+   `fonte_dado_id` **hard-coded por número** (`WHERE id IN (1, 12)`,
+   `VALUES (2, 'cnuc', ...)` etc.), um padrão bem diferente do resto do projeto
+   (que resolve por `nome` via subquery) — passou batido numa primeira varredura
+   por grep porque o padrão de busca procurava `fonte_dado_id = N`, não `f.id IN
+   (N)`/`VALUES (N,`. **Lição**: ao reordenar/renumerar qualquer catálogo com ID
+   `IDENTITY`, rodar pelo menos 2 buscas (uma pelo nome da coluna FK, outra por
+   `VALUES (` seguido de número pequeno) antes de assumir que achou todas as
+   referências. Corrigido com substituição em passe único (script Python, evitando
+   colisão entre id antigo e novo no meio da troca) + reescrita do bloco de
+   `entidade_silver` pra usar nome em vez de id (elimina a fragilidade de vez).
+3. **`V048` e `V051` também tinham `fonte_dado_id` fixo por número** (correções de
+   mapeamento achadas testando ingestão real, ex. `WHERE fonte_dado_id = 2`) -
+   atualizados pros IDs novos, com o número antigo anotado em comentário pra
+   rastreabilidade.
+
+Migrations que perderam efeito prático (`V035`, `V052` — preenchiam/ajustavam cron;
+`V055`, `V056`, `V058` — fixes das 3 fontes novas do CAR, agora já corretas desde o
+cadastro) foram mantidas como **no-op documentado** (comentário `[SEM EFEITO - ver
+X]`), não apagadas — apagar um número de versão já no histórico do Flyway é pior
+que deixar um arquivo sem statement executável.
+
+**Verificado ao vivo, banco resetado do zero**: `docker compose down` + `docker
+volume rm` + `up -d` aplica as 61 migrations limpo; `fonte_dado` confere exatamente
+a tabela acima, nenhuma linha com `cron_expressao`; ingestão de teste no CAR (novo
+id 3) e na APP Total (novo id 4) promovem pra Silver normalmente (4.611 e 3.180
+registros, bate com os números já conhecidos); suíte completa **401 testes, 0
+falhas, 1 erro** (o `DatagisApplicationTests` de sempre, §9.3).
+
+### 9.36. 4 indicadores funcionando de ponta a ponta no circuito + simplificação de mapa migrada pra Java/JTS — **[FEITO e validado contra o Oracle real, 2026-10-11, `LIZARDS-24`/`LIZARDS-50`]**
+Sessão longa, trocou Oracle Free por Enterprise Edition (§9.34/tutorial próprio),
+filtrou os endpoints restantes pelo circuito (`V061`) e destravou os 4 indicadores
+com fonte (ISAP, IAE, IDesmat, IFC) de verdade contra dado real, não só sintético.
+Design original e formulário em `docs/gold-procedures-calculo-publicacao.md` §9.
+
+**Bug 1 — ISAP/IAE/IDesmat zerando ou explodindo com imóvel real (`V060`/`V063`/`V064`):**
+- `V060` já corrigia o padrão "dissolver antes de interseccionar quebra com geometria
+  'inválida' real" pra ISAP/IAE (achado anterior a esta sessão). `V064` replicou o
+  mesmo fix pro IDesmat, que tinha o mesmo bug e nunca tinha sido corrigido lá.
+- **Achado novo nesta sessão**: alguns imóveis tinham `SDO_GEOM.SDO_AREA` da própria
+  geometria do imóvel devolvendo um valor absurdo (12,75 **bilhões** de hectares pra
+  um imóvel de 0,18 ha segundo `area_ha`, calculado em Java/JTS na ingestão) —
+  geometria com vértice duplicado faz o Oracle devolver área/interseção sem sentido
+  **sem lançar erro**. Como `area_ha` (JTS) já é confiável, a correção (`V063`/
+  `V064`) é um sanity clamp: a área de interseção nunca pode exceder a área do
+  próprio imóvel — se `SDO_GEOM` devolver mais que isso, trunca pra `area_ha`, nunca
+  propaga um percentual impossível (chegava a 12 milhões% antes do fix).
+
+**Bug 2 — camada de mapa DESMATAMENTO travando/estourando memória (resolvido
+removendo a causa, não contornando) — `LIZARDS-50`:**
+Publicar a camada de mapa (bloco 2, `SDO_UTIL.SIMPLIFY` em PL/SQL) contra os 1.428
+polígonos reais do PRODES expôs, em sequência, 4 sintomas que pareciam problemas
+diferentes mas eram o mesmo limite de fundo:
+1. 1 geometria com 634 mil ordenadas fazia o `SIMPLIFY` sozinho estourar
+   `ORA-04036` (PGA 8GB) — tentativas de mitigar (pular por tamanho de vértice,
+   lote pequeno + timeout, liberar memória de sessão a cada N linhas) reduziam o
+   estrago mas nunca resolviam de vez, porque **outras** geometrias, isoladas,
+   também estouravam sozinhas (não era 1 outlier, era o motor de `SIMPLIFY` do
+   Oracle sendo caro demais em memória pra geometria complexa em geral).
+2. **Decisão de negócio: nenhum registro pode ser descartado** (nem o mais pesado)
+   — forçou resolver de verdade, não mascarar. Solução: `SimplificadorGeometriaMapa`
+   (Java/JTS, `TopologyPreservingSimplifier`) substitui o `SDO_UTIL.SIMPLIFY` **só**
+   na publicação de camada de mapa (não nos cálculos de indicador, que continuam em
+   PL/SQL — fazem interseção espacial de verdade, perto do dado). Roda no heap da
+   JVM do backend (`-Xmx8g`), memória separada do PGA do Oracle. `V070` removeu a
+   procedure `publicar_camada_mapa_lote` (ficou sem uso).
+3. Daí dois bugs secundários, achados só depois que o motor de memória parou de
+   ser o problema: `ORA-01461` (WKT simplificado >4000 caracteres não pode ser bind
+   de `String` comum — corrigido com `java.sql.Clob`, mesmo padrão já usado em
+   `PersistidorSilverService`) e colisão de número de versão (`ORA-00001`) com dado
+   publicado **antes** da tabela de controle de versão existir — corrigido calculando
+   a próxima versão como `GREATEST` entre `gold.publicacao_camada_mapa` e
+   `gold.feature_publicada`, não só a primeira.
+- **Resultado final**: as 6 camadas de mapa publicam 100%, 0 pulados (399 município,
+  16.059 área protegida, 1.428 desmatamento, 4.611 imóvel, 2.949 foco de calor,
+  incluindo a geometria de 634 mil ordenadas que antes era sempre descartada).
+- **Controle de execução novo** (`V067`): `gold.publicacao_camada_mapa`
+  (status/andamento — `total_processado`/`total_publicado`/`total_pulado`) +
+  `gold.publicacao_camada_mapa_erro` (1 linha por registro pulado, sempre com
+  motivo — nunca mais só `DBMS_OUTPUT.PUT_LINE` que ninguém olhava). Endpoints:
+  `POST /api/gold/mapa-camadas/{codigo}/publicar`,
+  `GET /api/gold/mapa-camadas/{codigo}/status`,
+  `GET /api/gold/publicacoes/{id}/erros`. A versão nova só fica "visível" (quem for
+  ler depois filtra por `status='CONCLUIDA'`) se processar inteira — nunca aparece
+  pela metade.
+
+**Bug 3 — CPF/CNPJ sem zero à esquerda rejeitando Embargos/Autos de verdade:**
+Fontes que mandam CPF/CNPJ como **número** (não string) no JSON/GeoJSON perdem
+zero(s) à esquerda no parsing (`"4579237927"` chegando com 10 dígitos em vez de 11,
+`"365707961"` com 9). `ValidadorCpfCnpj` agora repõe o(s) zero(s) perdido(s) antes
+de validar — o dígito verificador (módulo 11) continua sendo a prova real, se não
+bater mesmo com o zero reposto segue inválido. Resolveu Autos ICMBio (30/30
+promovido) de primeira.
+
+**Bug 4 — referência `num_auto_infracao` nos Embargos bloqueando mesmo sem CPF
+inválido, causa raiz diferente da esperada:**
+Depois do fix de CPF, Embargos IBAMA/ICMBio continuavam retidos por
+`REFERENCIA_NAO_ENCONTRADA` (`num_auto_infracao` → `silver.auto_infracao`).
+Cruzando contra os serviços reais do IAT/PR: o campo `num_auto_infracao` do
+**Embargo IBAMA** é alfanumérico (`"DBK2XZIO"`), mas o `num_auto_infracao` real dos
+**Autos IBAMA** é sempre numérico puro (`"368471"`) — formatos incompatíveis, nunca
+foi o mesmo identificador (provavelmente um código interno do GIS do IAT/PR, não
+uma FK de verdade). Pro ICMBio a referência é legítima (mesmo formato alfanumérico
+dos dois lados), só incompleta pelo recorte do circuito. Como o campo não é
+necessário pro cálculo do IAE (usa a geometria, não essa referência), relaxado nos
+dois (`V071`, `referencia_entidade_silver = NULL`). **Achado no caminho**: só mudar
+a config no banco não bastou — `OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico`
+tinha um fallback hardcoded que reaplicava a checagem por nome de atributo mesmo
+com a config explícita desligada; removido o caso `num_auto_infracao`/`auto_infracao`
+dessa inferência (teste `OrquestradorValidacaoTest` ajustado).
+**Novo endpoint** `POST /api/lotes/{id}/reprocessar` (`LoteIngestaoController`) —
+revalida um lote já ingerido contra a esteira de validação **atual**, sem precisar
+que a fonte externa mude (a detecção de "sem mudança", RN018, bloquearia uma nova
+ingestão real) — útil sempre que um bug de validação for corrigido depois que um
+lote já foi pra quarentena.
+
+**Resultado final, `POST /api/gold/publicar` completo contra os 4.611 imóveis**:
+4.611/4.611 publicados, 0 falha; 6/6 camadas publicadas, 0 falha. Indicadores com
+valor real (versão mais recente por imóvel, não histórico acumulado): ISAP 782
+imóveis, IAE 24, IDesmat 1.670, IFC 10. `silver.embargo_ambiental` = 124 registros
+(era 0 a sessão inteira). ICV/IRL/IAPP seguem stub — ver §9.37 pro gap achado
+analisando o que falta pra implementar de verdade.
+
+### 9.37. IRL/IAPP/ICV — implementados, decisão do percentual mínimo de RL tomada — **[FEITO, 2026-10-11, `V072`/`V073`]**
+`docs/gold-procedures-calculo-publicacao.md` §9.1 (2026-10-10) já mapeava a fórmula
+e confirmava a fonte ingerida (`app_declarada` 3.180, `reserva_legal` 2.777,
+`vegetacao_nativa_declarada` 3.182 — conferido de novo ao vivo em 2026-10-11, bate
+exato). **Achado analisando o que faltava pra implementar de verdade**: a fórmula do
+IRL pede comparar `SUM(area_ha)` de `reserva_legal` contra "o mínimo exigido pelo
+bioma" — mas `silver.bioma` **não tem nenhuma coluna de percentual mínimo**, e
+**nenhum dos 399 municípios tem `bioma_predominante_id` preenchido** (tudo NULL).
+Esse vínculo nunca foi populado. **Decisão tomada**: fixar 20% como constante na
+procedure (`c_percentual_minimo_mata_atlantica`, `V072`) em vez de popular o vínculo
+de verdade — defensável porque o recorte territorial do desafio **é** Paraná, bioma
+predominante Mata Atlântica (CLAUDE.md §1). Reversível com esforço pequeno e
+contido se o projeto um dia sair desse recorte (3 passos documentados no comentário
+da migration: coluna nova em `silver.bioma`, popular `bioma_predominante_id` via
+`SDO_RELATE` município×bioma, trocar a constante por JOIN na procedure - nenhum
+deles afeta os outros 6 indicadores nem invalida resultado já publicado, graças ao
+versionamento por hash). IAPP (`V072`, interseção `app_declarada` × `vegetacao_nativa_declarada`,
+mesmo padrão de intersecção-individual-depois-dissolve da V060) e ICV (`V073`, razão
+direta de área) não dependiam dessa peça - implementados junto. **Testado ao vivo**:
+imóvel real deu ICV=20,27%, IAPP=99,71%, IRL=18,93% (abaixo do mínimo de 20% - caso
+real de não conformidade, exatamente o que o indicador deve capturar). Os 7
+indicadores do desafio agora calculam de verdade no circuito de homologação.
+
+### 9.38. Roadmap: rastreamento de status/andamento ainda só existe na Gold, falta em Ingestão e Bronze→Silver
+Construído nesta sessão (§9.36) um padrão de controle de execução pra publicação Gold
+(indicadores + camadas de mapa): tabela de controle com status
+`EM_ANDAMENTO`/`CONCLUIDA`/`FALHOU`, contadores de andamento, tabela de erro por
+registro, endpoint `GET` de status. Motivo: o time vai construir uma tela de
+acompanhamento de processos, e precisa saber o que está rodando e o estado atual sem
+adivinhar.
+
+**Achado que expõe a mesma lacuna em outros 2 lugares**: tanto a execução de
+ingestão (`IngestaoController`/`IngestaoExecucaoService.executar`, dispara fetch +
+grava Bronze) quanto a transição Bronze→Silver (`TransicaoBronzeSilverService.processarLote`,
+chamada automaticamente ao fim de cada ingestão, e manualmente via
+`POST /api/lotes/{id}/reprocessar`, §9.36) são **100% síncronas, sem rastreamento
+nenhum** - a chamada HTTP só retorna quando tudo termina, e nada fica gravado como
+"em andamento" enquanto roda. Confirmado em código (sem `@Async`,
+sem `CompletableFuture`): se o usuário atualizar a tela no meio, o processo **continua
+rodando no backend** (não depende do navegador), mas a tela fica cega até o processo
+terminar sozinho e gravar o resultado final - não tem como saber que algo está
+rodando, só esperar.
+
+**Decisão de abordagem, já validada 2x nesta sessão (indicadores, camadas de mapa)**:
+envolver por fora, nunca mexer na lógica interna que já funciona e já foi testada a
+fundo (ingestão contra as 18 fontes reais, Bronze→Silver com toda a resiliência
+documentada em §5.8/§9.23-25). Concretamente: grava uma linha "EM_ANDAMENTO" antes
+de chamar o método existente, grava o resultado final depois (sucesso ou erro,
+relançando a exceção original pro `TratadorDeErro` continuar convertendo em
+400/502 do jeito que já faz hoje), nunca muda a assinatura nem o corpo do método
+existente, nunca muda a resposta do endpoint HTTP já consumido pela tela atual - o
+status novo é um efeito colateral consultável por um endpoint `GET` separado.
+
+**[EM ABERTO, registrado como roadmap, não implementado ainda]** - decisão da equipe
+de focar primeiro em fechar o que falta na Gold (ver §9.36/§9.37, "endpoint de status
+unificado" em andamento) antes de estender esse padrão pra Ingestão e Bronze→Silver.
 
 ---
 

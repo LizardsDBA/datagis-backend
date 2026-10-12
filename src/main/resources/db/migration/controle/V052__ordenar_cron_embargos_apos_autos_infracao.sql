@@ -1,0 +1,11 @@
+-- [SEM EFEITO - ver V035] Atrasava o cron dos embargos em 30min pra garantir que
+-- rodassem depois dos autos de infracao (integridade cruzada entre
+-- embargo_ambiental e auto_infracao). Sem efeito desde que a V035 passou a
+-- no-op (nenhuma fonte roda por agendamento automatico - so disparo manual) - a
+-- ordem entre essas 2 fontes so importa quando ambas disparam sozinhas via
+-- Quartz; disparo manual fica a cargo de quem opera decidir a ordem. Mantida
+-- como no-op (em vez de apagada) pra nao furar a sequencia de versoes do Flyway;
+-- o achado real (2.263 de 2.316 embargos rejeitados por REFERENCIA_NAO_ENCONTRADA
+-- quando a ordem nao era garantida) fica no historico do git, relevante se o
+-- agendamento automatico voltar.
+-- (migration sem nenhum statement executavel - Flyway so marca como aplicada)
