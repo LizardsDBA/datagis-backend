@@ -1920,6 +1920,12 @@ e de manutenção em **`docs/controle-de-acesso-rbac.md`**. Substitui o bypass d
   novo entra sozinho); `PerfilTest` trava a composição aprovada. Confirmado ao vivo que o
   provisionador cria perfil novo num Keycloak já existente, sem recriar volume. Backend 538
   testes, frontend 64.
+- **LIZARDS-46 (Analista) — FEITO 2026-10-13:** `Perfil.ANALISTA` (`conjunto:*`,
+  `indicador:*`, `fonte:visualizar`, `dados:visualizar`) + usuário `analista`. Resolve o
+  [EM ABERTO] da `/conjuntos-dados`: a aba/atalhos "Quarentena" só aparecem com
+  `quarentena:visualizar` (Analista compara Bronze e Silver). Formulário de Conjuntos e
+  ações de tipo de indicador (Gold) escondidos sem permissão de escrita. Gold continua fora
+  do menu (LIZARDS-27). Backend 565 testes, frontend 67.
 
 ---
 

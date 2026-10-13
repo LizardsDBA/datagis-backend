@@ -23,6 +23,14 @@ class PerfilTest {
     }
 
     @Test
+    void analistaCuidaDeConjuntosEIndicadoresEVeFontesEDados() {
+        assertThat(Perfil.ANALISTA.permissoes()).containsExactlyInAnyOrder(
+                Permissao.CONJUNTO_VISUALIZAR, Permissao.CONJUNTO_GERENCIAR,
+                Permissao.INDICADOR_VISUALIZAR, Permissao.INDICADOR_PUBLICAR,
+                Permissao.FONTE_VISUALIZAR, Permissao.DADOS_VISUALIZAR);
+    }
+
+    @Test
     void soOAdministradorGerenciaUsuarios() {
         assertThat(Arrays.stream(Perfil.values()).filter(p -> p.permissoes().contains(Permissao.USUARIO_GERENCIAR)))
                 .containsExactly(Perfil.ADMINISTRADOR);

@@ -61,8 +61,9 @@ o padrão no compose; senha = login):
 |---|---|
 | `admin` | Administrador |
 | `operador` | Operador |
+| `analista` | Analista |
 
-(Os tickets dos outros perfis adicionam `analista` e `auditor`.)
+(O ticket do Auditor adiciona `auditor`.)
 
 ## O que cada perfil vê nas telas
 
@@ -74,6 +75,13 @@ Além da API (que devolve 403), o frontend esconde o que o usuário não pode us
 | Mapeamento de colunas | formulário e botões editar/excluir — o de-para continua visível (`fonte:gerenciar`) |
 | Lotes e Pipeline | "Liberar para Silver" e "Descartar" (`lote:gerenciar`); "Inspecionar Erros" (`quarentena:visualizar`) |
 | Detalhe da Quarentena | revalidar, descartar, iniciar análise, correção manual, cadastro de domínio (`quarentena:tratar`) |
+| Conjunto de Dados (`/conjuntos-dados`) | a aba e os atalhos "Quarentena" (`quarentena:visualizar`) — o Analista compara só Bronze e Silver |
+| Conjuntos e Cobertura | formulário "Novo Conjunto" (`conjunto:gerenciar`) |
+| Indicadores (Gold) | "Novo tipo", editar e desativar tipo (`indicador:publicar`) |
+
+> A tela Gold (`/gold`) segue **fora do menu** por decisão anterior (LIZARDS-27); a rota
+> existe e já respeita `indicador:visualizar`. Para devolver ao menu, é só descomentar o item
+> em `Sidebar.vue` (já com a permissão preenchida).
 
 Usuários reais são cadastrados pela tela **Usuários e Acessos** (`/admin/usuarios`), com
 senha temporária — o Keycloak obriga a troca no primeiro login.

@@ -31,7 +31,18 @@ public enum Perfil {
                     Permissao.FONTE_VISUALIZAR, Permissao.FONTE_GERENCIAR,
                     Permissao.LOTE_VISUALIZAR, Permissao.LOTE_GERENCIAR,
                     Permissao.QUARENTENA_VISUALIZAR, Permissao.QUARENTENA_TRATAR,
-                    Permissao.DADOS_VISUALIZAR));
+                    Permissao.DADOS_VISUALIZAR)),
+
+    /**
+     * LIZARDS-46: cuida da saida do dado - conjuntos/cobertura e indicadores (Gold). Ve as
+     * fontes e compara Bronze/Silver, mas nao a quarentena (a aba some na tela de dados).
+     */
+    ANALISTA("perfil-analista", "Analista",
+            "Conjuntos e cobertura, indicadores e publicacao da Gold",
+            "analista", EnumSet.of(
+                    Permissao.CONJUNTO_VISUALIZAR, Permissao.CONJUNTO_GERENCIAR,
+                    Permissao.INDICADOR_VISUALIZAR, Permissao.INDICADOR_PUBLICAR,
+                    Permissao.FONTE_VISUALIZAR, Permissao.DADOS_VISUALIZAR));
 
     private final String codigo;
     private final String nome;
