@@ -1,5 +1,6 @@
 package br.gov.sp.cps.datagis.config;
 
+import static br.gov.sp.cps.datagis.seguranca.Permissao.AUDITORIA_VISUALIZAR;
 import static br.gov.sp.cps.datagis.seguranca.Permissao.CONJUNTO_GERENCIAR;
 import static br.gov.sp.cps.datagis.seguranca.Permissao.CONJUNTO_VISUALIZAR;
 import static br.gov.sp.cps.datagis.seguranca.Permissao.DADOS_VISUALIZAR;
@@ -14,12 +15,15 @@ import static br.gov.sp.cps.datagis.seguranca.Permissao.QUARENTENA_VISUALIZAR;
 import static br.gov.sp.cps.datagis.seguranca.Permissao.USUARIO_GERENCIAR;
 import static org.springframework.http.HttpMethod.GET;
 
+import br.gov.sp.cps.datagis.auditoria.FiltroAuditoria;
+import br.gov.sp.cps.datagis.auditoria.LogAuditoriaRepositorio;
 import br.gov.sp.cps.datagis.seguranca.ConversorRolesKeycloak;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.ExceptionTranslationFilter;
 
 /**
  * Controle de acesso (RBAC, LIZARDS-47). O backend nao tem login: o frontend autentica no
@@ -40,8 +44,11 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain filterChain(HttpSecurity http, LogAuditoriaRepositorio logAuditoria) throws Exception {
         http.csrf(csrf -> csrf.disable())
+            // Log de auditoria (LIZARDS-48): depois da leitura do token (sabe quem e o
+            // usuario) e antes da traducao de "acesso negado" (registra o 403 tambem)
+            .addFilterBefore(new FiltroAuditoria(logAuditoria), ExceptionTranslationFilter.class)
             .sessionManagement(sessao -> sessao.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 // Publico: health do compose/monitoramento, documentacao da API e pagina de erro
@@ -74,6 +81,9 @@ public class SecurityConfig {
 
                 // Administracao de usuarios e roles
                 .requestMatchers("/api/admin/**").hasAuthority(USUARIO_GERENCIAR.codigo())
+
+                // Log de auditoria (so consulta - nao existe escrita pela API)
+                .requestMatchers(GET, "/api/auditoria/**").hasAuthority(AUDITORIA_VISUALIZAR.codigo())
 
                 .anyRequest().denyAll())
             .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new ConversorRolesKeycloak())));

@@ -42,7 +42,20 @@ public enum Perfil {
             "analista", EnumSet.of(
                     Permissao.CONJUNTO_VISUALIZAR, Permissao.CONJUNTO_GERENCIAR,
                     Permissao.INDICADOR_VISUALIZAR, Permissao.INDICADOR_PUBLICAR,
-                    Permissao.FONTE_VISUALIZAR, Permissao.DADOS_VISUALIZAR));
+                    Permissao.FONTE_VISUALIZAR, Permissao.DADOS_VISUALIZAR)),
+
+    /**
+     * LIZARDS-48: somente leitura - ve todas as telas de dado e o log de auditoria, nao
+     * altera nada. As permissoes ":visualizar" sao listadas uma a uma (e nao filtradas pelo
+     * sufixo) pra que permissao nova nunca entre aqui sem alguem decidir.
+     */
+    AUDITOR("perfil-auditor", "Auditor",
+            "Consulta de todas as telas de dados e dos logs de auditoria, sem alterar nada",
+            "auditor", EnumSet.of(
+                    Permissao.FONTE_VISUALIZAR, Permissao.LOTE_VISUALIZAR,
+                    Permissao.QUARENTENA_VISUALIZAR, Permissao.DADOS_VISUALIZAR,
+                    Permissao.CONJUNTO_VISUALIZAR, Permissao.INDICADOR_VISUALIZAR,
+                    Permissao.AUDITORIA_VISUALIZAR));
 
     private final String codigo;
     private final String nome;

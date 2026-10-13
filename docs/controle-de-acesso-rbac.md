@@ -62,8 +62,24 @@ o padrão no compose; senha = login):
 | `admin` | Administrador |
 | `operador` | Operador |
 | `analista` | Analista |
+| `auditor` | Auditor |
 
-(O ticket do Auditor adiciona `auditor`.)
+## Log de auditoria (LIZARDS-48)
+
+Toda requisição que **altera** dado (POST/PUT/PATCH/DELETE) é gravada em
+`controle.log_auditoria` (`V075`) pelo `FiltroAuditoria`: quem (login e perfis do token),
+o quê (ação legível + rota), quando, de onde (IP), quanto tempo levou e o resultado —
+**inclusive as recusadas** (401/403) e as que deram erro. Leituras (GET) não entram.
+
+- **Somente inserção (RN025):** um trigger recusa UPDATE e DELETE com `ORA-20025`, até
+  para o dono da tabela.
+- **O corpo da requisição não é gravado** (tem senha temporária e uploads de GB).
+- Consulta: tela **Logs de Auditoria** (`/auditoria`) ou `GET /api/auditoria`
+  (filtros `usuario`, `texto`, `metodo`, `sucesso`, `de`, `ate`, `pagina`, `tamanho`),
+  com a permissão `auditoria:visualizar`.
+- Endpoint novo que altera dado precisa de uma linha em `DescricaoAcao` — o
+  `DescricaoAcaoTest` falha se faltar.
+- Não cobre login/logout: esses eventos ficam no próprio Keycloak (console → Events).
 
 ## O que cada perfil vê nas telas
 
@@ -78,6 +94,7 @@ Além da API (que devolve 403), o frontend esconde o que o usuário não pode us
 | Conjunto de Dados (`/conjuntos-dados`) | a aba e os atalhos "Quarentena" (`quarentena:visualizar`) — o Analista compara só Bronze e Silver |
 | Conjuntos e Cobertura | formulário "Novo Conjunto" (`conjunto:gerenciar`) |
 | Indicadores (Gold) | "Novo tipo", editar e desativar tipo (`indicador:publicar`) |
+| Logs de Auditoria | não tem ação nenhuma — o log nunca é editável |
 
 > A tela Gold (`/gold`) segue **fora do menu** por decisão anterior (LIZARDS-27); a rota
 > existe e já respeita `indicador:visualizar`. Para devolver ao menu, é só descomentar o item

@@ -31,6 +31,18 @@ class PerfilTest {
     }
 
     @Test
+    void auditorSoLeTodasAsTelasEOLogDeAuditoria() {
+        assertThat(Perfil.AUDITOR.permissoes()).containsExactlyInAnyOrder(
+                Permissao.FONTE_VISUALIZAR, Permissao.LOTE_VISUALIZAR,
+                Permissao.QUARENTENA_VISUALIZAR, Permissao.DADOS_VISUALIZAR,
+                Permissao.CONJUNTO_VISUALIZAR, Permissao.INDICADOR_VISUALIZAR,
+                Permissao.AUDITORIA_VISUALIZAR);
+        // Bate com "todas as :visualizar + auditoria:visualizar" do desenho aprovado
+        assertThat(Perfil.AUDITOR.permissoes()).allMatch(p -> p.codigo().endsWith(":visualizar"))
+                .containsAll(Arrays.stream(Permissao.values()).filter(p -> p.codigo().endsWith(":visualizar")).toList());
+    }
+
+    @Test
     void soOAdministradorGerenciaUsuarios() {
         assertThat(Arrays.stream(Perfil.values()).filter(p -> p.permissoes().contains(Permissao.USUARIO_GERENCIAR)))
                 .containsExactly(Perfil.ADMINISTRADOR);

@@ -281,7 +281,8 @@ trade-offs em `docs/gold-procedures-calculo-publicacao.md`.
 - `fonte_dado` — catálogo de fontes (ver seção 2.8, estendido para agendamento)
 - `lote_ingestao` (fonte_dado_id, arquivo_origem, data_upload, usuário, hash_arquivo)
 - `pipeline_execucao` — histórico de execuções (substitui o que seria "DAG run" do Airflow)
-- `log_auditoria` — **append-only**, sem UPDATE/DELETE possível (RN025 do DRN)
+- `log_auditoria` — **append-only**, sem UPDATE/DELETE possível (RN025 do DRN) —
+  **criada em 2026-10-13 (`V075`, LIZARDS-48, §9.39)**
 
 ### 2.8. `fonte_dado` — extensão para agendamento automático e ingestão genérica
 Discutido: além do cadastro básico, a fonte de dado pode ter aquisição automatizada
@@ -1926,6 +1927,22 @@ e de manutenção em **`docs/controle-de-acesso-rbac.md`**. Substitui o bypass d
   `quarentena:visualizar` (Analista compara Bronze e Silver). Formulário de Conjuntos e
   ações de tipo de indicador (Gold) escondidos sem permissão de escrita. Gold continua fora
   do menu (LIZARDS-27). Backend 565 testes, frontend 67.
+- **LIZARDS-48 (Auditor) — FEITO 2026-10-13:** `Perfil.AUDITOR` (todas as `:visualizar` +
+  `auditoria:visualizar`, listadas uma a uma) + usuário `auditor`. **Log de auditoria**:
+  `V075__criar_log_auditoria.sql` (`controle.log_auditoria`, trigger append-only
+  `ORA-20025` — RN025, finalmente implementada; ver §2.7). `FiltroAuditoria` dentro da
+  cadeia do Spring Security, **antes do `ExceptionTranslationFilter`** — assim já sabe o
+  usuário do token e ainda vê o 403 (tentativa negada também fica registrada). Não é
+  `@Component` (seria registrado 2x). `DescricaoAcao` traduz método+rota em ação legível
+  casando os moldes por conta própria (o 403 nunca chega no controller).
+  `GET /api/auditoria` + tela `/auditoria`. Testes: `DescricaoAcaoTest` (varre controllers:
+  todo endpoint de escrita precisa de descrição), `LogAuditoriaOracleIT` (grava, filtra,
+  pagina, e UPDATE/DELETE dão `ORA-20025` no Oracle real), 2 casos no `MatrizAcessoTest`
+  provando a posição do filtro. Backend 604 unitários + 11 de Oracle, frontend 70.
+- **Pegadinha de contagem de testes:** o surefire (config padrão) **não roda `*IT`** no
+  `mvn test` comum — só `*Test`/`*Tests`. Os `*OracleIT` só executam com
+  `-Dtest=*OracleIT` (+ `DATAGIS_ORACLE_IT=true`). Contagens de "suíte completa" citadas
+  neste arquivo antes de 2026-10-13 não incluíam os ITs.
 
 ---
 

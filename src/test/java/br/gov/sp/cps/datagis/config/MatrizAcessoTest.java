@@ -1,10 +1,14 @@
 package br.gov.sp.cps.datagis.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import br.gov.sp.cps.datagis.auditoria.LogAuditoriaRepositorio;
 import br.gov.sp.cps.datagis.seguranca.Perfil;
 import br.gov.sp.cps.datagis.seguranca.Permissao;
 import java.lang.reflect.Method;
@@ -49,6 +53,10 @@ class MatrizAcessoTest {
     @MockitoBean
     JwtDecoder jwtDecoder;
 
+    // O FiltroAuditoria grava toda requisicao que altera dado; aqui so precisa existir
+    @MockitoBean
+    LogAuditoriaRepositorio logAuditoria;
+
     @RestController
     static class PegaTudoController {
         @RequestMapping("/**")
@@ -84,7 +92,8 @@ class MatrizAcessoTest {
                 Arguments.of("POST", "/api/gold/publicar", Permissao.INDICADOR_PUBLICAR),
                 Arguments.of("PUT", "/api/indicadores/tipos/1", Permissao.INDICADOR_PUBLICAR),
                 Arguments.of("GET", "/api/admin/usuarios", Permissao.USUARIO_GERENCIAR),
-                Arguments.of("PUT", "/api/admin/usuarios/abc/roles", Permissao.USUARIO_GERENCIAR));
+                Arguments.of("PUT", "/api/admin/usuarios/abc/roles", Permissao.USUARIO_GERENCIAR),
+                Arguments.of("GET", "/api/auditoria", Permissao.AUDITORIA_VISUALIZAR));
     }
 
     @ParameterizedTest(name = "{0} {1} exige {2}")
@@ -118,6 +127,32 @@ class MatrizAcessoTest {
         mvc.perform(request(HttpMethod.valueOf(metodo), rota)
                         .with(comPermissoes(perfil.permissoes().toArray(Permissao[]::new))))
                 .andExpect(status().is(esperado));
+    }
+
+    @Test
+    void auditoriaRegistraATentativaNegadaComOUsuarioDoToken() throws Exception {
+        mvc.perform(request(HttpMethod.POST, "/api/quarentena/lotes/45/liberar")
+                        .with(jwt().jwt(j -> j.subject("uuid-maria").claim("preferred_username", "maria"))
+                                .authorities(new SimpleGrantedAuthority(Permissao.LOTE_VISUALIZAR.codigo()))))
+                .andExpect(status().isForbidden());
+
+        verify(logAuditoria).registrar(argThat(r -> r.statusHttp() == 403
+                && !r.sucesso()
+                && "uuid-maria".equals(r.usuarioId())
+                && "Liberar lote para a Silver".equals(r.acao())
+                && "/api/quarentena/lotes/{loteId}/liberar".equals(r.rotaPadrao())));
+    }
+
+    @Test
+    void auditoriaRegistraAAcaoPermitidaENaoRegistraLeitura() throws Exception {
+        mvc.perform(request(HttpMethod.POST, "/api/fontes/3/executar").with(comPermissoes(Permissao.FONTE_GERENCIAR)))
+                .andExpect(status().isOk());
+        mvc.perform(request(HttpMethod.GET, "/api/fontes").with(comPermissoes(Permissao.FONTE_VISUALIZAR)))
+                .andExpect(status().isOk());
+
+        verify(logAuditoria, times(1)).registrar(argThat(r -> r.sucesso()
+                && r.statusHttp() == 200
+                && "Executar ingestao da fonte".equals(r.acao())));
     }
 
     @Test
