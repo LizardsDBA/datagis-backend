@@ -60,8 +60,20 @@ o padrão no compose; senha = login):
 | Login | Perfil |
 |---|---|
 | `admin` | Administrador |
+| `operador` | Operador |
 
-(Os tickets dos outros perfis adicionam `operador`, `analista` e `auditor`.)
+(Os tickets dos outros perfis adicionam `analista` e `auditor`.)
+
+## O que cada perfil vê nas telas
+
+Além da API (que devolve 403), o frontend esconde o que o usuário não pode usar:
+
+| Tela | Sem a permissão de escrita, some... |
+|---|---|
+| Cadastro de Fontes | "Adicionar fonte", editar, executar, enviar arquivo (`fonte:gerenciar`); "Ver conjunto de dados" (`dados:visualizar`) |
+| Mapeamento de colunas | formulário e botões editar/excluir — o de-para continua visível (`fonte:gerenciar`) |
+| Lotes e Pipeline | "Liberar para Silver" e "Descartar" (`lote:gerenciar`); "Inspecionar Erros" (`quarentena:visualizar`) |
+| Detalhe da Quarentena | revalidar, descartar, iniciar análise, correção manual, cadastro de domínio (`quarentena:tratar`) |
 
 Usuários reais são cadastrados pela tela **Usuários e Acessos** (`/admin/usuarios`), com
 senha temporária — o Keycloak obriga a troca no primeiro login.

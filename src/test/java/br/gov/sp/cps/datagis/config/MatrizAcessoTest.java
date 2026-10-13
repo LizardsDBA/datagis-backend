@@ -5,6 +5,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import br.gov.sp.cps.datagis.seguranca.Perfil;
 import br.gov.sp.cps.datagis.seguranca.Permissao;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -99,6 +100,24 @@ class MatrizAcessoTest {
         Permissao[] outras = Arrays.stream(Permissao.values()).filter(p -> p != exigida).toArray(Permissao[]::new);
         mvc.perform(request(HttpMethod.valueOf(metodo), rota).with(comPermissoes(outras)))
                 .andExpect(status().isForbidden());
+    }
+
+    static Stream<Arguments> perfisERotas() {
+        return Arrays.stream(Perfil.values())
+                .flatMap(perfil -> rotas().map(rota -> Arguments.of(perfil, rota.get()[0], rota.get()[1], rota.get()[2])));
+    }
+
+    /**
+     * Cada perfil (com as permissoes que o Keycloak expande da role composta) acessa a rota
+     * se e somente se o pacote dele contem a permissao exigida. Perfil novo entra aqui sozinho.
+     */
+    @ParameterizedTest(name = "{0}: {1} {2}")
+    @MethodSource("perfisERotas")
+    void perfilAcessaSoOQueOPacoteDele(Perfil perfil, String metodo, String rota, Permissao exigida) throws Exception {
+        int esperado = perfil.permissoes().contains(exigida) ? 200 : 403;
+        mvc.perform(request(HttpMethod.valueOf(metodo), rota)
+                        .with(comPermissoes(perfil.permissoes().toArray(Permissao[]::new))))
+                .andExpect(status().is(esperado));
     }
 
     @Test

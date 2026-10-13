@@ -62,23 +62,29 @@ class KeycloakProvisionadorTest {
     }
 
     @Test
-    void criaUsuarioDeTesteSoSeAindaNaoExistir() {
+    void criaUmUsuarioDeTestePorPerfilComOProprioPerfil() {
         when(keycloak.listarRoles()).thenReturn(todasAsRolesDoCatalogo());
         when(keycloak.compostasDaRole(anyString())).thenReturn(List.of());
-        when(keycloak.buscarPorLogin("admin")).thenReturn(Optional.empty());
-        when(keycloak.criarUsuario("admin", "Administrador", "Teste", "admin@datagis.local")).thenReturn("id-admin");
+        when(keycloak.buscarPorLogin(anyString())).thenReturn(Optional.empty());
+        for (Perfil perfil : Perfil.values()) {
+            String login = perfil.usuarioDev();
+            when(keycloak.criarUsuario(login, perfil.nome(), "Teste", login + "@datagis.local")).thenReturn("id-" + login);
+        }
 
         provisionador(true).sincronizar();
 
-        verify(keycloak).definirSenha("id-admin", "admin", false);
-        verify(keycloak).adicionarRoles(eq("id-admin"), argThat(r -> r.size() == 1 && r.get(0).name().equals("perfil-administrador")));
+        for (Perfil perfil : Perfil.values()) {
+            String id = "id-" + perfil.usuarioDev();
+            verify(keycloak).definirSenha(id, perfil.usuarioDev(), false);
+            verify(keycloak).adicionarRoles(eq(id), argThat(r -> r.size() == 1 && r.get(0).name().equals(perfil.codigo())));
+        }
     }
 
     @Test
     void naoMexeEmUsuarioDeTesteQueJaExiste() {
         when(keycloak.listarRoles()).thenReturn(todasAsRolesDoCatalogo());
         when(keycloak.compostasDaRole(anyString())).thenReturn(List.of());
-        when(keycloak.buscarPorLogin("admin"))
+        when(keycloak.buscarPorLogin(anyString()))
                 .thenReturn(Optional.of(new KcUsuario("id-admin", "admin", "A", "B", "a@b", true, 0L)));
 
         provisionador(true).sincronizar();

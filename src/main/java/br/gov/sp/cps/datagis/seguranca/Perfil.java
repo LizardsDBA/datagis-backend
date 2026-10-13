@@ -15,14 +15,23 @@ import java.util.Set;
  * no Keycloak na proxima subida (adiciona o que falta e remove o que saiu).
  *
  * <p>{@code usuarioDev}: login de teste criado quando {@code app.keycloak.usuarios-dev=true}
- * (senha igual ao login). Os demais perfis (Operador, Analista, Auditor) entram nos seus
- * proprios tickets (LIZARDS-45, 46 e 48).
+ * (senha igual ao login). Um perfil por ticket do board: Administrador (LIZARDS-47),
+ * Operador (LIZARDS-45), Analista (LIZARDS-46), Auditor (LIZARDS-48).
  */
 public enum Perfil {
 
     ADMINISTRADOR("perfil-administrador", "Administrador",
             "Acesso a todas as telas, cadastro de usuarios e controle de acesso",
-            "admin", EnumSet.allOf(Permissao.class));
+            "admin", EnumSet.allOf(Permissao.class)),
+
+    /** LIZARDS-45: cuida da entrada do dado - fontes, lotes/pipeline e quarentena. */
+    OPERADOR("perfil-operador", "Operador",
+            "Cadastro e execucao de fontes, lotes e pipeline, tratamento da quarentena",
+            "operador", EnumSet.of(
+                    Permissao.FONTE_VISUALIZAR, Permissao.FONTE_GERENCIAR,
+                    Permissao.LOTE_VISUALIZAR, Permissao.LOTE_GERENCIAR,
+                    Permissao.QUARENTENA_VISUALIZAR, Permissao.QUARENTENA_TRATAR,
+                    Permissao.DADOS_VISUALIZAR));
 
     private final String codigo;
     private final String nome;

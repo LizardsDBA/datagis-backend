@@ -1909,7 +1909,17 @@ e de manutenção em **`docs/controle-de-acesso-rbac.md`**. Substitui o bypass d
     as telas ainda mandam `analistaId = 1` fixo. Identidade real do autor vai pro log de
     auditoria (LIZARDS-48).
   - Botões de ação ainda não escondem por permissão (o backend já barra com 403) — cada
-    ticket de perfil faz isso nas telas dele.
+    ticket de perfil faz isso nas telas dele. **Fontes, Mapeamento, Lotes e Quarentena
+    feitos na LIZARDS-45.**
+- **Mudança de plano (2026-10-13):** os 4 tickets vão na **mesma PR**
+  (`feat/rbac-administrador`), um commit por ticket.
+- **LIZARDS-45 (Operador) — FEITO 2026-10-13:** `Perfil.OPERADOR` (`fonte:*`, `lote:*`,
+  `quarentena:*`, `dados:visualizar`) + usuário de teste `operador`. Telas escondem ações
+  sem a permissão de escrita (tabela em `docs/controle-de-acesso-rbac.md`).
+  `MatrizAcessoTest.perfilAcessaSoOQueOPacoteDele` testa todo perfil × toda rota (perfil
+  novo entra sozinho); `PerfilTest` trava a composição aprovada. Confirmado ao vivo que o
+  provisionador cria perfil novo num Keycloak já existente, sem recriar volume. Backend 538
+  testes, frontend 64.
 
 ---
 
