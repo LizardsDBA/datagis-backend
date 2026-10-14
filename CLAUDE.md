@@ -276,11 +276,13 @@ do CAR/PR via `POST /api/gold/publicar`. Design original, cobertura por indicado
 trade-offs em `docs/gold-procedures-calculo-publicacao.md`.
 
 ### 2.7. Schema de controle (transversal)
-- `usuario`, `papel`, `usuario_papel` — RBAC (**adiado**, ver seção 4)
+- ~~`usuario`, `papel`, `usuario_papel`~~ — **não serão criadas**: identidade e RBAC
+  moram no Keycloak (§9.39, decisão de 2026-10-12)
 - `fonte_dado` — catálogo de fontes (ver seção 2.8, estendido para agendamento)
 - `lote_ingestao` (fonte_dado_id, arquivo_origem, data_upload, usuário, hash_arquivo)
 - `pipeline_execucao` — histórico de execuções (substitui o que seria "DAG run" do Airflow)
-- `log_auditoria` — **append-only**, sem UPDATE/DELETE possível (RN025 do DRN)
+- `log_auditoria` — **append-only**, sem UPDATE/DELETE possível (RN025 do DRN) —
+  **criada em 2026-10-13 (`V075`, LIZARDS-48, §9.39)**
 
 ### 2.8. `fonte_dado` — extensão para agendamento automático e ingestão genérica
 Discutido: além do cadastro básico, a fonte de dado pode ter aquisição automatizada
@@ -521,6 +523,7 @@ starters `-test` granulares do Boot 4, mais tudo do §4.4 acima.
 
 ### 4.6. Ambiente de desenvolvimento em containers — **[DECIDIDO, implementado e testado end-to-end]**
 Dev roda **3 containers via `docker compose`**: `oracle` + `backend` + `frontend`.
+**Desde 2026-10-12 são 4**: entrou o `keycloak` (login/RBAC, porta 8180 — §9.39).
 Testado em 2026-09-02 no WSL: os 3 sobem, Oracle fica `healthy`, backend conecta e
 migra Flyway em `CONTROLE`, `curl localhost:8080/actuator/health` → `200 UP`, Vite serve
 em `localhost:5173` e o proxy `/api` alcança o backend pela rede Docker.
@@ -801,7 +804,10 @@ fonte cadastrada é editável (útil pra corrigir URL/circuito sem nova migratio
 `IngestaoGeoJsonExecutorTest`, `LoteIngestaoWriterTest`, `PaginadorUrlGeoJsonTest`,
 `TratadorDeErroTest`, `FonteDadoServiceTest`), `BUILD SUCCESS`.
 
-### 5.3. Spring Security — bypass temporário
+### 5.3. Spring Security — bypass temporário — **[SUBSTITUÍDO em 2026-10-12 pelo RBAC com Keycloak, §9.39]**
+> Histórico. O `SecurityConfig` agora valida JWT do Keycloak e libera cada rota por
+> permissão — ver §9.39 e `docs/controle-de-acesso-rbac.md`.
+
 A dependência `spring-boot-starter-security` fica no projeto (para não reconfigurar
 Maven depois), mas com uma configuração provisória liberando tudo, marcada para
 remoção quando RF001/RN008-012 forem implementados:
@@ -1862,6 +1868,81 @@ status novo é um efeito colateral consultável por um endpoint `GET` separado.
 **[EM ABERTO, registrado como roadmap, não implementado ainda]** - decisão da equipe
 de focar primeiro em fechar o que falta na Gold (ver §9.36/§9.37, "endpoint de status
 unificado" em andamento) antes de estender esse padrão pra Ingestão e Bronze→Silver.
+
+### 9.39. Login e controle de acesso (RBAC) com Keycloak — **[FEITO e testado ao vivo, 2026-10-12, `LIZARDS-47`]**
+Branch `feat/rbac-administrador` (backend e frontend), a partir da `sprint-2`. Guia de uso
+e de manutenção em **`docs/controle-de-acesso-rbac.md`**. Substitui o bypass da §5.3.
+
+- **Decisão da equipe (aprovada 2026-10-12):** identidade no **Keycloak**, não no Oracle —
+  as tabelas `usuario`/`papel`/`usuario_papel` previstas na §2.7 **não serão criadas**.
+- **Dois níveis:** o código confere só **roles de permissão** (`fonte:visualizar`,
+  `lote:gerenciar`, ... — enum `Permissao`); **perfis** são roles compostas do Keycloak
+  (enum `Perfil`). Usuário pode ter vários perfis + permissões avulsas. Os 4 tickets do
+  board (LIZARDS-45 Operador, 46 Analista, 47 Administrador, 48 Auditor) = 1 perfil cada,
+  **1 PR por ticket**; o 47 foi primeiro e carrega a fundação.
+- **Backend:** `spring-boot-starter-oauth2-resource-server` valida o JWT. Matriz de acesso
+  inteira no `SecurityConfig`, por rota; `anyRequest().denyAll()` no fim (rota nova nasce
+  fechada). `ConversorRolesKeycloak` mapeia `realm_access.roles` → authorities sem prefixo.
+  `KeycloakProvisionador` sincroniza o catálogo do código com o Keycloak na subida (cria,
+  ajusta composição, remove permissão que saiu do perfil; cria usuário de teste por perfil
+  se `app.keycloak.usuarios-dev=true`). `/api/admin/**` (cadastro de usuário, roles, senha
+  temporária) via `KeycloakAdminClient` (`RestClient` puro — a lib `keycloak-admin-client`
+  traz Jackson 2). Trava: admin não se desativa nem tira de si `usuario:gerenciar`.
+- **Frontend:** `keycloak-js` (Authorization Code + PKCE), app só monta logado; `apiFetch`
+  (`services/http.js`) substituiu os 36 `fetch` crus; `meta.permissao` nas rotas + guarda
+  no router; menu filtrado; rodapé com usuário real + sair; tela `/admin/usuarios`.
+- **Infra:** serviço `keycloak` (26.8.0, `start-dev`, H2 no volume `keycloak-data`), porta
+  8180. Realm `datagis` em `infra/keycloak/realm-datagis.json` (só clients + conta de
+  serviço — importado só na 1ª subida). `KC_HOSTNAME` fixo pra o `iss` não variar entre
+  navegador (`localhost:8180`) e backend (`keycloak:8080`).
+- **Testes:** `MatrizAcessoTest` (56 casos — libera com a permissão, nega com todas as
+  outras, 401 sem token, e varre todos os controllers pra pegar endpoint sem regra),
+  `ConversorRolesKeycloakTest`, `UsuarioAdminServiceTest`, `KeycloakProvisionadorTest`.
+  Backend **473 testes, 0 falhas** (incluindo os `*OracleIT`). Frontend 60 testes.
+- **Validado ao vivo:** 401 sem token; 401 com payload adulterado, assinatura adulterada e
+  token de outro realm; usuário só com `lote:visualizar` → 200 em `GET /api/lotes`, 403 em
+  liberar lote, fontes e admin.
+- **[EM ABERTO]**
+  - `conjuntosDadosService` (tela `/conjuntos-dados`, `dados:visualizar`) também chama
+    `GET /api/quarentena` → exige `quarentena:visualizar`. O Analista (LIZARDS-46) não tem
+    essa permissão: decidir no ticket dele se o perfil ganha ou a tela degrada.
+  - `analista_responsavel_id NUMBER` da quarentena não comporta o id do Keycloak (UUID);
+    as telas ainda mandam `analistaId = 1` fixo. Identidade real do autor vai pro log de
+    auditoria (LIZARDS-48).
+  - Botões de ação ainda não escondem por permissão (o backend já barra com 403) — cada
+    ticket de perfil faz isso nas telas dele. **Fontes, Mapeamento, Lotes e Quarentena
+    feitos na LIZARDS-45.**
+- **Mudança de plano (2026-10-13):** os 4 tickets vão na **mesma PR**
+  (`feat/rbac-administrador`), um commit por ticket.
+- **LIZARDS-45 (Operador) — FEITO 2026-10-13:** `Perfil.OPERADOR` (`fonte:*`, `lote:*`,
+  `quarentena:*`, `dados:visualizar`) + usuário de teste `operador`. Telas escondem ações
+  sem a permissão de escrita (tabela em `docs/controle-de-acesso-rbac.md`).
+  `MatrizAcessoTest.perfilAcessaSoOQueOPacoteDele` testa todo perfil × toda rota (perfil
+  novo entra sozinho); `PerfilTest` trava a composição aprovada. Confirmado ao vivo que o
+  provisionador cria perfil novo num Keycloak já existente, sem recriar volume. Backend 538
+  testes, frontend 64.
+- **LIZARDS-46 (Analista) — FEITO 2026-10-13:** `Perfil.ANALISTA` (`conjunto:*`,
+  `indicador:*`, `fonte:visualizar`, `dados:visualizar`) + usuário `analista`. Resolve o
+  [EM ABERTO] da `/conjuntos-dados`: a aba/atalhos "Quarentena" só aparecem com
+  `quarentena:visualizar` (Analista compara Bronze e Silver). Formulário de Conjuntos e
+  ações de tipo de indicador (Gold) escondidos sem permissão de escrita. Gold continua fora
+  do menu (LIZARDS-27). Backend 565 testes, frontend 67.
+- **LIZARDS-48 (Auditor) — FEITO 2026-10-13:** `Perfil.AUDITOR` (todas as `:visualizar` +
+  `auditoria:visualizar`, listadas uma a uma) + usuário `auditor`. **Log de auditoria**:
+  `V075__criar_log_auditoria.sql` (`controle.log_auditoria`, trigger append-only
+  `ORA-20025` — RN025, finalmente implementada; ver §2.7). `FiltroAuditoria` dentro da
+  cadeia do Spring Security, **antes do `ExceptionTranslationFilter`** — assim já sabe o
+  usuário do token e ainda vê o 403 (tentativa negada também fica registrada). Não é
+  `@Component` (seria registrado 2x). `DescricaoAcao` traduz método+rota em ação legível
+  casando os moldes por conta própria (o 403 nunca chega no controller).
+  `GET /api/auditoria` + tela `/auditoria`. Testes: `DescricaoAcaoTest` (varre controllers:
+  todo endpoint de escrita precisa de descrição), `LogAuditoriaOracleIT` (grava, filtra,
+  pagina, e UPDATE/DELETE dão `ORA-20025` no Oracle real), 2 casos no `MatrizAcessoTest`
+  provando a posição do filtro. Backend 604 unitários + 11 de Oracle, frontend 70.
+- **Pegadinha de contagem de testes:** o surefire (config padrão) **não roda `*IT`** no
+  `mvn test` comum — só `*Test`/`*Tests`. Os `*OracleIT` só executam com
+  `-Dtest=*OracleIT` (+ `DATAGIS_ORACLE_IT=true`). Contagens de "suíte completa" citadas
+  neste arquivo antes de 2026-10-13 não incluíam os ITs.
 
 ---
 
