@@ -20,6 +20,9 @@ class ConjuntosDadosControllerTest {
     @Mock
     private ConjuntosDadosService service;
 
+    @Mock
+    private ComparacaoCamadasService comparacaoService;
+
     @InjectMocks
     private ConjuntosDadosController controller;
 
@@ -87,5 +90,16 @@ class ConjuntosDadosControllerTest {
         ResponseEntity<RegistroCamadaDto> resposta = controller.buscarRegistroSilver(38L);
 
         assertThat(resposta.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+    }
+
+    @Test
+    void deveCompararCamadasDelegandoAoServico() {
+        ComparacaoCamadasDto comparacao = ComparacaoCamadasDto.semDestino(5L, "BRONZE", "SILVER", "sem linha");
+        when(comparacaoService.comparar(5L, "BRONZE", "SILVER")).thenReturn(comparacao);
+
+        ResponseEntity<ComparacaoCamadasDto> resposta = controller.compararCamadas(5L, "BRONZE", "SILVER");
+
+        assertThat(resposta.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resposta.getBody()).isSameAs(comparacao);
     }
 }
