@@ -77,6 +77,22 @@ public class TipoIndicador {
     @Column(name = "ordem_exibicao")
     private Integer ordemExibicao;
 
+    // Campos abaixo: V077. Nem todo indicador e percentual - o IFC e densidade
+    // (focos
+    // por mil hectares, pkg_calculo_ambiental/V045). Sem isso a tela desenharia a
+    // barra
+    // dele como se o valor fosse porcentagem.
+
+    /** PERCENTUAL ou DENSIDADE. Define a escala da barra na tela. */
+    @Column(length = 20)
+    @Builder.Default
+    private String unidade = "PERCENTUAL";
+
+    /** Texto exibido ao lado do valor: "%" ou "focos/1.000 ha". */
+    @Column(name = "unidade_simbolo", length = 30)
+    @Builder.Default
+    private String unidadeSimbolo = "%";
+
     @Column(name = "data_add")
     private LocalDateTime dataAdd;
 

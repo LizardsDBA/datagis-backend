@@ -11,7 +11,10 @@ import java.time.LocalDateTime;
  * com isso
  * que a tela de consulta (LIZARDS-34) monta os grupos de cabecalho e decide a
  * cor de cada
- * valor, sem precisar de um segundo endpoint so pra catalogo.
+ * valor, sem precisar de um segundo endpoint so pra catalogo. A V077
+ * acrescentou
+ * a unidade, porque o IFC e densidade e nao percentual - a tela precisa saber
+ * disso pra escolher a escala da barra.
  */
 public record TipoIndicadorResponse(
         Long id,
@@ -24,6 +27,8 @@ public record TipoIndicadorResponse(
         Integer limiteBom,
         Integer limiteAtencao,
         Integer ordemExibicao,
+        String unidade,
+        String unidadeSimbolo,
         LocalDateTime dataAdd) {
     public static TipoIndicadorResponse de(TipoIndicador tipo) {
         return new TipoIndicadorResponse(
@@ -37,6 +42,8 @@ public record TipoIndicadorResponse(
                 tipo.getLimiteBom(),
                 tipo.getLimiteAtencao(),
                 tipo.getOrdemExibicao(),
+                tipo.getUnidade(),
+                tipo.getUnidadeSimbolo(),
                 tipo.getDataAdd());
     }
 }
