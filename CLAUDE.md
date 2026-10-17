@@ -2100,11 +2100,16 @@ desenvolvida no repositório do frontend.
     apresentados significa "não declarado", e não "declarou zero". A interface possui
     estado próprio para indicador sem cálculo, mas ele depende de a Gold gravar `NULL`. A
     correção pertence às procedures (§9.36, §9.37).
-  - **ISAP e IAE em exatamente 100%.** O travamento de sanidade da V063 trunca a área de
-    interseção na área do imóvel quando a geometria de origem está corrompida, o que faz
-    esses imóveis apresentarem exatamente 100%. O valor é indistinguível de sobreposição
-    total legítima. Convém levantar quantos imóveis se encontram nessa condição antes de
-    interpretar o indicador.
+  - **ISAP e IAE em exatamente 100%.** O travamento de sanidade da V063 compara a área da
+    interseção, calculada pelo `SDO_GEOM`, com a área do imóvel, calculada em Java/JTS na
+    ingestão. São dois motores distintos: num imóvel inteiramente contido em área
+    protegida os dois valores diferem nas últimas casas decimais e, quando o do Oracle vem
+    maior, o travamento corta para a área do imóvel e o percentual fecha em exatamente 100.
+    São 679 imóveis nessa condição, de 4.611. Amostragem confirmou geometria válida
+    (`VALIDATE_GEOMETRY_WITH_CONTEXT` = TRUE) e diferença na sétima casa decimal entre as
+    duas áreas, ou seja sobreposição real e não defeito. O valor exato de 100 continua não
+    distinguindo o caso legítimo do caso de geometria corrompida descrito na V063, mas
+    deixou de ser indício de problema por si só.
   - **Textos do catálogo sem acentuação.** As descrições em `tipo_indicador.descricao`
     foram cadastradas sem acento e são exibidas assim na interface. Adicionalmente, a
     `regra_calculo` de ICV, IRL e IAPP ainda os descreve como não implementados, texto
@@ -2115,6 +2120,87 @@ desenvolvida no repositório do frontend.
     `GET /api/indicadores/municipios` em vez de implementação duplicada. No frontend, ambas
     as tarefas alteram `Sidebar.vue` e `router/index.js`, sendo necessário alinhar a ordem
     de merge.
+
+### 9.41. Consulta dos dados finais em tabela — frontend (Frontend) — **[FEITO e validado contra o backend real, 2026-10-17, `LIZARDS-34`]**
+Repositório `datagis-frontend`, branch `feat/visualizacao-dados-tabela`, a partir da
+`sprint-2`. Segunda metade do ticket cuja parte de backend está na §9.40. **Depende do
+merge do PR de backend:** a tela lê `unidade` e `unidade_simbolo` do catálogo, colunas
+criadas pela `V077`; sem elas o IFC é desenhado em escala percentual.
+
+- **Serviço (`src/services/consultaIndicadoresService.js`):** instância Axios própria com
+  `baseURL: '/api'`, seguindo o padrão do `goldService`, e as duas funções
+  `listarIndicadoresPorMunicipio()` e `listarIndicadoresPorImovel()`. O tratamento de erro
+  propaga a mensagem devolvida pelo backend (`response.data.erro`) e recorre a texto padrão
+  quando ela não existe, de modo que a tela sempre tenha o que exibir.
+- **Duas visões em abas, não duas telas.** `Por município` e `Por imóvel` consomem o mesmo
+  componente e o mesmo conjunto de dados, alternando apenas a origem da listagem. A aba de
+  município é a inicial porque é o recorte que responde à pergunta do desafio; a de imóvel
+  é o detalhamento. Ao trocar de aba o detalhe aberto é fechado, evitando que o acordeão de
+  um município permaneça visível sobre a lista de imóveis.
+- **Faixa de resumo no topo:** municípios publicados, imóveis rurais e área total em
+  hectares. Os três números vêm da própria resposta agregada, sem chamada adicional, e dão
+  ao leitor a escala do recorte antes de ele interpretar qualquer indicador.
+- **Cabeçalho agrupado por dimensão.** As colunas dos 7 indicadores são agrupadas sob
+  CONSERVAÇÃO, TERRITORIAL e AMBIENTAL, e a ordem vem de `ordem_exibicao`. Nada disso está
+  escrito no componente: o agrupamento, a ordem, as faixas e a unidade são lidos do
+  catálogo (`GET /api/indicadores/tipos`). Acrescentar um indicador novo ou mudar um limite
+  não exige alteração de frontend.
+- **Detalhe em acordeão, não em modal.** Clicar na linha abre uma `<tr>` logo abaixo, com
+  `colspan` sobre a largura da tabela, trazendo os 7 indicadores em barras com os limites
+  marcados. Clicar de novo fecha. A escolha pelo acordeão preserva o contexto — o leitor
+  continua vendo as linhas vizinhas, o que importa quando o objetivo é comparar municípios.
+  Todos os detalhes começam fechados.
+- **Barra consciente da unidade.** Indicador percentual usa escala fixa de 0 a 100.
+  Indicador de densidade usa como escala o próprio `limite_atencao`, de modo que a barra
+  cheia corresponde ao limite crítico — não existe "100%" para focos por mil hectares. A
+  marca intermediária é suprimida nos dois casos em que não significa nada: em densidade, e
+  quando `limite_bom` e `limite_atencao` são iguais, como no IRL. Sem isso o IRL exibiria
+  duas marcas sobrepostas no mesmo ponto.
+- **Cor pelo sentido, não pelo valor bruto.** A classificação em `badge-tag--sucesso`,
+  `--alerta` e `--erro` compara o valor com os limites na direção indicada por `sentido`.
+  Indicador sem valor recebe `--neutro` e célula vazia, nunca a faixa crítica. Zero
+  efetivamente calculado recebe `min-width: 0.25rem` na barra preenchida, para permanecer
+  visível em vez de desaparecer e ser confundido com ausência de dado.
+- **Largura da barra arredondada.** A conversão do valor para percentual de largura produzia
+  resultados como `28.939999999999998%` no atributo de estilo. O valor é arredondado em duas
+  casas antes de ir ao DOM — não muda o desenho, mas evita ruído na inspeção e em teste que
+  compare o estilo gerado.
+- **Variáveis de tema do projeto, sem cor fixa.** Todas as cores vêm das variáveis já
+  definidas em `style.css`. A consequência prática é que a LIZARDS-38, que trata do tema
+  escuro, passa a cobrir esta tela sem alteração nenhuma aqui.
+- **Navegação:** item "Indicadores e Resultados" no `Sidebar.vue` e rota `/indicadores` no
+  `router/index.js`, com `meta.permissao: PERMISSOES.INDICADOR_VISUALIZAR` — mesma permissão
+  exigida pelo backend, de modo que o item não aparece para quem não poderia consultar os
+  dados de qualquer forma.
+- **Testes (`src/components/IndicadoresView.test.js`, 26 casos, e
+  `src/services/consultaIndicadoresService.test.js`, 5 casos):** cobrem a montagem a partir
+  do que o serviço devolve, a troca de abas com fechamento do detalhe, o acordeão abrindo e
+  fechando, a classificação de cor nos dois sentidos, a escala da barra em percentual e em
+  densidade, o símbolo exibido ao lado do valor, célula vazia para indicador nulo, zero
+  calculado permanecendo visível, a busca por município e as duas rotas do serviço com o
+  tratamento de erro. `axios` e `vue-router` substituídos por `vi.mock` — a suíte roda **sem
+  backend e sem Oracle**.
+  - Estado em 2026-10-17: 13 arquivos, **101 testes, 100% de sucesso**.
+- **`vi.resetModules()` em teste de serviço custa caro.** O teste que confere a `baseURL`
+  do Axios falhava por tempo, estourando os 5 segundos padrão do Vitest. Não era lentidão
+  do código e sim do `vi.resetModules()`, que descarta o registro de módulos e obriga o
+  Vitest a reprocessar o `axios` inteiro. A garantia de importação limpa que ele comprava já
+  existe de graça, porque o registro de módulos do Vitest é isolado por arquivo de teste.
+  Removido o `resetModules`, o mesmo caso passa em poucos milissegundos, com a asserção
+  intacta. **O `goldService.test.js` tem o mesmo padrão e levou 3,4 s na mesma execução** —
+  passa por pouco hoje e tende a falhar em máquina carregada. Não foi alterado por pertencer
+  a outra entrega; fica o registro para quem cuidar dele.
+- **[EM ABERTO]**
+  - **Zeros que significam ausência de dado.** A tela já distingue nulo de zero e possui o
+    estado neutro para indicador sem cálculo, mas ele depende de a Gold gravar `NULL`. Como
+    as procedures de IRL, IAPP e ICV gravam zero quando não encontram linha de origem
+    (§9.40), parte dos zeros exibidos em vermelho significa "não declarado". A correção é no
+    backend; a tela já está preparada para o dia em que chegar `null`.
+  - **Perfil Operador não vê o item de menu**, pela mesma razão descrita na §9.40: ele não
+    possui `indicador:visualizar`.
+  - **Interseção com a LIZARDS-35 (visualização em mapa).** Ambas as tarefas alteram
+    `Sidebar.vue` e `router/index.js`; convém alinhar a ordem de merge para evitar conflito
+    nesses dois arquivos.
 
 ---
 
