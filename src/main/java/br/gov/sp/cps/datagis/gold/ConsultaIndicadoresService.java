@@ -45,10 +45,11 @@ public class ConsultaIndicadoresService {
         String sql = "SELECT i.cod_imovel, i.municipio_cod_ibge, m.nome AS municipio_nome, i.area_ha, "
                 + "i.valor_icv, i.valor_irl, i.valor_iapp, i.valor_isap, "
                 + "i.valor_iae, i.valor_idesmat, i.valor_ifc, i.data_publicacao "
-                + "FROM " + goldSchema + ".imovel_publicado i "
+                + "FROM " + versaoAtualDeCadaImovel() + " "
                 // LEFT JOIN de proposito: imovel com municipio ainda nao semeado na Silver
                 // continua aparecendo na tela, so sem o nome.
                 + "LEFT JOIN " + silverSchema + ".municipio m ON m.cod_ibge = i.municipio_cod_ibge "
+                + "WHERE i.ordem_versao = 1 "
                 + "ORDER BY m.nome NULLS LAST, i.cod_imovel";
 
         return jdbcTemplate.query(sql, (rs, linha) -> new ConsultaImovelResponse(
@@ -83,8 +84,9 @@ public class ConsultaIndicadoresService {
                 + mediaPonderada("valor_iae") + ", "
                 + mediaPonderada("valor_idesmat") + ", "
                 + mediaPonderada("valor_ifc") + " "
-                + "FROM " + goldSchema + ".imovel_publicado i "
+                + "FROM " + versaoAtualDeCadaImovel() + " "
                 + "LEFT JOIN " + silverSchema + ".municipio m ON m.cod_ibge = i.municipio_cod_ibge "
+                + "WHERE i.ordem_versao = 1 "
                 + "GROUP BY i.municipio_cod_ibge "
                 + "ORDER BY MAX(m.nome) NULLS LAST";
 
@@ -100,6 +102,25 @@ public class ConsultaIndicadoresService {
                 lerDouble(rs, "valor_iae"),
                 lerDouble(rs, "valor_idesmat"),
                 lerDouble(rs, "valor_ifc")));
+    }
+
+    /**
+     * {@code gold.imovel_publicado} numerado por versao: a mais recente de cada imovel
+     * recebe {@code ordem_versao = 1}.
+     *
+     * <p>
+     * A tabela guarda uma linha por versao publicada (a chave e cod_imovel +
+     * indicador_versao_id): republicar um imovel com dado novo cria uma linha e mantem
+     * a antiga, que e o historico de auditoria. A tela mostra o estado atual, entao
+     * quem consulta filtra {@code ordem_versao = 1}; sem isso o imovel aparece uma vez
+     * por versao e a media do municipio soma a area dele em dobro. Mesmo criterio da
+     * comparacao Silver -> Gold (ComparacaoCamadasService): data de publicacao, e o id
+     * para desempatar.
+     */
+    private String versaoAtualDeCadaImovel() {
+        return "(SELECT p.*, ROW_NUMBER() OVER (PARTITION BY p.cod_imovel "
+                + "ORDER BY p.data_publicacao DESC, p.id DESC) AS ordem_versao "
+                + "FROM " + goldSchema + ".imovel_publicado p) i";
     }
 
     /**

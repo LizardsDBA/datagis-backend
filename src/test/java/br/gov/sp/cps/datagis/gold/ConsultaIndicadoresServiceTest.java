@@ -53,9 +53,31 @@ class ConsultaIndicadoresServiceTest {
     void visaoPorImovelDeveCruzarGoldComSilver() {
         String sql = sqlDe(() -> service.listarPorImovel());
 
-        assertThat(sql).contains("FROM GOLD.imovel_publicado i");
+        assertThat(sql).contains("FROM GOLD.imovel_publicado p");
         assertThat(sql).contains("LEFT JOIN SILVER.municipio m ON m.cod_ibge = i.municipio_cod_ibge");
         assertThat(sql).contains("ORDER BY m.nome NULLS LAST, i.cod_imovel");
+    }
+
+    // imovel_publicado guarda uma linha por versao publicada. Sem o filtro de versao, um
+    // imovel republicado aparece duas vezes e a area dele entra em dobro na media do
+    // municipio (achado testando contra o Oracle real).
+
+    @Test
+    @DisplayName("Visao por imovel deve ler so a versao mais recente de cada imovel")
+    void visaoPorImovelDeveLerSoAVersaoMaisRecente() {
+        assertFiltraVersaoMaisRecente(sqlDe(() -> service.listarPorImovel()));
+    }
+
+    @Test
+    @DisplayName("Visao por municipio deve agregar so a versao mais recente de cada imovel")
+    void visaoPorMunicipioDeveAgregarSoAVersaoMaisRecente() {
+        assertFiltraVersaoMaisRecente(sqlDe(() -> service.listarPorMunicipio()));
+    }
+
+    private static void assertFiltraVersaoMaisRecente(String sql) {
+        assertThat(sql).contains(
+                "ROW_NUMBER() OVER (PARTITION BY p.cod_imovel ORDER BY p.data_publicacao DESC, p.id DESC)");
+        assertThat(sql).contains("WHERE i.ordem_versao = 1");
     }
 
     @Test
