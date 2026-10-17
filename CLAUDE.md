@@ -1944,6 +1944,107 @@ e de manutenção em **`docs/controle-de-acesso-rbac.md`**. Substitui o bypass d
   `-Dtest=*OracleIT` (+ `DATAGIS_ORACLE_IT=true`). Contagens de "suíte completa" citadas
   neste arquivo antes de 2026-10-13 não incluíam os ITs.
 
+### 9.40. Consulta dos dados finais em tabela — backend — **[FEITO e validado contra o Oracle real, 2026-10-17, `LIZARDS-34`]**
+Branch `feat/visualizacao-dados-tabela`, a partir da `sprint-2`. Esta entrega contempla
+exclusivamente o backend; a interface corresponde à segunda metade do ticket e será
+desenvolvida no repositório do frontend.
+
+- **Objetivo da funcionalidade:** apresentar a relação entre os 7 indicadores em um
+  determinado recorte territorial, em duas visões sobre o mesmo conjunto de dados: **por
+  imóvel** (uma linha por imóvel publicado) e **por município** (uma linha por município,
+  com indicadores agregados).
+- **Agregação executada no banco de dados.** O recorte de homologação contém 4.611
+  imóveis. A centralização do cálculo em uma única camada garante consistência entre a
+  tela de tabela e a de mapa (LIZARDS-35), que consomem o mesmo indicador.
+- **Média ponderada pela área, não média aritmética simples.** Em um município com uma
+  propriedade de 10.000 ha e cinquenta de 2 ha, os dois métodos produzem resultados
+  divergentes; para indicadores ambientais, a unidade de análise relevante é o território,
+  não o número de propriedades. O denominador considera a área apenas dos imóveis que
+  possuem valor para o indicador em questão — incluir os demais faria com que a ausência
+  de cálculo fosse interpretada como valor zero, reduzindo indevidamente a média.
+- **Distinção entre `NULL` e zero.** O `NULLIF(..., 0)` no denominador previne divisão por
+  zero, e o `RowMapper` utiliza `rs.wasNull()` porque `getDouble` retorna `0` para valores
+  nulos. Indicador não calculado é serializado como `null` e renderizado como célula vazia;
+  valor zero efetivamente calculado é preservado e classificado na faixa correspondente. A
+  interface depende dessa distinção para não classificar como crítico um imóvel que apenas
+  não teve o indicador calculado.
+- **Exposição de `qtdImoveis` e `areaTotalHa`:** fornecem o contexto necessário à
+  interpretação do resultado agregado. Um município com 2 imóveis e 60.000 ha indica
+  concentração — o resultado é determinado por uma única propriedade.
+- **`V076__tipo_indicador_dimensao_e_faixas.sql`:** a tabela `gold.tipo_indicador` recebe
+  as colunas `dimensao` (CONSERVACAO | TERRITORIAL | AMBIENTAL), `sentido` (MAIOR_MELHOR |
+  MENOR_MELHOR), `limite_bom`, `limite_atencao` e `ordem_exibicao`, com restrições CHECK
+  sobre os dois domínios. O agrupamento por dimensão e os limites das faixas de
+  classificação residem no banco de dados: alterações de limite são efetuadas por `UPDATE`,
+  sem necessidade de nova versão do frontend. A coluna `sentido` é necessária porque IAE,
+  IDESMAT e IFC são indicadores de polaridade inversa, nos quais valores menores
+  representam melhor desempenho; sem essa informação, o pior resultado seria classificado
+  como adequado.
+- **Catálogo de indicadores sem endpoint adicional:** o `TipoIndicadorResponse` passou a
+  expor os cinco campos, de modo que o `GET /api/indicadores/tipos` já existente atende ao
+  consumo de dimensões e faixas pelo frontend.
+- **Endpoints:** `GET /api/indicadores/imoveis` e `GET /api/indicadores/municipios`
+  (`ConsultaIndicadoresController` e `ConsultaIndicadoresService`). A implementação utiliza
+  `JdbcTemplate` com SQL nativo, seguindo o padrão adotado no `DominioService`, por se
+  tratar de consultas que cruzam schemas (`GOLD.imovel_publicado` e `SILVER.municipio`) e
+  realizam agregação. Os nomes de schema são obtidos via
+  `@Value("${spring.flyway.placeholders.*Schema}")`, sem valores fixos no código.
+- **Justificativa do uso exclusivo da camada Gold:** os valores de indicador são gravados
+  pelas procedures durante a promoção (§9.33, §9.36, §9.37) e existem somente nessa
+  camada; a Silver não possui a coluna `valor_icv`. A única informação obtida fora da Gold
+  é o nome do município (`LEFT JOIN SILVER.municipio`), tabela de referência cadastral. O
+  `LEFT JOIN` é intencional: imóvel cujo município ainda não foi carregado na Silver
+  permanece na listagem, sem o nome resolvido.
+- **Controle de acesso:** as rotas são cobertas pela regra preexistente para
+  `GET /api/indicadores/**`, que exige a permissão `indicador:visualizar`. Nenhuma regra
+  nova foi adicionada ao `SecurityConfig`.
+- **Testes:** o `ConsultaIndicadoresServiceTest` (11 casos) captura o SQL gerado e valida o
+  acesso à Gold, o join com a Silver, o `GROUP BY` e a ponderação por área — incluindo
+  asserção `doesNotContain("AVG(")`, que impede a substituição por média aritmética
+  simples. Em seguida captura o `RowMapper` e o executa contra um `ResultSet` simulado,
+  comprovando a conversão de `NULL` para `null` e a preservação do valor zero. O
+  `ConsultaIndicadoresControllerTest` (5 casos) valida o contrato JSON dos dois endpoints.
+  **Total: 16 testes, 0 falhas.** Nenhum deles inicializa o contexto Spring ou acessa o
+  Oracle, permitindo execução em pipeline sem banco de dados.
+- **Validação em ambiente real (token do perfil `analista`):** `/municipios` retorna
+  Curitiba (111 imóveis, 1.316,97 ha), Maringá (1.843 imóveis, 35.839,45 ha) e Ponta Grossa
+  (2.657 imóveis, 187.029,84 ha); `/imoveis` retorna o código completo e o nome do
+  município resolvido a partir da Silver. Os totais são consistentes com
+  `SELECT COUNT(DISTINCT municipio_cod_ibge), COUNT(*) FROM GOLD.imovel_publicado`, que
+  retorna 3 e 4.611.
+- **Escopo limitado a municípios com dado publicado.** A tabela `SILVER.municipio` contém
+  os 399 municípios do Paraná; a consulta retorna 3 porque apenas esses possuem imóveis
+  promovidos à Gold. Municípios sem promoção não possuem indicadores calculados, e sua
+  inclusão resultaria em 396 linhas sem conteúdo. A listagem é ampliada automaticamente à
+  medida que novos municípios forem ingeridos, sem alteração de código.
+- **Identificação do imóvel pelo código CAR.** A camada pública do IAT/PR
+  (`geopr.iat.pr.gov.br/.../Base_Geo_Cadastro_Ambiental_rural`) não disponibiliza o nome do
+  imóvel, por se tratar de dado pessoal sob a LGPD; o campo `nomeImovel` está disponível
+  apenas na API oficial do SICAR, cujo acesso exige credenciamento. Essa é a razão de
+  `silver.imovel_rural` não possuir coluna `nome`, enquanto `silver.area_protegida` possui.
+  A API retorna o código integral (`PR-4106902-00B2EA81...`); a abreviação é decisão de
+  apresentação do frontend, uma vez que a busca pelo código completo deve permanecer
+  funcional — há teste automatizado assegurando esse comportamento.
+- **Restrição de privilégio em migrations sobre schema de terceiros:** a instrução
+  `COMMENT ON COLUMN` aplicada a tabela de outro schema resulta em **`ORA-41900`**, pois o
+  usuário da aplicação possui `CREATE/ALTER ANY TABLE`, mas não `COMMENT ANY TABLE`. Como
+  o Oracle executa commit implícito em comandos DDL, o `ALTER TABLE ... ADD` é persistido
+  mesmo quando a migration falha em instrução posterior. O saneamento exige o `DROP` das
+  colunas criadas e a remoção do registro correspondente em
+  `DELETE FROM flyway_schema_history WHERE "version" = '0XX'` (nomes de coluna em minúsculas
+  e entre aspas). Por esse motivo, a V076 foi escrita sem instruções `COMMENT`.
+- **[EM ABERTO]**
+  - **Perfil Operador sem acesso à tela.** O `Perfil.OPERADOR` não possui a permissão
+    `indicador:visualizar` (§9.39, LIZARDS-45); a tela estará disponível para
+    Administrador, Analista e Auditor, mas não para o Operador. Caso a equipe decida
+    conceder a permissão, a alteração consiste em uma linha no `Perfil.java` e o ajuste
+    correspondente no `PerfilTest`, a ser entregue como `fix<LIZARDS-34>`.
+  - **Interseção com a LIZARDS-35 (visualização em mapa).** A agregação por município
+    atende às duas telas; recomenda-se o reaproveitamento de
+    `GET /api/indicadores/municipios` em vez de implementação duplicada. No frontend, ambas
+    as tarefas alteram `Sidebar.vue` e `router/index.js`, sendo necessário alinhar a ordem
+    de merge.
+
 ---
 
 ## 10. Git — branches, commits e fluxo de PR — **[DECIDIDO, padrão da equipe LizardsDBA]**

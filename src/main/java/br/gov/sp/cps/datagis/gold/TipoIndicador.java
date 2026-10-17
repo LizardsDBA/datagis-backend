@@ -49,6 +49,34 @@ public class TipoIndicador {
     @Builder.Default
     private Boolean ativo = true;
 
+    // Campos abaixo: V076, para a tela de consulta de indicadores (LIZARDS-34). Sao
+    // regra
+    // de negocio, nao desenho - por isso moram no banco e nao num if do frontend.
+
+    /** Grupo de cabecalho na tela: CONSERVACAO, TERRITORIAL ou AMBIENTAL. */
+    @Column(length = 20)
+    private String dimensao;
+
+    /**
+     * MAIOR_MELHOR ou MENOR_MELHOR. Define o lado da comparacao das faixas: em ICV,
+     * IRL,
+     * IAPP e ISAP quanto maior melhor; em IAE, IDESMAT e IFC quanto menor melhor.
+     */
+    @Column(length = 15)
+    private String sentido;
+
+    /** Fronteira da faixa verde. */
+    @Column(name = "limite_bom")
+    private Integer limiteBom;
+
+    /** Fronteira da faixa amarela; fora dela e vermelho. */
+    @Column(name = "limite_atencao")
+    private Integer limiteAtencao;
+
+    /** Ordem das colunas na tela, da esquerda para a direita. */
+    @Column(name = "ordem_exibicao")
+    private Integer ordemExibicao;
+
     @Column(name = "data_add")
     private LocalDateTime dataAdd;
 
