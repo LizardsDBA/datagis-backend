@@ -84,6 +84,7 @@ class MatrizAcessoTest {
                 Arguments.of("POST", "/api/quarentena/imovel_rural/1/reprocessar", Permissao.QUARENTENA_TRATAR),
                 Arguments.of("POST", "/api/quarentena/dominios", Permissao.QUARENTENA_TRATAR),
                 Arguments.of("GET", "/api/conjuntos-dados/lotes/1/bronze", Permissao.DADOS_VISUALIZAR),
+                Arguments.of("GET", "/api/conjuntos-dados/registros/1/comparacao?origem=BRONZE&destino=SILVER", Permissao.DADOS_VISUALIZAR),
                 Arguments.of("GET", "/conjuntos", Permissao.CONJUNTO_VISUALIZAR),
                 Arguments.of("POST", "/conjuntos", Permissao.CONJUNTO_GERENCIAR),
                 Arguments.of("GET", "/api/gold/status", Permissao.INDICADOR_VISUALIZAR),

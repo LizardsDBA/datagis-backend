@@ -17,9 +17,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class ConjuntosDadosController {
 
     private final ConjuntosDadosService service;
+    private final ComparacaoCamadasService comparacaoService;
 
-    public ConjuntosDadosController(ConjuntosDadosService service) {
+    public ConjuntosDadosController(ConjuntosDadosService service, ComparacaoCamadasService comparacaoService) {
         this.service = service;
+        this.comparacaoService = comparacaoService;
     }
 
     @GetMapping("/fontes/{fonteDadoId}/ultimo-lote")
@@ -52,5 +54,14 @@ public class ConjuntosDadosController {
     public ResponseEntity<RegistroCamadaDto> buscarRegistroSilver(@PathVariable Long registroBrutoId) {
         RegistroCamadaDto registro = service.buscarRegistroSilver(registroBrutoId);
         return registro != null ? ResponseEntity.ok(registro) : ResponseEntity.noContent().build();
+    }
+
+    /** Diff do registro entre camadas vizinhas: {@code origem=BRONZE&destino=SILVER} ou {@code origem=SILVER&destino=GOLD}. */
+    @GetMapping("/registros/{registroBrutoId}/comparacao")
+    public ResponseEntity<ComparacaoCamadasDto> compararCamadas(
+            @PathVariable Long registroBrutoId,
+            @RequestParam String origem,
+            @RequestParam String destino) {
+        return ResponseEntity.ok(comparacaoService.comparar(registroBrutoId, origem, destino));
     }
 }
