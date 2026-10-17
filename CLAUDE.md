@@ -1962,6 +1962,14 @@ desenvolvida no repositório do frontend.
   não o número de propriedades. O denominador considera a área apenas dos imóveis que
   possuem valor para o indicador em questão — incluir os demais faria com que a ausência
   de cálculo fosse interpretada como valor zero, reduzindo indevidamente a média.
+- **Alcance da ponderação por área.** Para os indicadores cujo denominador é a área do
+  imóvel — ICV, IRL, ISAP, IAE e IDESMAT — a média ponderada reproduz exatamente o
+  indicador territorial, pois a soma dos numeradores dividida pela soma das áreas é a
+  própria definição do índice no conjunto. O IAPP é exceção: a V072 o calcula sobre a área
+  de APP declarada, não sobre a área do imóvel, de modo que a ponderação pela área do
+  imóvel constitui aproximação. O IFC não entra na comparação por ser indicador de
+  densidade. A correção exigiria publicar a área de APP por imóvel na Gold, alteração que
+  pertence às procedures (§9.37).
 - **Distinção entre `NULL` e zero.** O `NULLIF(..., 0)` no denominador previne divisão por
   zero, e o `RowMapper` utiliza `rs.wasNull()` porque `getDouble` retorna `0` para valores
   nulos. Indicador não calculado é serializado como `null` e renderizado como célula vazia;
@@ -1976,13 +1984,36 @@ desenvolvida no repositório do frontend.
   MENOR_MELHOR), `limite_bom`, `limite_atencao` e `ordem_exibicao`, com restrições CHECK
   sobre os dois domínios. O agrupamento por dimensão e os limites das faixas de
   classificação residem no banco de dados: alterações de limite são efetuadas por `UPDATE`,
-  sem necessidade de nova versão do frontend. A coluna `sentido` é necessária porque IAE,
-  IDESMAT e IFC são indicadores de polaridade inversa, nos quais valores menores
+  sem necessidade de nova versão do frontend. A coluna `sentido` é necessária porque ISAP,
+  IAE, IDESMAT e IFC são indicadores de polaridade inversa, nos quais valores menores
   representam melhor desempenho; sem essa informação, o pior resultado seria classificado
   como adequado.
+- **Polaridade do ISAP.** Apesar do nome sugerir o contrário, o ISAP é `MENOR_MELHOR`. A
+  `pkg_calculo_territorial` (V063) o define como a sobreposição do imóvel com unidade de
+  conservação, ou seja conflito territorial, sendo gêmeo do IAE em fórmula e em leitura. A
+  primeira versão da V076 o classificou como `MAIOR_MELHOR`, o que pintaria de verde
+  justamente o imóvel em situação mais irregular.
+- **Origem dos limites de faixa.** O PDF do desafio define a fórmula e a unidade de cada
+  indicador, não faixas de classificação; os valores gravados são portanto decisão de
+  produto e podem ser revistos pela equipe por `UPDATE`, sem alteração de código. A única
+  exceção é o IRL, que recebe 20 em `limite_bom` e em `limite_atencao` porque o percentual
+  mínimo de Reserva Legal na Mata Atlântica é 20% (Código Florestal, Lei 12.651/2012,
+  constante já fixada na V072): abaixo desse valor o imóvel está em desacordo com a lei,
+  acima está em conformidade, e não há faixa intermediária a representar.
+- **`V077__unidade_do_tipo_indicador.sql`:** acrescenta `unidade` (PERCENTUAL | DENSIDADE)
+  e `unidade_simbolo`, com restrição CHECK sobre o primeiro domínio e `DEFAULT` nas duas
+  colunas, de modo que indicador cadastrado posteriormente pela tela de administração
+  nasça como percentual. Seis dos sete indicadores são percentuais; o IFC não é: a
+  `pkg_calculo_ambiental` (V045) o calcula como focos de calor dentro do imóvel dividido
+  pela área do imóvel multiplicado por mil — focos por mil hectares — e grava `NULL` na
+  coluna percentual do resultado, deliberadamente. A página 6 do PDF do desafio define a
+  mesma fórmula. Sem essa informação no catálogo, a interface desenharia a barra do IFC em
+  escala percentual e exibiria o símbolo incorreto ao lado do valor. O comentário da V045
+  documenta a unidade para quem lê o SQL, mas não serve à aplicação para decidir como
+  exibir o número — razão pela qual se tornou coluna.
 - **Catálogo de indicadores sem endpoint adicional:** o `TipoIndicadorResponse` passou a
-  expor os cinco campos, de modo que o `GET /api/indicadores/tipos` já existente atende ao
-  consumo de dimensões e faixas pelo frontend.
+  expor os sete campos, de modo que o `GET /api/indicadores/tipos` já existente atende ao
+  consumo de dimensões, faixas e unidades pelo frontend.
 - **Endpoints:** `GET /api/indicadores/imoveis` e `GET /api/indicadores/municipios`
   (`ConsultaIndicadoresController` e `ConsultaIndicadoresService`). A implementação utiliza
   `JdbcTemplate` com SQL nativo, seguindo o padrão adotado no `DominioService`, por se
@@ -2004,14 +2035,25 @@ desenvolvida no repositório do frontend.
   simples. Em seguida captura o `RowMapper` e o executa contra um `ResultSet` simulado,
   comprovando a conversão de `NULL` para `null` e a preservação do valor zero. O
   `ConsultaIndicadoresControllerTest` (5 casos) valida o contrato JSON dos dois endpoints.
-  **Total: 16 testes, 0 falhas.** Nenhum deles inicializa o contexto Spring ou acessa o
-  Oracle, permitindo execução em pipeline sem banco de dados.
+  O `TipoIndicadorTest` passou de 5 para 6 casos, cobrindo os campos de catálogo no builder
+  — com o IFC como caso real de densidade — e conferindo por reflexão os nomes de coluna
+  que divergem do atributo (`limite_bom`, `limite_atencao`, `ordem_exibicao`,
+  `unidade_simbolo`), divergência que só se manifestaria em tempo de execução contra o
+  banco. O `TipoIndicadorControllerTest` passou de 10 para 11 casos, validando os sete
+  campos novos no JSON; o ISAP é montado sem unidade e a asserção exige `PERCENTUAL` e `%`
+  na resposta, cobrindo o caminho completo do valor padrão, do `@Builder.Default` até a
+  serialização. **Total: 18 testes novos, 0 falhas.** Nenhum deles inicializa o contexto
+  Spring ou acessa o Oracle, permitindo execução em pipeline sem banco de dados.
+  **Suíte completa: 631 testes, 0 falhas, 10 pulados.**
 - **Validação em ambiente real (token do perfil `analista`):** `/municipios` retorna
   Curitiba (111 imóveis, 1.316,97 ha), Maringá (1.843 imóveis, 35.839,45 ha) e Ponta Grossa
   (2.657 imóveis, 187.029,84 ha); `/imoveis` retorna o código completo e o nome do
   município resolvido a partir da Silver. Os totais são consistentes com
   `SELECT COUNT(DISTINCT municipio_cod_ibge), COUNT(*) FROM GOLD.imovel_publicado`, que
-  retorna 3 e 4.611.
+  retorna 3 e 4.611. A consulta ao catálogo após as duas migrations devolve as sete linhas
+  esperadas: ICV, IRL e IAPP como `MAIOR_MELHOR`; ISAP, IAE, IDESMAT e IFC como
+  `MENOR_MELHOR`; IRL com 20 em ambos os limites; IFC como `DENSIDADE` com símbolo
+  `focos/1.000 ha` e os demais como `PERCENTUAL` com `%`.
 - **Escopo limitado a municípios com dado publicado.** A tabela `SILVER.municipio` contém
   os 399 municípios do Paraná; a consulta retorna 3 porque apenas esses possuem imóveis
   promovidos à Gold. Municípios sem promoção não possuem indicadores calculados, e sua
@@ -2032,13 +2074,42 @@ desenvolvida no repositório do frontend.
   mesmo quando a migration falha em instrução posterior. O saneamento exige o `DROP` das
   colunas criadas e a remoção do registro correspondente em
   `DELETE FROM flyway_schema_history WHERE "version" = '0XX'` (nomes de coluna em minúsculas
-  e entre aspas). Por esse motivo, a V076 foi escrita sem instruções `COMMENT`.
+  e entre aspas). Por esse motivo, a V076 e a V077 foram escritas sem instruções `COMMENT`.
+- **Alteração de migration antes do merge, e o custo dela.** A V076 foi corrigida dentro
+  da própria branch, após o primeiro push e antes do merge, por conter valores errados de
+  `sentido` e de limite. A opção foi legítima porque a branch não havia sido integrada e
+  nenhum outro ambiente havia aplicado o arquivo — condição confirmada com a equipe antes
+  da alteração. O custo é que o Flyway guarda o checksum do arquivo no momento da
+  aplicação e aborta a inicialização quando ele diverge; o banco local exigiu
+  `UPDATE flyway_schema_history SET "checksum" = NULL WHERE "version" = '076'`, após o que
+  o próprio Flyway regrava o valor correto na subida seguinte. O nulo vale uma única vez e
+  substitui uma verificação automática por uma conferência manual, que neste caso foi feita
+  consultando as sete linhas de `tipo_indicador`. **Após o merge essa opção deixa de
+  existir:** migration integrada não se altera, e qualquer ajuste passa a exigir migration
+  nova, sob pena de impedir a inicialização do ambiente de todos os integrantes.
 - **[EM ABERTO]**
   - **Perfil Operador sem acesso à tela.** O `Perfil.OPERADOR` não possui a permissão
     `indicador:visualizar` (§9.39, LIZARDS-45); a tela estará disponível para
     Administrador, Analista e Auditor, mas não para o Operador. Caso a equipe decida
     conceder a permissão, a alteração consiste em uma linha no `Perfil.java` e o ajuste
     correspondente no `PerfilTest`, a ser entregue como `fix<LIZARDS-34>`.
+  - **Zero e ausência de dado são indistinguíveis na Gold.** As procedures de IRL, IAPP e
+    ICV inicializam o percentual em zero e gravam esse valor quando não localizam linha de
+    origem para o imóvel. Com 2.777 registros de reserva legal, 3.180 de APP declarada e
+    3.182 de vegetação nativa para 4.611 imóveis publicados, parte expressiva dos zeros
+    apresentados significa "não declarado", e não "declarou zero". A interface possui
+    estado próprio para indicador sem cálculo, mas ele depende de a Gold gravar `NULL`. A
+    correção pertence às procedures (§9.36, §9.37).
+  - **ISAP e IAE em exatamente 100%.** O travamento de sanidade da V063 trunca a área de
+    interseção na área do imóvel quando a geometria de origem está corrompida, o que faz
+    esses imóveis apresentarem exatamente 100%. O valor é indistinguível de sobreposição
+    total legítima. Convém levantar quantos imóveis se encontram nessa condição antes de
+    interpretar o indicador.
+  - **Textos do catálogo sem acentuação.** As descrições em `tipo_indicador.descricao`
+    foram cadastradas sem acento e são exibidas assim na interface. Adicionalmente, a
+    `regra_calculo` de ICV, IRL e IAPP ainda os descreve como não implementados, texto
+    anterior à V072 e à V073. A migration de correção está escrita, mas não foi incluída
+    nesta entrega por alterar conteúdo cadastrado por outro integrante.
   - **Interseção com a LIZARDS-35 (visualização em mapa).** A agregação por município
     atende às duas telas; recomenda-se o reaproveitamento de
     `GET /api/indicadores/municipios` em vez de implementação duplicada. No frontend, ambas
