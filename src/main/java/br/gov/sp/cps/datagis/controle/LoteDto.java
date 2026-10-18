@@ -9,6 +9,7 @@ public record LoteDto(
         Long id,
         Long fonteDadoId,
         String fonteDadoNome,
+        String entidadeSilver,
         String origemReferencia,
         Integer quantidadeRegistros,
         String status,
@@ -19,10 +20,12 @@ public record LoteDto(
         FonteDado fonte = lote.getFonteDado();
         Long fonteId = null;
         String fonteNome = null;
+        String entidadeSilver = null;
         if (fonte != null) {
             try {
                 fonteId = fonte.getId();
                 fonteNome = fonte.getNome();
+                entidadeSilver = fonte.getEntidadeSilver();
             } catch (Exception e) {
                 fonteNome = "Fonte #" + (fonteId != null ? fonteId : "");
             }
@@ -31,6 +34,7 @@ public record LoteDto(
                 lote.getId(),
                 fonteId,
                 fonteNome != null ? fonteNome : (fonteId != null ? "Fonte #" + fonteId : "—"),
+                entidadeSilver,
                 lote.getOrigemReferencia(),
                 lote.getQuantidadeRegistros() != null ? lote.getQuantidadeRegistros() : 0,
                 lote.getStatus(),

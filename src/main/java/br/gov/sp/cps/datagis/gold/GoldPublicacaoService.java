@@ -1,11 +1,15 @@
 package br.gov.sp.cps.datagis.gold;
 
+import br.gov.sp.cps.datagis.controle.FonteDado;
+import br.gov.sp.cps.datagis.controle.LoteIngestao;
+import br.gov.sp.cps.datagis.controle.LoteIngestaoRepository;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.Types;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +48,8 @@ import org.springframework.stereotype.Service;
 public class GoldPublicacaoService {
 
     private static final Logger log = LoggerFactory.getLogger(GoldPublicacaoService.class);
+
+    public static final String STATUS_PROMOVIDO_GOLD = "PROMOVIDO_GOLD";
 
     /** Camadas semeadas em gold.mapa_camada (V018) — publicadas na mesma ordem fixa. */
     private static final List<String> CODIGOS_MAPA_CAMADA = List.of(
@@ -114,10 +120,15 @@ public class GoldPublicacaoService {
 
     private final JdbcTemplate jdbcTemplate;
     private final SimplificadorGeometriaMapa simplificador;
+    private final LoteIngestaoRepository loteIngestaoRepository;
 
-    public GoldPublicacaoService(JdbcTemplate jdbcTemplate, SimplificadorGeometriaMapa simplificador) {
+    public GoldPublicacaoService(
+            JdbcTemplate jdbcTemplate,
+            SimplificadorGeometriaMapa simplificador,
+            LoteIngestaoRepository loteIngestaoRepository) {
         this.jdbcTemplate = jdbcTemplate;
         this.simplificador = simplificador;
+        this.loteIngestaoRepository = loteIngestaoRepository;
     }
 
     /**
@@ -215,8 +226,171 @@ public class GoldPublicacaoService {
             }
         }
 
+        try {
+            jdbcTemplate.update("UPDATE controle.lote_ingestao SET status = ? WHERE status = 'PROMOVIDO_SILVER'", STATUS_PROMOVIDO_GOLD);
+        } catch (Exception e) {
+            log.warn("publicarTudo: erro ao atualizar status dos lotes para PROMOVIDO_GOLD: {}", e.getMessage());
+        }
+
         return new ResultadoPublicacaoTudo(
                 codigosImovel.size(), sucesso, falhas, camadasPublicadas, camadasComFalha);
+    }
+
+    /**
+     * Orquestra a migração de um lote específico para a Gold.
+     * Se for um lote de CAR (IMOVEL_RURAL), calcula os 7 indicadores apenas para os
+     * imóveis do lote e publica a camada IMOVEL_RURAL.
+     * Se for um lote de outra fonte (DESMATAMENTO, EMBARGO, AREA_PROTEGIDA, MUNICIPIO, FOCO_CALOR),
+     * publica exclusivamente a camada correspondente e não toca nos imóveis do CAR.
+     * Lotes já migrados (PROMOVIDO_GOLD) são bloqueados e não podem ser migrados novamente.
+     */
+    public ResultadoPublicacaoTudo publicar(Long loteId) {
+        if (loteId == null) {
+            return publicarTudo();
+        }
+
+        LoteIngestao lote = loteIngestaoRepository.findByIdComFonte(loteId)
+                .orElseThrow(() -> new IllegalArgumentException("Lote #" + loteId + " não encontrado."));
+
+        if (STATUS_PROMOVIDO_GOLD.equals(lote.getStatus())) {
+            throw new IllegalArgumentException(
+                    "O lote #" + loteId + " já foi migrado para a Gold e não pode ser migrado novamente.");
+        }
+
+        if (!"PROMOVIDO_SILVER".equals(lote.getStatus())) {
+            throw new IllegalArgumentException(
+                    "O lote #" + loteId + " está com status " + lote.getStatus()
+                            + ". Apenas lotes com status PROMOVIDO_SILVER podem ser migrados para a Gold.");
+        }
+
+        FonteDado fonte = lote.getFonteDado();
+        String entidadeSilver = resolverEntidadeSilver(fonte);
+        String codigoCamada = mapearEntidadeSilverParaCodigoCamada(entidadeSilver);
+
+        List<String> camadasPublicadas = new ArrayList<>();
+        List<String> camadasComFalha = new ArrayList<>();
+        int totalImoveis = 0;
+        int sucessoImoveis = 0;
+        List<String> falhasImoveis = new ArrayList<>();
+
+        if ("IMOVEL_RURAL".equals(codigoCamada)) {
+            List<String> codigosImovel = jdbcTemplate.queryForList(
+                    "SELECT cod_imovel FROM silver.imovel_rural WHERE lote_ingestao_id = ?",
+                    String.class, loteId);
+
+            if (codigosImovel.isEmpty() && fonte != null && fonte.getId() != null) {
+                codigosImovel = jdbcTemplate.queryForList(
+                        "SELECT cod_imovel FROM silver.imovel_rural WHERE fonte_dado_id = ? AND ROWNUM <= 500",
+                        String.class, fonte.getId());
+            }
+
+            totalImoveis = codigosImovel.size();
+            long publicacaoIndicadoresId = inserirControlePublicacaoIndicadores(totalImoveis);
+
+            int processadosDesdeUltimaAtualizacao = 0;
+            for (String codImovel : codigosImovel) {
+                try {
+                    recalcularImovel(codImovel);
+                    sucessoImoveis++;
+                } catch (Exception e) {
+                    log.warn("publicar(loteId={}): falhou pro imóvel {}: {}", loteId, codImovel, e.getMessage());
+                    falhasImoveis.add(codImovel);
+                    jdbcTemplate.update(
+                            """
+                            INSERT INTO gold.publicacao_indicadores_erro
+                                (publicacao_indicadores_id, cod_imovel, motivo)
+                            VALUES (?, ?, ?)
+                            """,
+                            publicacaoIndicadoresId, codImovel, truncar(e.getMessage(), 500));
+                }
+                processadosDesdeUltimaAtualizacao++;
+                if (processadosDesdeUltimaAtualizacao >= LOTE_PROGRESSO_INDICADORES) {
+                    atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucessoImoveis, falhasImoveis.size());
+                    processadosDesdeUltimaAtualizacao = 0;
+                }
+            }
+            if (processadosDesdeUltimaAtualizacao > 0) {
+                atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucessoImoveis, falhasImoveis.size());
+            }
+
+            jdbcTemplate.update(
+                    """
+                    UPDATE gold.publicacao_indicadores
+                       SET status = 'CONCLUIDA', concluido_em = SYSTIMESTAMP
+                     WHERE id = ?
+                    """,
+                    publicacaoIndicadoresId);
+
+            try {
+                publicarCamadaMapaEmLotes("IMOVEL_RURAL");
+                camadasPublicadas.add("IMOVEL_RURAL");
+            } catch (Exception e) {
+                log.warn("publicar(loteId={}): falhou camada IMOVEL_RURAL: {}", loteId, e.getMessage());
+                camadasComFalha.add("IMOVEL_RURAL");
+            }
+        } else if (codigoCamada != null) {
+            try {
+                publicarCamadaMapaEmLotes(codigoCamada);
+                camadasPublicadas.add(codigoCamada);
+            } catch (Exception e) {
+                log.warn("publicar(loteId={}): falhou camada {}: {}", loteId, codigoCamada, e.getMessage());
+                camadasComFalha.add(codigoCamada);
+                throw e;
+            }
+        }
+
+        lote.setStatus(STATUS_PROMOVIDO_GOLD);
+        loteIngestaoRepository.save(lote);
+
+        try {
+            jdbcTemplate.update("UPDATE controle.lote_ingestao SET status = ? WHERE id = ?", STATUS_PROMOVIDO_GOLD, loteId);
+        } catch (Exception e) {
+            log.warn("publicar: erro ao atualizar status do lote {} para PROMOVIDO_GOLD via JDBC: {}", loteId, e.getMessage());
+        }
+
+        return new ResultadoPublicacaoTudo(
+                totalImoveis, sucessoImoveis, falhasImoveis, camadasPublicadas, camadasComFalha);
+    }
+
+    public String resolverEntidadeSilver(FonteDado fonte) {
+        if (fonte != null && fonte.getEntidadeSilver() != null && !fonte.getEntidadeSilver().isBlank()) {
+            return fonte.getEntidadeSilver().trim().toLowerCase(Locale.ROOT);
+        }
+        if (fonte == null || fonte.getNome() == null) {
+            return "imovel_rural";
+        }
+        String nome = fonte.getNome().toLowerCase(Locale.ROOT);
+        if (nome.contains("car") || nome.contains("imóvel") || nome.contains("imovel"))
+            return "imovel_rural";
+        if (nome.contains("bioma"))
+            return "bioma";
+        if (nome.contains("ibge") || nome.contains("município") || nome.contains("municipio"))
+            return "municipio";
+        if (nome.contains("embargo"))
+            return "embargo_ambiental";
+        if (nome.contains("auto") || nome.contains("infração") || nome.contains("infracao"))
+            return "auto_infracao";
+        if (nome.contains("foco") || nome.contains("queimada"))
+            return "foco_calor";
+        if (nome.contains("desmatamento") || nome.contains("prodes"))
+            return "desmatamento";
+        if (nome.contains("indígena") || nome.contains("indigena") || nome.contains("conservação")
+                || nome.contains("uc"))
+            return "area_protegida";
+        return "imovel_rural";
+    }
+
+    public static String mapearEntidadeSilverParaCodigoCamada(String entidadeSilver) {
+        if (entidadeSilver == null) return null;
+        return switch (entidadeSilver.toLowerCase(Locale.ROOT)) {
+            case "imovel_rural" -> "IMOVEL_RURAL";
+            case "municipio" -> "MUNICIPIO";
+            case "area_protegida" -> "AREA_PROTEGIDA";
+            case "desmatamento" -> "DESMATAMENTO";
+            case "embargo", "embargo_ambiental" -> "EMBARGO";
+            case "foco_calor" -> "FOCO_CALOR";
+            default -> null;
+        };
     }
 
     /**

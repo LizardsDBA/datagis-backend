@@ -6,6 +6,7 @@ import br.gov.sp.cps.datagis.controle.FonteDado;
 import br.gov.sp.cps.datagis.controle.FonteDadoRepository;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
 import br.gov.sp.cps.datagis.controle.LoteIngestaoRepository;
+import br.gov.sp.cps.datagis.gold.GoldPublicacaoService;
 import br.gov.sp.cps.datagis.validacao.TransicaoBronzeSilverService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -62,6 +63,7 @@ public class ConjuntosDadosService {
                 .orElseThrow(() -> new IllegalArgumentException("Fonte de dado " + fonteDadoId + " não encontrada"));
         LoteIngestao lote = loteIngestaoRepository
                 .findFirstByFonteDadoIdAndStatusOrderByIdDesc(fonteDadoId, TransicaoBronzeSilverService.STATUS_PROMOVIDO_SILVER)
+                .or(() -> loteIngestaoRepository.findFirstByFonteDadoIdAndStatusOrderByIdDesc(fonteDadoId, GoldPublicacaoService.STATUS_PROMOVIDO_GOLD))
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Fonte \"" + fonte.getNome() + "\" ainda não teve nenhum lote promovido para a Silver"));
         String entidadeSilver = resolverTabelaSilver(fonte);
