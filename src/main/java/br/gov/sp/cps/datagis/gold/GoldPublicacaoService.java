@@ -328,6 +328,62 @@ public class GoldPublicacaoService {
                 log.warn("publicar(loteId={}): falhou camada IMOVEL_RURAL: {}", loteId, e.getMessage());
                 camadasComFalha.add("IMOVEL_RURAL");
             }
+        } else if ("reserva_legal".equals(entidadeSilver)
+                || "app_declarada".equals(entidadeSilver)
+                || "vegetacao_nativa_declarada".equals(entidadeSilver)) {
+            String tabelaSilver = switch (entidadeSilver) {
+                case "reserva_legal" -> "silver.reserva_legal";
+                case "app_declarada" -> "silver.app_declarada";
+                case "vegetacao_nativa_declarada" -> "silver.vegetacao_nativa_declarada";
+                default -> null;
+            };
+
+            List<String> codigosImovel = jdbcTemplate.queryForList(
+                    "SELECT DISTINCT cod_imovel FROM " + tabelaSilver + " WHERE lote_ingestao_id = ? AND cod_imovel IS NOT NULL",
+                    String.class, loteId);
+
+            if (codigosImovel.isEmpty() && fonte != null && fonte.getId() != null) {
+                codigosImovel = jdbcTemplate.queryForList(
+                        "SELECT DISTINCT cod_imovel FROM " + tabelaSilver + " WHERE fonte_dado_id = ? AND cod_imovel IS NOT NULL AND ROWNUM <= 500",
+                        String.class, fonte.getId());
+            }
+
+            totalImoveis = codigosImovel.size();
+            long publicacaoIndicadoresId = inserirControlePublicacaoIndicadores(totalImoveis);
+
+            int processadosDesdeUltimaAtualizacao = 0;
+            for (String codImovel : codigosImovel) {
+                try {
+                    recalcularIndicadoresPorEntidade(entidadeSilver, codImovel);
+                    sucessoImoveis++;
+                } catch (Exception e) {
+                    log.warn("publicar(loteId={}, entidade={}): falhou pro imóvel {}: {}", loteId, entidadeSilver, codImovel, e.getMessage());
+                    falhasImoveis.add(codImovel);
+                    jdbcTemplate.update(
+                            """
+                            INSERT INTO gold.publicacao_indicadores_erro
+                                (publicacao_indicadores_id, cod_imovel, motivo)
+                            VALUES (?, ?, ?)
+                            """,
+                            publicacaoIndicadoresId, codImovel, truncar(e.getMessage(), 500));
+                }
+                processadosDesdeUltimaAtualizacao++;
+                if (processadosDesdeUltimaAtualizacao >= LOTE_PROGRESSO_INDICADORES) {
+                    atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucessoImoveis, falhasImoveis.size());
+                    processadosDesdeUltimaAtualizacao = 0;
+                }
+            }
+            if (processadosDesdeUltimaAtualizacao > 0) {
+                atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucessoImoveis, falhasImoveis.size());
+            }
+
+            jdbcTemplate.update(
+                    """
+                    UPDATE gold.publicacao_indicadores
+                       SET status = 'CONCLUIDA', concluido_em = SYSTIMESTAMP
+                     WHERE id = ?
+                    """,
+                    publicacaoIndicadoresId);
         } else if (codigoCamada != null) {
             try {
                 publicarCamadaMapaEmLotes(codigoCamada);
@@ -352,14 +408,53 @@ public class GoldPublicacaoService {
                 totalImoveis, sucessoImoveis, falhasImoveis, camadasPublicadas, camadasComFalha);
     }
 
+    public void recalcularIndicadoresPorEntidade(String entidadeSilver, String codImovel) {
+        switch (entidadeSilver) {
+            case "reserva_legal" -> {
+                chamarCalculo("pkg_calculo_territorial", "calcular_irl", codImovel);
+                chamarPublicarImovel(codImovel);
+            }
+            case "app_declarada" -> {
+                chamarCalculo("pkg_calculo_territorial", "calcular_iapp", codImovel);
+                chamarPublicarImovel(codImovel);
+            }
+            case "vegetacao_nativa_declarada" -> {
+                chamarCalculo("pkg_calculo_territorial", "calcular_iapp", codImovel);
+                chamarCalculo("pkg_calculo_conservacao", "calcular_icv", codImovel);
+                chamarPublicarImovel(codImovel);
+            }
+            default -> recalcularImovel(codImovel);
+        }
+    }
+
     public String resolverEntidadeSilver(FonteDado fonte) {
         if (fonte != null && fonte.getEntidadeSilver() != null && !fonte.getEntidadeSilver().isBlank()) {
-            return fonte.getEntidadeSilver().trim().toLowerCase(Locale.ROOT);
+            return normalizarNomeEntidade(fonte.getEntidadeSilver());
+        }
+        if (fonte != null && fonte.getId() != null) {
+            try {
+                List<String> destinos = jdbcTemplate.queryForList(
+                        "SELECT DISTINCT tabela_destino FROM controle.mapeamento_coluna WHERE fonte_dado_id = ? AND tabela_destino IS NOT NULL",
+                        String.class, fonte.getId());
+                for (String dest : destinos) {
+                    if (dest != null && !dest.isBlank()) {
+                        return normalizarNomeEntidade(dest);
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao consultar tabela_destino em mapeamento_coluna para fonte {}: {}", fonte.getId(), e.getMessage());
+            }
         }
         if (fonte == null || fonte.getNome() == null) {
             return "imovel_rural";
         }
         String nome = fonte.getNome().toLowerCase(Locale.ROOT);
+        if (nome.contains("reserva") || nome.contains("legal"))
+            return "reserva_legal";
+        if (nome.contains("app"))
+            return "app_declarada";
+        if (nome.contains("vegeta") || nome.contains("cobertura"))
+            return "vegetacao_nativa_declarada";
         if (nome.contains("car") || nome.contains("imóvel") || nome.contains("imovel"))
             return "imovel_rural";
         if (nome.contains("bioma"))
@@ -378,6 +473,15 @@ public class GoldPublicacaoService {
                 || nome.contains("uc"))
             return "area_protegida";
         return "imovel_rural";
+    }
+
+    private static String normalizarNomeEntidade(String entidade) {
+        if (entidade == null) return "imovel_rural";
+        String s = entidade.trim().toLowerCase(Locale.ROOT);
+        if (s.startsWith("silver.")) {
+            s = s.substring(7);
+        }
+        return s;
     }
 
     public static String mapearEntidadeSilverParaCodigoCamada(String entidadeSilver) {

@@ -130,4 +130,50 @@ class GoldPublicacaoServiceTest {
         assertEquals("DESMATAMENTO", resultado.camadasPublicadas().get(0));
         assertEquals(GoldPublicacaoService.STATUS_PROMOVIDO_GOLD, loteDesmatamento.getStatus());
     }
+
+    @Test
+    @DisplayName("Lote de Reserva Legal recalcula indicadores dos imóveis do lote e não publica camada no mapa")
+    void publicar_LoteReservaLegal_DeveRecalcularApenasImoveisDoLote() {
+        LoteIngestao loteRL = new LoteIngestao();
+        loteRL.setId(40L);
+        loteRL.setStatus("PROMOVIDO_SILVER");
+        FonteDado fonteRL = new FonteDado();
+        fonteRL.setId(4L);
+        fonteRL.setEntidadeSilver("reserva_legal");
+        fonteRL.setNome("IAT/PR - Reserva Legal (CAR)");
+        loteRL.setFonteDado(fonteRL);
+
+        when(loteIngestaoRepository.findByIdComFonte(40L)).thenReturn(Optional.of(loteRL));
+
+        when(jdbcTemplate.queryForList(
+                eq("SELECT DISTINCT cod_imovel FROM silver.reserva_legal WHERE lote_ingestao_id = ? AND cod_imovel IS NOT NULL"),
+                eq(String.class), eq(40L))).thenReturn(List.of("PR-410010-0001"));
+
+        when(jdbcTemplate.queryForObject(
+                eq("SELECT MAX(id) FROM gold.publicacao_indicadores"),
+                eq(Long.class))).thenReturn(200L);
+
+        var resultado = service.publicar(40L);
+
+        assertEquals(1, resultado.totalImoveis());
+        assertEquals(1, resultado.imoveisPublicados());
+        assertEquals(0, resultado.camadasPublicadas().size());
+        assertEquals(GoldPublicacaoService.STATUS_PROMOVIDO_GOLD, loteRL.getStatus());
+    }
+
+    @Test
+    @DisplayName("resolverEntidadeSilver deve buscar tabela_destino em mapeamento_coluna se fonte não tiver entidadeSilver")
+    void resolverEntidadeSilver_DeveBuscarTabelaDestinoEmMapeamentoColuna() {
+        FonteDado fonteSemEntidade = new FonteDado();
+        fonteSemEntidade.setId(55L);
+        fonteSemEntidade.setNome("Fonte Customizada Sem Entidade");
+
+        when(jdbcTemplate.queryForList(
+                eq("SELECT DISTINCT tabela_destino FROM controle.mapeamento_coluna WHERE fonte_dado_id = ? AND tabela_destino IS NOT NULL"),
+                eq(String.class), eq(55L))).thenReturn(List.of("app_declarada"));
+
+        String entidadeResolvida = service.resolverEntidadeSilver(fonteSemEntidade);
+
+        assertEquals("app_declarada", entidadeResolvida);
+    }
 }
