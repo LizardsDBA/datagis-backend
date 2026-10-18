@@ -29,25 +29,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 })
 class DatagisApplicationTests {
 
-	@org.springframework.beans.factory.annotation.Autowired
-	private br.gov.sp.cps.datagis.controle.FonteDadoRepository fonteDadoRepository;
-
-	@org.springframework.beans.factory.annotation.Autowired
-	private br.gov.sp.cps.datagis.controle.ValidacaoMapeamentoFonteService validacaoService;
-
 	@Test
 	void contextLoads() {
-	}
-
-	@Test
-	void inspecionarStatusDeTodasAsFontes() {
-		var fontes = fonteDadoRepository.findAll();
-		System.out.println("=== STATUS DE TODAS AS FONTES ===");
-		for (var f : fontes) {
-			var st = validacaoService.avaliarStatus(f);
-			System.out.println(String.format("ID: %d | Nome: %s | Silver: %s | Completo: %s | Mapeadas: %d/%d | Faltantes: %s",
-					f.getId(), f.getNome(), f.getEntidadeSilver(), st.completo(), st.totalColunasMapeadas(), st.totalColunasEsperadas(), st.colunasFaltantes()));
-		}
-		System.out.println("=================================");
 	}
 }
