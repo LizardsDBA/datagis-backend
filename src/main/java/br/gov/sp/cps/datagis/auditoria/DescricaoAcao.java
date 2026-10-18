@@ -26,6 +26,7 @@ public final class DescricaoAcao {
         // Fontes de dados, ingestao e mapeamento
         ACOES.put("POST /api/fontes", "Cadastrar fonte de dados");
         ACOES.put("PUT /api/fontes/{id}", "Editar fonte de dados");
+        ACOES.put("PATCH /api/fontes/{id}/entidade-silver", "Vincular tabela Silver a fonte de dados");
         ACOES.put("POST /api/fontes/{id}/executar", "Executar ingestao da fonte");
         ACOES.put("POST /api/fontes/{id}/upload", "Enviar arquivo para ingestao");
         ACOES.put("POST /api/fontes/{fonteId}/mapeamentos", "Salvar mapeamento de colunas");
