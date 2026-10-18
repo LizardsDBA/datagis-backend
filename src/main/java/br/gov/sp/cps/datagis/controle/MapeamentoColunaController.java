@@ -2,6 +2,7 @@ package br.gov.sp.cps.datagis.controle;
 
 import java.util.List;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -35,12 +36,16 @@ public class MapeamentoColunaController {
             @PathVariable Long fonteId,
             @RequestBody List<MapeamentoColuna> mapeamentos) {
 
-        if (!fonteDadoRepository.existsById(fonteId)) {
+        FonteDado fonte = fonteDadoRepository.findById(fonteId).orElse(null);
+        if (fonte == null) {
             return ResponseEntity.notFound().build();
         }
 
         for (MapeamentoColuna m : mapeamentos) {
             m.setFonteDadoId(fonteId);
+            if (m.getTabelaDestino() == null || m.getTabelaDestino().isBlank()) {
+                m.setTabelaDestino(fonte.getEntidadeSilver());
+            }
             if (m.getDataAdd() == null) {
                 m.setDataAdd(java.time.LocalDateTime.now());
             }
@@ -55,5 +60,15 @@ public class MapeamentoColunaController {
             return ResponseEntity.noContent().build();
         }
         return ResponseEntity.notFound().build();
+    }
+
+    @DeleteMapping
+    @Transactional
+    public ResponseEntity<Void> removerTodosPorFonte(@PathVariable Long fonteId) {
+        if (!fonteDadoRepository.existsById(fonteId)) {
+            return ResponseEntity.notFound().build();
+        }
+        repository.deleteByFonteDadoId(fonteId);
+        return ResponseEntity.noContent().build();
     }
 }

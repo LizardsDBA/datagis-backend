@@ -45,6 +45,9 @@ public class MapeamentoColuna {
     @Column(name = "atributo_destino", nullable = false, length = 100)
     private String atributoDestino;
 
+    @Column(name = "tabela_destino", length = 60)
+    private String tabelaDestino;
+
     /** COLUNA | JSON | GEOMETRIA */
     @Column(name = "destino_tipo", nullable = false, length = 20)
     private String destinoTipo;

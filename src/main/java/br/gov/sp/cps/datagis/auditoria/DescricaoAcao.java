@@ -31,6 +31,7 @@ public final class DescricaoAcao {
         ACOES.put("POST /api/fontes/{id}/upload", "Enviar arquivo para ingestao");
         ACOES.put("POST /api/fontes/{fonteId}/mapeamentos", "Salvar mapeamento de colunas");
         ACOES.put("DELETE /api/fontes/{fonteId}/mapeamentos/{id}", "Excluir mapeamento de coluna");
+        ACOES.put("DELETE /api/fontes/{fonteId}/mapeamentos", "Limpar todos os mapeamentos de colunas da fonte");
         // Lotes e quarentena
         ACOES.put("POST /api/lotes/{id}/reprocessar", "Reprocessar lote");
         ACOES.put("POST /api/quarentena/lotes/{loteId}/liberar", "Liberar lote para a Silver");
