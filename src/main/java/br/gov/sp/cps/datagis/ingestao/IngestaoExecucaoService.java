@@ -24,16 +24,19 @@ public class IngestaoExecucaoService {
     private final List<IngestaoExecutor> executores;
     private final ArmazenamentoArquivoBruto armazenamento;
     private final ProgressoExecucaoRegistry progresso;
+    private final br.gov.sp.cps.datagis.controle.ValidacaoMapeamentoFonteService validacaoMapeamentoService;
 
     public IngestaoExecucaoService(
             FonteDadoRepository fonteDadoRepository,
             List<IngestaoExecutor> executores,
             ArmazenamentoArquivoBruto armazenamento,
-            ProgressoExecucaoRegistry progresso) {
+            ProgressoExecucaoRegistry progresso,
+            br.gov.sp.cps.datagis.controle.ValidacaoMapeamentoFonteService validacaoMapeamentoService) {
         this.fonteDadoRepository = fonteDadoRepository;
         this.executores = executores;
         this.armazenamento = armazenamento;
         this.progresso = progresso;
+        this.validacaoMapeamentoService = validacaoMapeamentoService;
     }
 
     /** Maior mensagem de erro que vai pra tela — evita estourar o VARCHAR2(2000) da coluna. */
@@ -41,6 +44,8 @@ public class IngestaoExecucaoService {
 
     public LoteIngestao executar(Long fonteId) {
         FonteDado fonte = buscarFonte(fonteId);
+
+        validacaoMapeamentoService.validarParaIngestao(fonte);
 
         IngestaoExecutor executor = executores.stream()
                 .filter(e -> e.suportar(fonte))

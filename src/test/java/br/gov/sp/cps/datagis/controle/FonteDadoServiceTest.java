@@ -129,4 +129,34 @@ class FonteDadoServiceTest {
         assertThatThrownBy(() -> service.cadastrar(dados))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void deveCadastrarEAtualizarComEntidadeSilver() {
+        FonteDadoService service = new FonteDadoService(repository, agendamentoFonteService);
+        when(repository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
+
+        FonteDadoRequest dados = new FonteDadoRequest(
+                "CAR - PR", "SFB", "UPLOAD_MANUAL", null, null, "CSV", null, null, ",", true, "imovel_rural");
+
+        FonteDado salvo = service.cadastrar(dados);
+        assertThat(salvo.getEntidadeSilver()).isEqualTo("imovel_rural");
+
+        when(repository.findById(1L)).thenReturn(java.util.Optional.of(salvo));
+        FonteDadoRequest dadosAtualizados = new FonteDadoRequest(
+                "CAR - PR Modificado", "SFB", "UPLOAD_MANUAL", null, null, "CSV", null, null, ",", true, "area_protegida");
+
+        FonteDado atualizado = service.atualizar(1L, dadosAtualizados);
+        assertThat(atualizado.getEntidadeSilver()).isEqualTo("area_protegida");
+    }
+
+    @Test
+    void deveAtualizarEntidadeSilverIsoladamente() {
+        FonteDadoService service = new FonteDadoService(repository, agendamentoFonteService);
+        FonteDado fonteExistente = FonteDado.builder().id(10L).nome("Embargos").tipoAquisicao("API_REST").build();
+        when(repository.findById(10L)).thenReturn(java.util.Optional.of(fonteExistente));
+        when(repository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
+
+        FonteDado atualizado = service.atualizarEntidadeSilver(10L, "embargo_ambiental");
+        assertThat(atualizado.getEntidadeSilver()).isEqualTo("embargo_ambiental");
+    }
 }

@@ -33,6 +33,8 @@ class IngestaoExecucaoServiceTest {
     private ArmazenamentoArquivoBruto armazenamento;
     @Mock
     private IngestaoExecutor executor;
+    @Mock
+    private br.gov.sp.cps.datagis.controle.ValidacaoMapeamentoFonteService validacaoMapeamentoService;
 
     @Test
     void deveRegistrarSucessoComDuracaoESemMensagemDeErro() {
@@ -44,7 +46,7 @@ class IngestaoExecucaoServiceTest {
         when(fonteDadoRepository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
 
         IngestaoExecucaoService service =
-                new IngestaoExecucaoService(fonteDadoRepository, List.of(executor), armazenamento, new ProgressoExecucaoRegistry());
+                new IngestaoExecucaoService(fonteDadoRepository, List.of(executor), armazenamento, new ProgressoExecucaoRegistry(), validacaoMapeamentoService);
 
         LoteIngestao resultado = service.executar(1L);
 
@@ -64,7 +66,7 @@ class IngestaoExecucaoServiceTest {
         when(fonteDadoRepository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
 
         IngestaoExecucaoService service =
-                new IngestaoExecucaoService(fonteDadoRepository, List.of(executor), armazenamento, new ProgressoExecucaoRegistry());
+                new IngestaoExecucaoService(fonteDadoRepository, List.of(executor), armazenamento, new ProgressoExecucaoRegistry(), validacaoMapeamentoService);
 
         assertThatThrownBy(() -> service.executar(2L)).isInstanceOf(IllegalStateException.class);
 
@@ -87,7 +89,7 @@ class IngestaoExecucaoServiceTest {
         when(fonteDadoRepository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
 
         IngestaoExecucaoService service =
-                new IngestaoExecucaoService(fonteDadoRepository, List.of(executor), armazenamento, new ProgressoExecucaoRegistry());
+                new IngestaoExecucaoService(fonteDadoRepository, List.of(executor), armazenamento, new ProgressoExecucaoRegistry(), validacaoMapeamentoService);
 
         assertThatThrownBy(() -> service.executar(3L)).isInstanceOf(OutOfMemoryError.class);
 
@@ -102,10 +104,27 @@ class IngestaoExecucaoServiceTest {
         when(executor.suportar(fonte)).thenReturn(false);
 
         IngestaoExecucaoService service =
-                new IngestaoExecucaoService(fonteDadoRepository, List.of(executor), armazenamento, new ProgressoExecucaoRegistry());
+                new IngestaoExecucaoService(fonteDadoRepository, List.of(executor), armazenamento, new ProgressoExecucaoRegistry(), validacaoMapeamentoService);
 
         assertThatThrownBy(() -> service.executar(4L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Fonte Sem Executor");
+    }
+
+    @Test
+    void deveFalharImediatamenteSemExecutarQuandoMapeamentoEstiverIncompleto() {
+        FonteDado fonte = FonteDado.builder().id(5L).nome("Fonte Incompleta").build();
+        when(fonteDadoRepository.findById(5L)).thenReturn(Optional.of(fonte));
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("Mapeamento incompleto: faltam 2 colunas"))
+                .when(validacaoMapeamentoService).validarParaIngestao(fonte);
+
+        IngestaoExecucaoService service =
+                new IngestaoExecucaoService(fonteDadoRepository, List.of(executor), armazenamento, new ProgressoExecucaoRegistry(), validacaoMapeamentoService);
+
+        assertThatThrownBy(() -> service.executar(5L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Mapeamento incompleto");
+
+        org.mockito.Mockito.verifyNoInteractions(executor);
     }
 }

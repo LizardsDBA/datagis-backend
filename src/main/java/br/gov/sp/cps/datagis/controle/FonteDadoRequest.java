@@ -13,5 +13,14 @@ public record FonteDadoRequest(
         String campoGeometriaLat,
         String campoGeometriaLon,
         String separadorCsv,
-        Boolean ativo) {
+        Boolean ativo,
+        String entidadeSilver) {
+
+    public FonteDadoRequest(
+            String nome, String orgao, String tipoAquisicao, String urlOrigem,
+            String cronExpressao, String formatoEsperado, String campoGeometriaLat,
+            String campoGeometriaLon, String separadorCsv, Boolean ativo) {
+        this(nome, orgao, tipoAquisicao, urlOrigem, cronExpressao, formatoEsperado,
+             campoGeometriaLat, campoGeometriaLon, separadorCsv, ativo, null);
+    }
 }
