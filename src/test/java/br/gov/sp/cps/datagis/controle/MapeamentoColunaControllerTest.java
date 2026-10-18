@@ -33,7 +33,9 @@ class MapeamentoColunaControllerTest {
     @BeforeEach
     void setup() {
         MapeamentoColunaController controller = new MapeamentoColunaController(repository, fonteDadoRepository);
-        mvc = MockMvcBuilders.standaloneSetup(controller).build();
+        mvc = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new br.gov.sp.cps.datagis.config.TratadorDeErro())
+                .build();
     }
 
     @Test
@@ -108,5 +110,100 @@ class MapeamentoColunaControllerTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].tabelaDestino").value("embargo_ambiental"));
+    }
+
+    @Test
+    @DisplayName("POST /api/fontes/{fonteId}/mapeamentos rejeita duplicidade de atributoDestino na mesma requisição")
+    void salvarMapeamentosRejeitaDuplicidadeNaMesmaRequisicao() throws Exception {
+        FonteDado fonte = new FonteDado();
+        fonte.setId(5L);
+        when(fonteDadoRepository.findById(5L)).thenReturn(Optional.of(fonte));
+
+        mvc.perform(post("/api/fontes/5/mapeamentos")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                [
+                                  {
+                                    "colunaOrigem": "cod_imovel_1",
+                                    "atributoDestino": "cod_imovel",
+                                    "destinoTipo": "COLUNA",
+                                    "tipoDado": "texto"
+                                  },
+                                  {
+                                    "colunaOrigem": "cod_imovel_2",
+                                    "atributoDestino": "cod_imovel",
+                                    "destinoTipo": "COLUNA",
+                                    "tipoDado": "texto"
+                                  }
+                                ]
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.erro").value("A coluna Silver \"cod_imovel\" foi informada mais de uma vez na mesma requisição."));
+    }
+
+    @Test
+    @DisplayName("POST /api/fontes/{fonteId}/mapeamentos rejeita coluna Silver que já existe no banco para esta fonte")
+    void salvarMapeamentosRejeitaColunaJaExistenteNoBanco() throws Exception {
+        FonteDado fonte = new FonteDado();
+        fonte.setId(5L);
+        when(fonteDadoRepository.findById(5L)).thenReturn(Optional.of(fonte));
+
+        MapeamentoColuna existente = MapeamentoColuna.builder()
+                .id(20L)
+                .fonteDadoId(5L)
+                .colunaOrigem("num_sicar")
+                .atributoDestino("cod_imovel")
+                .destinoTipo("COLUNA")
+                .build();
+        when(repository.findByFonteDadoId(5L)).thenReturn(java.util.List.of(existente));
+
+        mvc.perform(post("/api/fontes/5/mapeamentos")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                [
+                                  {
+                                    "colunaOrigem": "outro_campo",
+                                    "atributoDestino": "cod_imovel",
+                                    "destinoTipo": "COLUNA",
+                                    "tipoDado": "texto"
+                                  }
+                                ]
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.erro").value("A coluna Silver \"cod_imovel\" já está mapeada nesta fonte e não pode ser preenchida novamente."));
+    }
+
+    @Test
+    @DisplayName("POST /api/fontes/{fonteId}/mapeamentos permite atualizar o próprio registro com a mesma coluna Silver")
+    void salvarMapeamentosPermiteAtualizarMesmoId() throws Exception {
+        FonteDado fonte = new FonteDado();
+        fonte.setId(5L);
+        when(fonteDadoRepository.findById(5L)).thenReturn(Optional.of(fonte));
+
+        MapeamentoColuna existente = MapeamentoColuna.builder()
+                .id(20L)
+                .fonteDadoId(5L)
+                .colunaOrigem("num_sicar")
+                .atributoDestino("cod_imovel")
+                .destinoTipo("COLUNA")
+                .build();
+        when(repository.findByFonteDadoId(5L)).thenReturn(java.util.List.of(existente));
+        when(repository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        mvc.perform(post("/api/fontes/5/mapeamentos")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                [
+                                  {
+                                    "id": 20,
+                                    "colunaOrigem": "num_sicar_novo",
+                                    "atributoDestino": "cod_imovel",
+                                    "destinoTipo": "COLUNA",
+                                    "tipoDado": "texto"
+                                  }
+                                ]
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].colunaOrigem").value("num_sicar_novo"));
     }
 }

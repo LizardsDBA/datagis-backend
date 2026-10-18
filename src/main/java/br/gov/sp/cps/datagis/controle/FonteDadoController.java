@@ -21,21 +21,29 @@ public class FonteDadoController {
 
     private final FonteDadoService service;
     private final CatalogoSilverService catalogoSilverService;
+    private final ValidacaoMapeamentoFonteService validacaoMapeamentoFonteService;
 
-    public FonteDadoController(FonteDadoService service, CatalogoSilverService catalogoSilverService) {
+    public FonteDadoController(
+            FonteDadoService service,
+            CatalogoSilverService catalogoSilverService,
+            ValidacaoMapeamentoFonteService validacaoMapeamentoFonteService) {
         this.service = service;
         this.catalogoSilverService = catalogoSilverService;
+        this.validacaoMapeamentoFonteService = validacaoMapeamentoFonteService;
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public FonteDadoResponse cadastrar(@Valid @RequestBody FonteDadoRequest dados) {
-        return FonteDadoResponse.de(service.cadastrar(dados));
+        FonteDado fonte = service.cadastrar(dados);
+        return FonteDadoResponse.de(fonte, validacaoMapeamentoFonteService.avaliarStatus(fonte));
     }
 
     @GetMapping
     public List<FonteDadoResponse> listar() {
-        return service.listar().stream().map(FonteDadoResponse::de).toList();
+        return service.listar().stream()
+                .map(fonte -> FonteDadoResponse.de(fonte, validacaoMapeamentoFonteService.avaliarStatus(fonte)))
+                .toList();
     }
 
     @GetMapping("/esquemas-silver")
@@ -45,12 +53,14 @@ public class FonteDadoController {
 
     @GetMapping("/{id}")
     public FonteDadoResponse buscar(@PathVariable Long id) {
-        return FonteDadoResponse.de(service.buscarPorId(id));
+        FonteDado fonte = service.buscarPorId(id);
+        return FonteDadoResponse.de(fonte, validacaoMapeamentoFonteService.avaliarStatus(fonte));
     }
 
     @PutMapping("/{id}")
     public FonteDadoResponse atualizar(@PathVariable Long id, @Valid @RequestBody FonteDadoRequest dados) {
-        return FonteDadoResponse.de(service.atualizar(id, dados));
+        FonteDado fonte = service.atualizar(id, dados);
+        return FonteDadoResponse.de(fonte, validacaoMapeamentoFonteService.avaliarStatus(fonte));
     }
 
     @PatchMapping("/{id}/entidade-silver")
@@ -58,6 +68,7 @@ public class FonteDadoController {
             @PathVariable Long id,
             @RequestBody Map<String, String> payload) {
         String entidadeSilver = payload != null ? payload.get("entidadeSilver") : null;
-        return FonteDadoResponse.de(service.atualizarEntidadeSilver(id, entidadeSilver));
+        FonteDado fonte = service.atualizarEntidadeSilver(id, entidadeSilver);
+        return FonteDadoResponse.de(fonte, validacaoMapeamentoFonteService.avaliarStatus(fonte));
     }
 }

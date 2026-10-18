@@ -41,6 +41,36 @@ public class MapeamentoColunaController {
             return ResponseEntity.notFound().build();
         }
 
+        // 1. Validar duplicidade dentro da própria lista recebida
+        java.util.Set<String> atributosVistos = new java.util.HashSet<>();
+        for (MapeamentoColuna m : mapeamentos) {
+            if (!"JSON".equalsIgnoreCase(m.getDestinoTipo()) && m.getAtributoDestino() != null) {
+                String attrNorm = m.getAtributoDestino().trim().toLowerCase();
+                if (!attrNorm.isBlank() && !atributosVistos.add(attrNorm)) {
+                    throw new IllegalArgumentException(
+                            "A coluna Silver \"" + m.getAtributoDestino() + "\" foi informada mais de uma vez na mesma requisição.");
+                }
+            }
+        }
+
+        // 2. Validar duplicidade contra mapeamentos já cadastrados no banco para esta fonte
+        List<MapeamentoColuna> existentes = repository.findByFonteDadoId(fonteId);
+        for (MapeamentoColuna m : mapeamentos) {
+            if (!"JSON".equalsIgnoreCase(m.getDestinoTipo()) && m.getAtributoDestino() != null) {
+                String attrNorm = m.getAtributoDestino().trim().toLowerCase();
+                boolean duplicado = existentes.stream().anyMatch(ex ->
+                        (m.getId() == null || !ex.getId().equals(m.getId()))
+                                && !"JSON".equalsIgnoreCase(ex.getDestinoTipo())
+                                && ex.getAtributoDestino() != null
+                                && ex.getAtributoDestino().trim().equalsIgnoreCase(attrNorm));
+
+                if (duplicado) {
+                    throw new IllegalArgumentException(
+                            "A coluna Silver \"" + m.getAtributoDestino() + "\" já está mapeada nesta fonte e não pode ser preenchida novamente.");
+                }
+            }
+        }
+
         for (MapeamentoColuna m : mapeamentos) {
             m.setFonteDadoId(fonteId);
             if (m.getTabelaDestino() == null || m.getTabelaDestino().isBlank()) {
