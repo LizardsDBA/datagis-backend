@@ -1967,9 +1967,11 @@ desenvolvida no repositório do frontend.
   indicador territorial, pois a soma dos numeradores dividida pela soma das áreas é a
   própria definição do índice no conjunto. O IAPP é exceção: a V072 o calcula sobre a área
   de APP declarada, não sobre a área do imóvel, de modo que a ponderação pela área do
-  imóvel constitui aproximação. O IFC não entra na comparação por ser indicador de
-  densidade. A correção exigiria publicar a área de APP por imóvel na Gold, alteração que
-  pertence às procedures (§9.37).
+  imóvel constitui aproximação. O IFC, apesar de ser indicador de densidade, também é
+  reproduzido de forma exata: como `valor_ifc = focos / área × 1000`, a soma de
+  `valor_ifc × área` dividida pela soma das áreas resulta em `Σfocos × 1000 / Σárea`, que é
+  a própria densidade de focos do município. A correção do IAPP exigiria publicar a área de
+  APP por imóvel na Gold, alteração que pertence às procedures (§9.37).
 - **Distinção entre `NULL` e zero.** O `NULLIF(..., 0)` no denominador previne divisão por
   zero, e o `RowMapper` utiliza `rs.wasNull()` porque `getDouble` retorna `0` para valores
   nulos. Indicador não calculado é serializado como `null` e renderizado como célula vazia;
@@ -2087,19 +2089,55 @@ desenvolvida no repositório do frontend.
   consultando as sete linhas de `tipo_indicador`. **Após o merge essa opção deixa de
   existir:** migration integrada não se altera, e qualquer ajuste passa a exigir migration
   nova, sob pena de impedir a inicialização do ambiente de todos os integrantes.
+- **Somente a versão mais recente de cada imóvel (commit `e2a4ac9`, 2026-10-17):** `gold.imovel_publicado` guarda uma linha por versão publicada
+  (chave `cod_imovel + indicador_versao_id`, histórico de auditoria). As duas consultas
+  do `ConsultaIndicadoresService` liam a tabela inteira: imóvel republicado aparecia
+  **duas vezes** na visão por imóvel e entrava **em dobro** na visão por município
+  (quantidade, área e média). Reproduzido ao vivo ingerindo os embargos e recalculando 1
+  imóvel de Ponta Grossa: 4.611 → 4.612 linhas, Ponta Grossa 2.657 → 2.658 imóveis e
+  187.061 → 189.297 ha. Corrigido com `ROW_NUMBER() OVER (PARTITION BY cod_imovel ORDER
+  BY data_publicacao DESC, id DESC)` + `WHERE i.ordem_versao = 1` nas duas consultas —
+  mesmo critério da comparação Silver → Gold da LIZARDS-30. 2 testes novos no
+  `ConsultaIndicadoresServiceTest` (um por visão). **Regra para qualquer consulta futura
+  sobre `imovel_publicado`: filtrar a versão mais recente** — ler a tabela inteira mostra
+  o histórico, não o estado atual.
 - **[EM ABERTO]**
   - **Perfil Operador sem acesso à tela.** O `Perfil.OPERADOR` não possui a permissão
     `indicador:visualizar` (§9.39, LIZARDS-45); a tela estará disponível para
     Administrador, Analista e Auditor, mas não para o Operador. Caso a equipe decida
     conceder a permissão, a alteração consiste em uma linha no `Perfil.java` e o ajuste
     correspondente no `PerfilTest`, a ser entregue como `fix<LIZARDS-34>`.
-  - **Zero e ausência de dado são indistinguíveis na Gold.** As procedures de IRL, IAPP e
-    ICV inicializam o percentual em zero e gravam esse valor quando não localizam linha de
-    origem para o imóvel. Com 2.777 registros de reserva legal, 3.180 de APP declarada e
-    3.182 de vegetação nativa para 4.611 imóveis publicados, parte expressiva dos zeros
-    apresentados significa "não declarado", e não "declarou zero". A interface possui
-    estado próprio para indicador sem cálculo, mas ele depende de a Gold gravar `NULL`. A
-    correção pertence às procedures (§9.36, §9.37).
+  - **Zeros por ausência de declaração — verificado em 2026-10-19.** Os zeros de IRL, ICV
+    e IAPP não são erro de cálculo nem perda no pipeline: a contagem na fonte (ArcGIS do
+    IAT/PR, filtrada pelo circuito), na Bronze e na Silver é idêntica — APP 3.180, Reserva
+    Legal 2.777, Vegetação Nativa 3.182 — e a quarentena dessas entidades está vazia. A
+    origem dos zeros é a inicialização `v_percentual := 0` nas procedures (V072/V073),
+    gravada mesmo quando o imóvel não possui linha de origem; não é regra do desafio, que
+    define a fórmula de cada indicador mas não o tratamento da ausência de declaração.
+    Classificação dos zeros publicados: IRL 1.876 (1.875 sem Reserva Legal declarada, 1
+    com declaração de área 0); ICV 1.440 (todos sem vegetação nativa declarada); IAPP 2.054
+    (1.434 sem APP declarada, 504 com APP e sem vegetação declarada, 116 com ambas e sem
+    sobreposição). Para IRL e ICV o zero é defensável do ponto de vista de conformidade — o
+    imóvel não comprova o percentual exigido —, embora "não declarou" e "declarou zero"
+    permaneçam indistinguíveis. Para o IAPP o zero é incorreto nos 1.434 casos sem APP
+    declarada: o denominador é a área de APP, e sem ela o indicador é indefinido, devendo
+    ser gravado `NULL`. A correção pertence às procedures (migration nova, branch própria).
+  - **Imóveis com CAR cancelado ou pendente publicados na Gold.** Dos 4.611 imóveis, 69
+    têm situação `CA` (cancelado) e 30 `PE` (pendente); os 69 cancelados apresentam IRL e
+    ICV zerados e entram nas médias por município. Cabe à equipe decidir se a publicação
+    deve se restringir a `AT`.
+  - **Cadastro de indicador pela tela não preenche os campos de exibição.** O
+    `TipoIndicadorRequest` não expõe `dimensao`, `sentido`, `limite_bom`, `limite_atencao`
+    nem `ordem_exibicao`; um indicador cadastrado pela tela nasce com esses campos nulos e
+    é exibido em grupo "sem dimensão", com coluna vazia, porque `gold.imovel_publicado`
+    possui somente as sete colunas `valor_*` fixas. A alteração de limites de faixa,
+    portanto, só é possível por `UPDATE` direto no banco.
+  - **`GET /api/indicadores/imoveis` sem paginação.** Adequado ao circuito de homologação
+    (4.611 linhas), inviável no estado inteiro (~556 mil imóveis no CAR/PR). Paginar no
+    servidor antes de ampliar o recorte.
+  - **Javadoc divergente do catálogo.** O comentário do campo `sentido` em
+    `TipoIndicador.java` ainda classifica o ISAP como "quanto maior melhor", contrariando a
+    V076 e o banco (`MENOR_MELHOR`). Corrigir apenas o comentário.
   - **ISAP e IAE em exatamente 100%.** O travamento de sanidade da V063 compara a área da
     interseção, calculada pelo `SDO_GEOM`, com a área do imóvel, calculada em Java/JTS na
     ingestão. São dois motores distintos: num imóvel inteiramente contido em área
@@ -2191,11 +2229,12 @@ criadas pela `V077`; sem elas o IFC é desenhado em escala percentual.
   passa por pouco hoje e tende a falhar em máquina carregada. Não foi alterado por pertencer
   a outra entrega; fica o registro para quem cuidar dele.
 - **[EM ABERTO]**
-  - **Zeros que significam ausência de dado.** A tela já distingue nulo de zero e possui o
-    estado neutro para indicador sem cálculo, mas ele depende de a Gold gravar `NULL`. Como
-    as procedures de IRL, IAPP e ICV gravam zero quando não encontram linha de origem
-    (§9.40), parte dos zeros exibidos em vermelho significa "não declarado". A correção é no
-    backend; a tela já está preparada para o dia em que chegar `null`.
+  - **Zeros que significam ausência de declaração.** A tela distingue nulo de zero e
+    possui estado neutro para indicador sem cálculo, mas depende de a Gold gravar `NULL`.
+    Verificação de 2026-10-19 (§9.40): os zeros vêm da fonte, não de erro de cálculo; para
+    o IAPP, 1.434 imóveis sem APP declarada deveriam chegar como `NULL` e hoje aparecem em
+    vermelho. Quando a procedure for corrigida, a tela passa a exibi-los como célula vazia
+    sem nenhuma alteração no frontend.
   - **Perfil Operador não vê o item de menu**, pela mesma razão descrita na §9.40: ele não
     possui `indicador:visualizar`.
   - **Interseção com a LIZARDS-35 (visualização em mapa).** Ambas as tarefas alteram
