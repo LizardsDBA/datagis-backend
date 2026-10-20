@@ -37,4 +37,17 @@ class CatalogoSilverServiceTest {
         assertThat(service.buscarPorId("inexistente")).isNull();
         assertThat(service.buscarPorId(null)).isNull();
     }
+
+    @Test
+    void deveConterNovasColunasEmAutoInfracaoEFocoCalor() {
+        CatalogoSilverService.EsquemaSilverDto auto = service.buscarPorId("auto_infracao");
+        assertThat(auto).isNotNull();
+        assertThat(auto.colunas()).extracting(CatalogoSilverService.ColunaSilverDto::nome)
+                .contains("houve_embargo", "houve_apreensao");
+
+        CatalogoSilverService.EsquemaSilverDto foco = service.buscarPorId("foco_calor");
+        assertThat(foco).isNotNull();
+        assertThat(foco.colunas()).extracting(CatalogoSilverService.ColunaSilverDto::nome)
+                .contains("dias_sem_chuva", "precipitacao_mm", "frp");
+    }
 }

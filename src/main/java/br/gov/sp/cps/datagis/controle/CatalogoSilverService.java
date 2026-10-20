@@ -140,6 +140,8 @@ public class CatalogoSilverService {
                 ColunaSilverDto.coluna("municipio", "Município", "texto", false),
                 ColunaSilverDto.coluna("descricao", "Descrição da Infração", "texto", false),
                 ColunaSilverDto.coluna("num_processo", "Número do Processo Administrativo", "texto", false),
+                ColunaSilverDto.coluna("houve_embargo", "Houve Embargo", "texto", false),
+                ColunaSilverDto.coluna("houve_apreensao", "Houve Apreensão", "texto", false),
                 ColunaSilverDto.geometria("geometria", "Geometria Espacial (Ponto / Polígono)")
             ),
             List.of(
@@ -185,6 +187,7 @@ public class CatalogoSilverService {
                 ColunaSilverDto.colunaNumero("risco_fogo", "Risco de Fogo", false, null),
                 ColunaSilverDto.colunaNumero("dias_sem_chuva", "Dias Sem Chuva", false, 0.0),
                 ColunaSilverDto.colunaNumero("precipitacao_mm", "Precipitação (mm)", false, 0.0),
+                ColunaSilverDto.colunaNumero("frp", "FRP (Fire Radiative Power)", false, 0.0),
                 ColunaSilverDto.geometria("geometria", "Geometria Espacial (Ponto)")
             ),
             List.of(

@@ -374,7 +374,8 @@ public class PersistidorSilverService {
         RegistroBruto reg = apr.registroBruto();
 
         String numeroAuto = extrairString(attrs, "numero_auto", "num_auto");
-        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "IBAMA");
+        String orgaoPadraoFonte = resolverOrgaoPadraoFonte(reg != null ? reg.getFonteDadoId() : null);
+        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), orgaoPadraoFonte);
         Long tipoAutoId = resolverIdReferencia("tipo_auto_infracao", attrs.get("tipo_auto_infracao"));
         Long tipoInfracaoId = resolverIdReferencia("tipo_infracao", attrs.get("tipo_infracao"));
         Long tipoPessoaId = resolverIdReferencia("tipo_pessoa", attrs.get("tipo_pessoa"));
@@ -385,6 +386,8 @@ public class PersistidorSilverService {
         Date dataAuto = extrairData(attrs, "data_auto");
         String numProcesso = extrairString(attrs, "num_processo");
         BigDecimal valorMulta = extrairBigDecimal(attrs, "valor_multa", "multa");
+        Integer houveEmbargo = extrairBooleanoNumerico(attrs, "houve_embargo");
+        Integer houveApreensao = extrairBooleanoNumerico(attrs, "houve_apreensao");
         String geomWkt = apr.geometriaWkt();
         String atributosOrigem = extrairPayloadOuJson(reg, attrs);
 
@@ -401,6 +404,8 @@ public class PersistidorSilverService {
             dataAuto,
             numProcesso,
             valorMulta,
+            houveEmbargo,
+            houveApreensao,
             geomWkt,
             atributosOrigem,
             reg != null && reg.getFonteDadoId() != null ? reg.getFonteDadoId() : 10L,
@@ -415,7 +420,8 @@ public class PersistidorSilverService {
         RegistroBruto reg = apr.registroBruto();
 
         String numeroTermo = extrairString(attrs, "numero_termo", "num_tad", "numero_emb");
-        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), "IBAMA");
+        String orgaoPadraoFonte = resolverOrgaoPadraoFonte(reg != null ? reg.getFonteDadoId() : null);
+        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), orgaoPadraoFonte);
         Long autoInfracaoId = resolverIdAutoInfracao(attrs.get("auto_infracao"), attrs.get("num_auto_infracao"));
         Long tipoAreaEmbargoId = resolverIdReferencia("tipo_area_embargo", attrs.get("tipo_area_embargo"));
         if (tipoAreaEmbargoId == null) {
@@ -553,6 +559,9 @@ public class PersistidorSilverService {
         BigDecimal latitude = extrairBigDecimal(attrs, "latitude", "lat");
         BigDecimal longitude = extrairBigDecimal(attrs, "longitude", "lon");
         BigDecimal riscoFogo = extrairBigDecimal(attrs, "risco_fogo");
+        BigDecimal diasSemChuva = extrairBigDecimal(attrs, "dias_sem_chuva");
+        BigDecimal precipitacaoMm = extrairBigDecimal(attrs, "precipitacao_mm");
+        BigDecimal frp = extrairBigDecimal(attrs, "frp");
         String geomWkt = apr.geometriaWkt();
         String atributosOrigem = extrairPayloadOuJson(reg, attrs);
 
@@ -566,6 +575,9 @@ public class PersistidorSilverService {
             latitude,
             longitude,
             riscoFogo,
+            diasSemChuva,
+            precipitacaoMm,
+            frp,
             geomWkt,
             atributosOrigem,
             reg != null && reg.getLoteIngestaoId() != null ? reg.getLoteIngestaoId() : 1L,
@@ -848,6 +860,8 @@ public class PersistidorSilverService {
                     s.data_auto,
                     s.num_processo,
                     s.valor_multa,
+                    s.houve_embargo,
+                    s.houve_apreensao,
                     CASE WHEN s.wkt IS NOT NULL THEN SDO_GEOMETRY(s.wkt, 4674) ELSE NULL END AS geometria,
                     s.atributos_origem,
                     s.fonte_dado_id,
@@ -868,6 +882,8 @@ public class PersistidorSilverService {
                         ? AS data_auto,
                         ? AS num_processo,
                         ? AS valor_multa,
+                        ? AS houve_embargo,
+                        ? AS houve_apreensao,
                         TO_CLOB(?) AS wkt,
                         TO_CLOB(?) AS atributos_origem,
                         ? AS fonte_dado_id,
@@ -889,6 +905,8 @@ public class PersistidorSilverService {
                     t.data_auto               = s.data_auto,
                     t.num_processo            = s.num_processo,
                     t.valor_multa             = s.valor_multa,
+                    t.houve_embargo           = s.houve_embargo,
+                    t.houve_apreensao         = s.houve_apreensao,
                     t.geometria               = COALESCE(s.geometria, t.geometria),
                     t.atributos_origem        = s.atributos_origem,
                     t.fonte_dado_id           = s.fonte_dado_id,
@@ -901,12 +919,14 @@ public class PersistidorSilverService {
                     numero_auto, orgao_id, tipo_auto_infracao_id, tipo_infracao_id,
                     tipo_pessoa_id, status_auto_infracao_id, municipio_id, cpf_cnpj_infrator,
                     nome_infrator, data_auto, num_processo, valor_multa,
+                    houve_embargo, houve_apreensao,
                     geometria, atributos_origem, fonte_dado_id,
                     lote_ingestao_id, registro_bruto_id, data_processamento, hash_origem
                 ) VALUES (
                     s.numero_auto, s.orgao_id, s.tipo_auto_infracao_id, s.tipo_infracao_id,
                     s.tipo_pessoa_id, s.status_auto_infracao_id, s.municipio_id, s.cpf_cnpj_infrator,
                     s.nome_infrator, s.data_auto, s.num_processo, s.valor_multa,
+                    s.houve_embargo, s.houve_apreensao,
                     s.geometria, s.atributos_origem, s.fonte_dado_id,
                     s.lote_ingestao_id, s.registro_bruto_id, SYSTIMESTAMP, s.hash_origem
                 )
@@ -1147,6 +1167,9 @@ public class PersistidorSilverService {
                     s.latitude,
                     s.longitude,
                     s.risco_fogo,
+                    s.dias_sem_chuva,
+                    s.precipitacao_mm,
+                    s.frp,
                     CASE WHEN s.wkt IS NOT NULL THEN SDO_GEOMETRY(s.wkt, 4674) ELSE NULL END AS geometria,
                     s.atributos_origem,
                     s.lote_ingestao_id,
@@ -1163,6 +1186,9 @@ public class PersistidorSilverService {
                         ? AS latitude,
                         ? AS longitude,
                         ? AS risco_fogo,
+                        ? AS dias_sem_chuva,
+                        ? AS precipitacao_mm,
+                        ? AS frp,
                         TO_CLOB(?) AS wkt,
                         TO_CLOB(?) AS atributos_origem,
                         ? AS lote_ingestao_id,
@@ -1180,6 +1206,9 @@ public class PersistidorSilverService {
                     t.latitude           = s.latitude,
                     t.longitude          = s.longitude,
                     t.risco_fogo         = s.risco_fogo,
+                    t.dias_sem_chuva     = s.dias_sem_chuva,
+                    t.precipitacao_mm    = s.precipitacao_mm,
+                    t.frp                = s.frp,
                     t.geometria          = COALESCE(s.geometria, t.geometria),
                     t.atributos_origem   = s.atributos_origem,
                     t.lote_ingestao_id   = s.lote_ingestao_id,
@@ -1189,13 +1218,15 @@ public class PersistidorSilverService {
             WHEN NOT MATCHED THEN
                 INSERT (
                     fonte_dado_id, identificador_origem, data_hora, satelite_id,
-                    bioma_id, municipio_id, latitude, longitude, risco_fogo, geometria,
-                    atributos_origem, lote_ingestao_id, registro_bruto_id,
+                    bioma_id, municipio_id, latitude, longitude, risco_fogo,
+                    dias_sem_chuva, precipitacao_mm, frp,
+                    geometria, atributos_origem, lote_ingestao_id, registro_bruto_id,
                     data_processamento, hash_origem
                 ) VALUES (
                     s.fonte_dado_id, s.identificador_origem, s.data_hora, s.satelite_id,
-                    s.bioma_id, s.municipio_id, s.latitude, s.longitude, s.risco_fogo, s.geometria,
-                    s.atributos_origem, s.lote_ingestao_id, s.registro_bruto_id,
+                    s.bioma_id, s.municipio_id, s.latitude, s.longitude, s.risco_fogo,
+                    s.dias_sem_chuva, s.precipitacao_mm, s.frp,
+                    s.geometria, s.atributos_origem, s.lote_ingestao_id, s.registro_bruto_id,
                     SYSTIMESTAMP, s.hash_origem
                 )
             """.formatted(silverSchema);
@@ -1241,10 +1272,11 @@ public class PersistidorSilverService {
      * Executa comandos MERGE associando os parâmetros diretamente ao PreparedStatement.
      */
     private int executarMerge(String sql, Object... params) {
-        return jdbcTemplate.execute(sql, (PreparedStatement ps) -> {
+        Integer res = jdbcTemplate.execute(sql, (PreparedStatement ps) -> {
             vincularParametrosEExecutar(ps, params);
             return 1;
         });
+        return res != null ? res : 0;
     }
 
     /**
@@ -1664,6 +1696,26 @@ public class PersistidorSilverService {
                 try {
                     return Timestamp.valueOf(v.toString().trim());
                 } catch (Exception ignored) {}
+            }
+        }
+        return null;
+    }
+
+    private Integer extrairBooleanoNumerico(Map<String, Object> map, String... chaves) {
+        if (map == null) return null;
+        for (String c : chaves) {
+            Object v = map.get(c);
+            if (v instanceof Boolean b) return b ? 1 : 0;
+            if (v instanceof Number n) return n.intValue() != 0 ? 1 : 0;
+            if (v != null) {
+                String s = v.toString().trim().toUpperCase(Locale.ROOT);
+                if (s.isEmpty()) continue;
+                if (s.equals("S") || s.equals("SIM") || s.equals("TRUE") || s.equals("1") || s.equals("T")) {
+                    return 1;
+                }
+                if (s.equals("N") || s.equals("NAO") || s.equals("NÃO") || s.equals("FALSE") || s.equals("0") || s.equals("F")) {
+                    return 0;
+                }
             }
         }
         return null;
