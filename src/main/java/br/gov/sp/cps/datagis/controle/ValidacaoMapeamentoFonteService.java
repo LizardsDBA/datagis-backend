@@ -62,15 +62,17 @@ public class ValidacaoMapeamentoFonteService {
                 .map(m -> m.getAtributoDestino().trim().toLowerCase())
                 .collect(Collectors.toSet());
 
-        List<String> colunasEsperadas = esquema.colunas().stream()
+        List<String> colunasObrigatorias = esquema.colunas().stream()
+                .filter(CatalogoSilverService.ColunaSilverDto::obrigatorio)
                 .map(CatalogoSilverService.ColunaSilverDto::nome)
                 .toList();
 
-        List<String> faltantes = colunasEsperadas.stream()
+        List<String> faltantes = colunasObrigatorias.stream()
                 .filter(nome -> !atributosMapeados.contains(nome.toLowerCase()))
                 .toList();
 
-        List<String> mapeadas = colunasEsperadas.stream()
+        List<String> mapeadas = esquema.colunas().stream()
+                .map(CatalogoSilverService.ColunaSilverDto::nome)
                 .filter(nome -> atributosMapeados.contains(nome.toLowerCase()))
                 .toList();
 
@@ -80,7 +82,7 @@ public class ValidacaoMapeamentoFonteService {
                 completo,
                 esquema.id(),
                 esquema.nome(),
-                colunasEsperadas.size(),
+                colunasObrigatorias.size(),
                 mapeadas.size(),
                 faltantes,
                 mapeadas);
@@ -88,7 +90,7 @@ public class ValidacaoMapeamentoFonteService {
 
     /**
      * Valida se a fonte está apta para ingestão. Lança {@link IllegalArgumentException}
-     * com mensagem amigável caso a fonte não tenha tabela Silver ou esteja com colunas pendentes.
+     * com mensagem amigável caso a fonte não tenha tabela Silver ou esteja com colunas obrigatórias pendentes.
      */
     public void validarParaIngestao(FonteDado fonte) {
         if (fonte == null) {
@@ -106,7 +108,7 @@ public class ValidacaoMapeamentoFonteService {
             throw new IllegalArgumentException(
                     "A fonte \"" + fonte.getNome() + "\" não pode ser executada: o mapeamento para a tabela Silver '"
                             + status.nomeSilver() + "' está incompleto. Faltam " + status.colunasFaltantes().size()
-                            + " coluna(s): " + String.join(", ", status.colunasFaltantes()) + ".");
+                            + " coluna(s) obrigatória(s) (NOT NULL): " + String.join(", ", status.colunasFaltantes()) + ".");
         }
     }
 }

@@ -50,4 +50,33 @@ class CatalogoSilverServiceTest {
         assertThat(foco.colunas()).extracting(CatalogoSilverService.ColunaSilverDto::nome)
                 .contains("dias_sem_chuva", "precipitacao_mm", "frp");
     }
+
+    @Test
+    void deveExcluirCamposAutogeradosEAjustarObrigatoriedades() {
+        CatalogoSilverService.EsquemaSilverDto area = service.buscarPorId("area_protegida");
+        assertThat(area).isNotNull();
+        assertThat(area.colunas()).extracting(CatalogoSilverService.ColunaSilverDto::nome)
+                .doesNotContain("orgao", "tipo_area_protegida")
+                .contains("categoria_area_protegida");
+        CatalogoSilverService.ColunaSilverDto colCat = area.colunas().stream()
+                .filter(c -> c.nome().equals("categoria_area_protegida")).findFirst().orElseThrow();
+        assertThat(colCat.obrigatorio()).isTrue();
+
+        CatalogoSilverService.EsquemaSilverDto auto = service.buscarPorId("auto_infracao");
+        assertThat(auto.colunas()).extracting(CatalogoSilverService.ColunaSilverDto::nome)
+                .doesNotContain("orgao");
+
+        CatalogoSilverService.EsquemaSilverDto embargo = service.buscarPorId("embargo_ambiental");
+        assertThat(embargo.colunas()).extracting(CatalogoSilverService.ColunaSilverDto::nome)
+                .doesNotContain("orgao");
+
+        CatalogoSilverService.EsquemaSilverDto municipio = service.buscarPorId("municipio");
+        assertThat(municipio.colunas()).extracting(CatalogoSilverService.ColunaSilverDto::nome)
+                .doesNotContain("unidade_federativa");
+
+        CatalogoSilverService.EsquemaSilverDto imovel = service.buscarPorId("imovel_rural");
+        CatalogoSilverService.ColunaSilverDto colSit = imovel.colunas().stream()
+                .filter(c -> c.nome().equals("situacao_imovel")).findFirst().orElseThrow();
+        assertThat(colSit.obrigatorio()).isFalse();
+    }
 }

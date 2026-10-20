@@ -62,7 +62,7 @@ public class CatalogoSilverService {
             "Cadastro Ambiental Rural - limites e situação cadastral de imóveis rurais",
             List.of(
                 ColunaSilverDto.coluna("cod_imovel", "Código do Imóvel (Chave Natural)", "texto", true),
-                ColunaSilverDto.colunaComDominio("situacao_imovel", "Situação do Imóvel", "texto", true, "situacao_imovel"),
+                ColunaSilverDto.colunaComDominio("situacao_imovel", "Situação do Imóvel", "texto", false, "situacao_imovel"),
                 ColunaSilverDto.colunaComDominio("condicao_imovel", "Condição do Imóvel", "texto", false, "condicao_imovel"),
                 ColunaSilverDto.colunaComDominio("tipo_imovel", "Tipo do Imóvel", "texto", false, "tipo_imovel"),
                 ColunaSilverDto.colunaNumero("area_ha", "Área do Imóvel (ha)", false, 0.0),
@@ -84,10 +84,8 @@ public class CatalogoSilverService {
             List.of(
                 ColunaSilverDto.coluna("codigo_origem", "Código de Origem (CNUC / FUNAI)", "texto", true),
                 ColunaSilverDto.coluna("nome", "Nome da Unidade / Terra Indígena", "texto", true),
+                ColunaSilverDto.colunaComDominio("categoria_area_protegida", "Categoria de Área Protegida", "texto", true, "categoria_area_protegida"),
                 ColunaSilverDto.colunaNumero("area_ha", "Área Total (ha)", false, 0.0),
-                ColunaSilverDto.colunaComDominio("tipo_area_protegida", "Tipo de Área Protegida", "texto", false, "tipo_area_protegida"),
-                ColunaSilverDto.colunaComDominio("categoria_area_protegida", "Categoria de Área Protegida", "texto", false, "categoria_area_protegida"),
-                ColunaSilverDto.colunaComDominio("orgao", "Órgão Gestor Responsável", "texto", false, "orgao"),
                 ColunaSilverDto.colunaComDominio("bioma", "Bioma Predominante", "texto", false, "bioma"),
                 ColunaSilverDto.coluna("ato_legal", "Ato Legal de Criação", "texto", false),
                 ColunaSilverDto.geometria("geometria", "Geometria Espacial (Polígono)")
@@ -107,7 +105,6 @@ public class CatalogoSilverService {
                 ColunaSilverDto.coluna("numero_termo", "Número do Termo de Embargo (Chave Natural)", "texto", true),
                 ColunaSilverDto.coluna("data_embargo", "Data do Embargo", "data_iso", false),
                 ColunaSilverDto.colunaNumero("area_embargada_ha", "Área Embargada (ha)", false, 0.0),
-                ColunaSilverDto.colunaComDominio("orgao", "Órgão Emissor", "texto", true, "orgao"),
                 ColunaSilverDto.colunaComDominio("tipo_area_embargo", "Tipo de Infração / Área Embargada", "texto", false, "tipo_area_embargo"),
                 ColunaSilverDto.cpfCnpj("cpf_cnpj", "Documento do Infrator (CPF / CNPJ)", false),
                 ColunaSilverDto.coluna("nome_autuado", "Nome ou Razão Social do Infrator/Autuado", "texto", false),
@@ -130,7 +127,6 @@ public class CatalogoSilverService {
                 ColunaSilverDto.coluna("numero_auto", "Número do Auto de Infração (Chave Natural)", "texto", true),
                 ColunaSilverDto.coluna("data_auto", "Data da Lavratura do Auto", "data_iso", false),
                 ColunaSilverDto.colunaNumero("valor_multa", "Valor da Multa (R$)", false, 0.0),
-                ColunaSilverDto.colunaComDominio("orgao", "Órgão Autuador", "texto", true, "orgao"),
                 ColunaSilverDto.colunaComDominio("tipo_auto_infracao", "Tipo de Auto de Infração", "texto", false, "tipo_auto_infracao"),
                 ColunaSilverDto.colunaComDominio("tipo_infracao", "Tipo de Infração", "texto", false, "tipo_infracao"),
                 ColunaSilverDto.colunaComDominio("tipo_pessoa", "Tipo de Pessoa (Física / Jurídica)", "texto", false, "tipo_pessoa"),
@@ -202,7 +198,6 @@ public class CatalogoSilverService {
             List.of(
                 ColunaSilverDto.coluna("cod_ibge", "Código IBGE (Chave Natural)", "texto", true),
                 ColunaSilverDto.coluna("nome", "Nome do Município", "texto", true),
-                ColunaSilverDto.colunaComDominio("unidade_federativa", "Unidade Federativa (UF)", "texto", false, "unidade_federativa"),
                 ColunaSilverDto.colunaComDominio("bioma_predominante", "Bioma Predominante", "texto", false, "bioma"),
                 ColunaSilverDto.colunaNumero("area_km2", "Área Total do Município (km²)", false, 0.0),
                 ColunaSilverDto.geometria("geometria", "Geometria Limite Municipal (Polígono)")
