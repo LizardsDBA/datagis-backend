@@ -294,7 +294,12 @@ public class OrquestradorValidacao {
             return null;
         }
 
-        JsonNode valNode = node.get(campoOrigem);
+        String campoLimpo = campoOrigem.trim();
+        if (campoLimpo.isEmpty()) {
+            return null;
+        }
+
+        JsonNode valNode = buscarNoPayload(node, campoLimpo);
         if (valNode == null || valNode.isNull()) {
             return null;
         }
@@ -309,8 +314,66 @@ public class OrquestradorValidacao {
 
     private String extrairChave(JsonNode node, String campoChave) {
         if (node == null || campoChave == null) return null;
-        JsonNode n = node.get(campoChave);
+        JsonNode n = buscarNoPayload(node, campoChave.trim());
         return n != null && !n.isNull() ? n.asText().trim() : null;
+    }
+
+    private JsonNode buscarNoPayload(JsonNode root, String campo) {
+        if (root == null || campo == null || campo.isBlank()) {
+            return null;
+        }
+
+        // 1. Busca direta no nó raiz
+        JsonNode n = root.get(campo);
+        if (n != null && !n.isNull()) {
+            return n;
+        }
+
+        // 2. Busca case-insensitive no nó raiz
+        if (root.isObject()) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> map = objectMapper.convertValue(root, Map.class);
+                if (map != null) {
+                    for (String key : map.keySet()) {
+                        if (key != null && key.equalsIgnoreCase(campo)) {
+                            JsonNode found = root.get(key);
+                            if (found != null && !found.isNull()) {
+                                return found;
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // 3. Busca em contêineres GIS aninhados (GeoJSON properties, ArcGIS REST attributes)
+        String[] containers = {"properties", "attributes"};
+        for (String c : containers) {
+            JsonNode container = root.get(c);
+            if (container != null && container.isObject()) {
+                JsonNode child = container.get(campo);
+                if (child != null && !child.isNull()) {
+                    return child;
+                }
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> childMap = objectMapper.convertValue(container, Map.class);
+                    if (childMap != null) {
+                        for (String key : childMap.keySet()) {
+                            if (key != null && key.equalsIgnoreCase(campo)) {
+                                JsonNode found = container.get(key);
+                                if (found != null && !found.isNull()) {
+                                    return found;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
+        return null;
     }
 
     /**

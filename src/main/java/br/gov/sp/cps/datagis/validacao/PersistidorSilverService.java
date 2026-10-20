@@ -330,7 +330,7 @@ public class PersistidorSilverService {
         }
         String nome = extrairString(attrs, "nome", "nm_uc", "terrai_nom");
         String orgaoPadraoFonte = resolverOrgaoPadraoFonte(reg != null ? reg.getFonteDadoId() : null);
-        Long orgaoId = resolverIdOrgao(attrs.get("orgao_declarado"), orgaoPadraoFonte);
+        Long orgaoId = resolverIdOrgao(attrs.get("orgao"), orgaoPadraoFonte);
         Long categoriaAreaId = resolverIdReferencia("categoria_area_protegida", attrs.get("categoria_area_protegida"));
         Long tipoAreaId = null;
         if (categoriaAreaId != null) {

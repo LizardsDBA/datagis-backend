@@ -68,6 +68,7 @@ public class CatalogoSilverService {
                 ColunaSilverDto.colunaNumero("area_ha", "Área do Imóvel (ha)", false, 0.0),
                 ColunaSilverDto.colunaNumero("modulos_fiscais", "Módulos Fiscais", false, 0.0),
                 ColunaSilverDto.coluna("municipio", "Município (Código IBGE / Nome)", "texto", false),
+                ColunaSilverDto.coluna("data_registro", "Data de Registro", "data_iso", false),
                 ColunaSilverDto.geometria("geometria", "Geometria Espacial (Polígono)")
             ),
             List.of(
@@ -89,7 +90,6 @@ public class CatalogoSilverService {
                 ColunaSilverDto.colunaComDominio("orgao", "Órgão Gestor Responsável", "texto", false, "orgao"),
                 ColunaSilverDto.colunaComDominio("bioma", "Bioma Predominante", "texto", false, "bioma"),
                 ColunaSilverDto.coluna("ato_legal", "Ato Legal de Criação", "texto", false),
-                ColunaSilverDto.colunaNumero("ano_criacao", "Ano de Criação", false, 1500.0),
                 ColunaSilverDto.geometria("geometria", "Geometria Espacial (Polígono)")
             ),
             List.of(
@@ -106,15 +106,15 @@ public class CatalogoSilverService {
             List.of(
                 ColunaSilverDto.coluna("numero_termo", "Número do Termo de Embargo (Chave Natural)", "texto", true),
                 ColunaSilverDto.coluna("data_embargo", "Data do Embargo", "data_iso", false),
-                ColunaSilverDto.colunaNumero("area_ha", "Área Embargada (ha)", false, 0.0),
+                ColunaSilverDto.colunaNumero("area_embargada_ha", "Área Embargada (ha)", false, 0.0),
                 ColunaSilverDto.colunaComDominio("orgao", "Órgão Emissor", "texto", true, "orgao"),
                 ColunaSilverDto.colunaComDominio("tipo_area_embargo", "Tipo de Infração / Área Embargada", "texto", false, "tipo_area_embargo"),
                 ColunaSilverDto.cpfCnpj("cpf_cnpj", "Documento do Infrator (CPF / CNPJ)", false),
-                ColunaSilverDto.coluna("nome_infrator", "Nome ou Razão Social do Infrator", "texto", false),
+                ColunaSilverDto.coluna("nome_autuado", "Nome ou Razão Social do Infrator/Autuado", "texto", false),
                 ColunaSilverDto.coluna("municipio", "Município", "texto", false),
-                ColunaSilverDto.coluna("descricao_infracao", "Descrição do Motivo do Embargo", "texto", false),
-                ColunaSilverDto.coluna("processo", "Número do Processo Administrativo", "texto", false),
-                ColunaSilverDto.coluna("auto_infracao_id", "Referência ao Auto de Infração", "texto", false),
+                ColunaSilverDto.coluna("descricao", "Descrição do Motivo do Embargo", "texto", false),
+                ColunaSilverDto.coluna("num_processo", "Número do Processo Administrativo", "texto", false),
+                ColunaSilverDto.coluna("num_auto_infracao", "Referência ao Auto de Infração", "texto", false),
                 ColunaSilverDto.geometria("geometria", "Geometria do Embargo (Polígono)")
             ),
             List.of(
@@ -135,11 +135,11 @@ public class CatalogoSilverService {
                 ColunaSilverDto.colunaComDominio("tipo_infracao", "Tipo de Infração", "texto", false, "tipo_infracao"),
                 ColunaSilverDto.colunaComDominio("tipo_pessoa", "Tipo de Pessoa (Física / Jurídica)", "texto", false, "tipo_pessoa"),
                 ColunaSilverDto.colunaComDominio("status_auto_infracao", "Status do Auto", "texto", false, "status_auto_infracao"),
-                ColunaSilverDto.cpfCnpj("cpf_cnpj", "CPF ou CNPJ do Autuado", false),
+                ColunaSilverDto.cpfCnpj("cpf_cnpj_infrator", "CPF ou CNPJ do Autuado", false),
                 ColunaSilverDto.coluna("nome_infrator", "Nome do Autuado", "texto", false),
                 ColunaSilverDto.coluna("municipio", "Município", "texto", false),
-                ColunaSilverDto.coluna("descricao_infracao", "Descrição da Infração", "texto", false),
-                ColunaSilverDto.coluna("processo", "Número do Processo Administrativo", "texto", false),
+                ColunaSilverDto.coluna("descricao", "Descrição da Infração", "texto", false),
+                ColunaSilverDto.coluna("num_processo", "Número do Processo Administrativo", "texto", false),
                 ColunaSilverDto.geometria("geometria", "Geometria Espacial (Ponto / Polígono)")
             ),
             List.of(
@@ -156,11 +156,12 @@ public class CatalogoSilverService {
             "Polígonos de detecção de desmatamento consolidado INPE",
             List.of(
                 ColunaSilverDto.coluna("identificador_origem", "Identificador de Origem (Chave Natural)", "texto", true),
-                ColunaSilverDto.colunaNumero("ano_deteccao", "Ano da Detecção PRODES", false, 1980.0),
+                ColunaSilverDto.colunaNumero("ano", "Ano da Detecção PRODES", false, 1980.0),
                 ColunaSilverDto.colunaNumero("area_ha", "Área Desmatada (ha)", false, 0.0),
                 ColunaSilverDto.colunaComDominio("classe_prodes", "Classe PRODES", "texto", false, "classe_prodes"),
                 ColunaSilverDto.colunaComDominio("satelite", "Satélite", "texto", false, "satelite"),
                 ColunaSilverDto.colunaComDominio("sensor", "Sensor", "texto", false, "sensor"),
+                ColunaSilverDto.coluna("data_imagem", "Data da Imagem", "data_iso", false),
                 ColunaSilverDto.geometria("geometria", "Geometria do Desmatamento (Polígono)")
             ),
             List.of(
@@ -175,13 +176,15 @@ public class CatalogoSilverService {
             "Detecções de focos de queimada por satélite (INPE Queimadas)",
             List.of(
                 ColunaSilverDto.coluna("identificador_origem", "Identificador de Origem (Chave Natural)", "texto", true),
-                ColunaSilverDto.coluna("data_hora_foco", "Data e Hora do Foco", "data_iso", false),
+                ColunaSilverDto.coluna("data_hora", "Data e Hora do Foco", "data_iso", false),
                 ColunaSilverDto.colunaComDominio("satelite", "Satélite", "texto", false, "satelite"),
                 ColunaSilverDto.colunaComDominio("bioma", "Bioma", "texto", false, "bioma"),
                 ColunaSilverDto.coluna("municipio", "Município", "texto", false),
+                ColunaSilverDto.colunaNumero("latitude", "Latitude", false, null),
+                ColunaSilverDto.colunaNumero("longitude", "Longitude", false, null),
                 ColunaSilverDto.colunaNumero("risco_fogo", "Risco de Fogo", false, null),
                 ColunaSilverDto.colunaNumero("dias_sem_chuva", "Dias Sem Chuva", false, 0.0),
-                ColunaSilverDto.colunaNumero("precipitacao", "Precipitação (mm)", false, 0.0),
+                ColunaSilverDto.colunaNumero("precipitacao_mm", "Precipitação (mm)", false, 0.0),
                 ColunaSilverDto.geometria("geometria", "Geometria Espacial (Ponto)")
             ),
             List.of(
@@ -198,7 +201,7 @@ public class CatalogoSilverService {
                 ColunaSilverDto.coluna("nome", "Nome do Município", "texto", true),
                 ColunaSilverDto.colunaComDominio("unidade_federativa", "Unidade Federativa (UF)", "texto", false, "unidade_federativa"),
                 ColunaSilverDto.colunaComDominio("bioma_predominante", "Bioma Predominante", "texto", false, "bioma"),
-                ColunaSilverDto.colunaNumero("area_ha", "Área Total do Município (ha)", false, 0.0),
+                ColunaSilverDto.colunaNumero("area_km2", "Área Total do Município (km²)", false, 0.0),
                 ColunaSilverDto.geometria("geometria", "Geometria Limite Municipal (Polígono)")
             ),
             List.of(
