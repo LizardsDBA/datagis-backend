@@ -1,15 +1,11 @@
 package br.gov.sp.cps.datagis.gold;
 
-import br.gov.sp.cps.datagis.controle.FonteDado;
-import br.gov.sp.cps.datagis.controle.LoteIngestao;
-import br.gov.sp.cps.datagis.controle.LoteIngestaoRepository;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.Types;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -120,15 +116,12 @@ public class GoldPublicacaoService {
 
     private final JdbcTemplate jdbcTemplate;
     private final SimplificadorGeometriaMapa simplificador;
-    private final LoteIngestaoRepository loteIngestaoRepository;
 
     public GoldPublicacaoService(
             JdbcTemplate jdbcTemplate,
-            SimplificadorGeometriaMapa simplificador,
-            LoteIngestaoRepository loteIngestaoRepository) {
+            SimplificadorGeometriaMapa simplificador) {
         this.jdbcTemplate = jdbcTemplate;
         this.simplificador = simplificador;
-        this.loteIngestaoRepository = loteIngestaoRepository;
     }
 
     /**
@@ -237,264 +230,10 @@ public class GoldPublicacaoService {
     }
 
     /**
-     * Orquestra a migração de um lote específico para a Gold.
-     * Se for um lote de CAR (IMOVEL_RURAL), calcula os 7 indicadores apenas para os
-     * imóveis do lote e publica a camada IMOVEL_RURAL.
-     * Se for um lote de outra fonte (DESMATAMENTO, EMBARGO, AREA_PROTEGIDA, MUNICIPIO, FOCO_CALOR),
-     * publica exclusivamente a camada correspondente e não toca nos imóveis do CAR.
-     * Lotes já migrados (PROMOVIDO_GOLD) são bloqueados e não podem ser migrados novamente.
+     * Disparo padrão de publicação da camada Gold, delegando para {@link #publicarTudo()}.
      */
-    public ResultadoPublicacaoTudo publicar(Long loteId) {
-        if (loteId == null) {
-            return publicarTudo();
-        }
-
-        LoteIngestao lote = loteIngestaoRepository.findByIdComFonte(loteId)
-                .orElseThrow(() -> new IllegalArgumentException("Lote #" + loteId + " não encontrado."));
-
-        if (STATUS_PROMOVIDO_GOLD.equals(lote.getStatus())) {
-            throw new IllegalArgumentException(
-                    "O lote #" + loteId + " já foi migrado para a Gold e não pode ser migrado novamente.");
-        }
-
-        if (!"PROMOVIDO_SILVER".equals(lote.getStatus())) {
-            throw new IllegalArgumentException(
-                    "O lote #" + loteId + " está com status " + lote.getStatus()
-                            + ". Apenas lotes com status PROMOVIDO_SILVER podem ser migrados para a Gold.");
-        }
-
-        FonteDado fonte = lote.getFonteDado();
-        String entidadeSilver = resolverEntidadeSilver(fonte);
-        String codigoCamada = mapearEntidadeSilverParaCodigoCamada(entidadeSilver);
-
-        List<String> camadasPublicadas = new ArrayList<>();
-        List<String> camadasComFalha = new ArrayList<>();
-        int totalImoveis = 0;
-        int sucessoImoveis = 0;
-        List<String> falhasImoveis = new ArrayList<>();
-
-        if ("IMOVEL_RURAL".equals(codigoCamada)) {
-            List<String> codigosImovel = jdbcTemplate.queryForList(
-                    "SELECT cod_imovel FROM silver.imovel_rural WHERE lote_ingestao_id = ?",
-                    String.class, loteId);
-
-            if (codigosImovel.isEmpty() && fonte != null && fonte.getId() != null) {
-                codigosImovel = jdbcTemplate.queryForList(
-                        "SELECT cod_imovel FROM silver.imovel_rural WHERE fonte_dado_id = ? AND ROWNUM <= 500",
-                        String.class, fonte.getId());
-            }
-
-            totalImoveis = codigosImovel.size();
-            long publicacaoIndicadoresId = inserirControlePublicacaoIndicadores(totalImoveis);
-
-            int processadosDesdeUltimaAtualizacao = 0;
-            for (String codImovel : codigosImovel) {
-                try {
-                    recalcularImovel(codImovel);
-                    sucessoImoveis++;
-                } catch (Exception e) {
-                    log.warn("publicar(loteId={}): falhou pro imóvel {}: {}", loteId, codImovel, e.getMessage());
-                    falhasImoveis.add(codImovel);
-                    jdbcTemplate.update(
-                            """
-                            INSERT INTO gold.publicacao_indicadores_erro
-                                (publicacao_indicadores_id, cod_imovel, motivo)
-                            VALUES (?, ?, ?)
-                            """,
-                            publicacaoIndicadoresId, codImovel, truncar(e.getMessage(), 500));
-                }
-                processadosDesdeUltimaAtualizacao++;
-                if (processadosDesdeUltimaAtualizacao >= LOTE_PROGRESSO_INDICADORES) {
-                    atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucessoImoveis, falhasImoveis.size());
-                    processadosDesdeUltimaAtualizacao = 0;
-                }
-            }
-            if (processadosDesdeUltimaAtualizacao > 0) {
-                atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucessoImoveis, falhasImoveis.size());
-            }
-
-            jdbcTemplate.update(
-                    """
-                    UPDATE gold.publicacao_indicadores
-                       SET status = 'CONCLUIDA', concluido_em = SYSTIMESTAMP
-                     WHERE id = ?
-                    """,
-                    publicacaoIndicadoresId);
-
-            try {
-                publicarCamadaMapaEmLotes("IMOVEL_RURAL");
-                camadasPublicadas.add("IMOVEL_RURAL");
-            } catch (Exception e) {
-                log.warn("publicar(loteId={}): falhou camada IMOVEL_RURAL: {}", loteId, e.getMessage());
-                camadasComFalha.add("IMOVEL_RURAL");
-            }
-        } else if ("reserva_legal".equals(entidadeSilver)
-                || "app_declarada".equals(entidadeSilver)
-                || "vegetacao_nativa_declarada".equals(entidadeSilver)) {
-            String tabelaSilver = switch (entidadeSilver) {
-                case "reserva_legal" -> "silver.reserva_legal";
-                case "app_declarada" -> "silver.app_declarada";
-                case "vegetacao_nativa_declarada" -> "silver.vegetacao_nativa_declarada";
-                default -> null;
-            };
-
-            List<String> codigosImovel = jdbcTemplate.queryForList(
-                    "SELECT DISTINCT cod_imovel FROM " + tabelaSilver + " WHERE lote_ingestao_id = ? AND cod_imovel IS NOT NULL",
-                    String.class, loteId);
-
-            if (codigosImovel.isEmpty() && fonte != null && fonte.getId() != null) {
-                codigosImovel = jdbcTemplate.queryForList(
-                        "SELECT DISTINCT cod_imovel FROM " + tabelaSilver + " WHERE fonte_dado_id = ? AND cod_imovel IS NOT NULL AND ROWNUM <= 500",
-                        String.class, fonte.getId());
-            }
-
-            totalImoveis = codigosImovel.size();
-            long publicacaoIndicadoresId = inserirControlePublicacaoIndicadores(totalImoveis);
-
-            int processadosDesdeUltimaAtualizacao = 0;
-            for (String codImovel : codigosImovel) {
-                try {
-                    recalcularIndicadoresPorEntidade(entidadeSilver, codImovel);
-                    sucessoImoveis++;
-                } catch (Exception e) {
-                    log.warn("publicar(loteId={}, entidade={}): falhou pro imóvel {}: {}", loteId, entidadeSilver, codImovel, e.getMessage());
-                    falhasImoveis.add(codImovel);
-                    jdbcTemplate.update(
-                            """
-                            INSERT INTO gold.publicacao_indicadores_erro
-                                (publicacao_indicadores_id, cod_imovel, motivo)
-                            VALUES (?, ?, ?)
-                            """,
-                            publicacaoIndicadoresId, codImovel, truncar(e.getMessage(), 500));
-                }
-                processadosDesdeUltimaAtualizacao++;
-                if (processadosDesdeUltimaAtualizacao >= LOTE_PROGRESSO_INDICADORES) {
-                    atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucessoImoveis, falhasImoveis.size());
-                    processadosDesdeUltimaAtualizacao = 0;
-                }
-            }
-            if (processadosDesdeUltimaAtualizacao > 0) {
-                atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucessoImoveis, falhasImoveis.size());
-            }
-
-            jdbcTemplate.update(
-                    """
-                    UPDATE gold.publicacao_indicadores
-                       SET status = 'CONCLUIDA', concluido_em = SYSTIMESTAMP
-                     WHERE id = ?
-                    """,
-                    publicacaoIndicadoresId);
-        } else if (codigoCamada != null) {
-            try {
-                publicarCamadaMapaEmLotes(codigoCamada);
-                camadasPublicadas.add(codigoCamada);
-            } catch (Exception e) {
-                log.warn("publicar(loteId={}): falhou camada {}: {}", loteId, codigoCamada, e.getMessage());
-                camadasComFalha.add(codigoCamada);
-                throw e;
-            }
-        }
-
-        lote.setStatus(STATUS_PROMOVIDO_GOLD);
-        loteIngestaoRepository.save(lote);
-
-        try {
-            jdbcTemplate.update("UPDATE controle.lote_ingestao SET status = ? WHERE id = ?", STATUS_PROMOVIDO_GOLD, loteId);
-        } catch (Exception e) {
-            log.warn("publicar: erro ao atualizar status do lote {} para PROMOVIDO_GOLD via JDBC: {}", loteId, e.getMessage());
-        }
-
-        return new ResultadoPublicacaoTudo(
-                totalImoveis, sucessoImoveis, falhasImoveis, camadasPublicadas, camadasComFalha);
-    }
-
-    public void recalcularIndicadoresPorEntidade(String entidadeSilver, String codImovel) {
-        switch (entidadeSilver) {
-            case "reserva_legal" -> {
-                chamarCalculo("pkg_calculo_territorial", "calcular_irl", codImovel);
-                chamarPublicarImovel(codImovel);
-            }
-            case "app_declarada" -> {
-                chamarCalculo("pkg_calculo_territorial", "calcular_iapp", codImovel);
-                chamarPublicarImovel(codImovel);
-            }
-            case "vegetacao_nativa_declarada" -> {
-                chamarCalculo("pkg_calculo_territorial", "calcular_iapp", codImovel);
-                chamarCalculo("pkg_calculo_conservacao", "calcular_icv", codImovel);
-                chamarPublicarImovel(codImovel);
-            }
-            default -> recalcularImovel(codImovel);
-        }
-    }
-
-    public String resolverEntidadeSilver(FonteDado fonte) {
-        if (fonte != null && fonte.getEntidadeSilver() != null && !fonte.getEntidadeSilver().isBlank()) {
-            return normalizarNomeEntidade(fonte.getEntidadeSilver());
-        }
-        if (fonte != null && fonte.getId() != null) {
-            try {
-                List<String> destinos = jdbcTemplate.queryForList(
-                        "SELECT DISTINCT tabela_destino FROM controle.mapeamento_coluna WHERE fonte_dado_id = ? AND tabela_destino IS NOT NULL",
-                        String.class, fonte.getId());
-                for (String dest : destinos) {
-                    if (dest != null && !dest.isBlank()) {
-                        return normalizarNomeEntidade(dest);
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("Erro ao consultar tabela_destino em mapeamento_coluna para fonte {}: {}", fonte.getId(), e.getMessage());
-            }
-        }
-        if (fonte == null || fonte.getNome() == null) {
-            return "imovel_rural";
-        }
-        String nome = fonte.getNome().toLowerCase(Locale.ROOT);
-        if (nome.contains("reserva") || nome.contains("legal"))
-            return "reserva_legal";
-        if (nome.contains("app"))
-            return "app_declarada";
-        if (nome.contains("vegeta") || nome.contains("cobertura"))
-            return "vegetacao_nativa_declarada";
-        if (nome.contains("car") || nome.contains("imóvel") || nome.contains("imovel"))
-            return "imovel_rural";
-        if (nome.contains("bioma"))
-            return "bioma";
-        if (nome.contains("ibge") || nome.contains("município") || nome.contains("municipio"))
-            return "municipio";
-        if (nome.contains("embargo"))
-            return "embargo_ambiental";
-        if (nome.contains("auto") || nome.contains("infração") || nome.contains("infracao"))
-            return "auto_infracao";
-        if (nome.contains("foco") || nome.contains("queimada"))
-            return "foco_calor";
-        if (nome.contains("desmatamento") || nome.contains("prodes"))
-            return "desmatamento";
-        if (nome.contains("indígena") || nome.contains("indigena") || nome.contains("conservação")
-                || nome.contains("uc"))
-            return "area_protegida";
-        return "imovel_rural";
-    }
-
-    private static String normalizarNomeEntidade(String entidade) {
-        if (entidade == null) return "imovel_rural";
-        String s = entidade.trim().toLowerCase(Locale.ROOT);
-        if (s.startsWith("silver.")) {
-            s = s.substring(7);
-        }
-        return s;
-    }
-
-    public static String mapearEntidadeSilverParaCodigoCamada(String entidadeSilver) {
-        if (entidadeSilver == null) return null;
-        return switch (entidadeSilver.toLowerCase(Locale.ROOT)) {
-            case "imovel_rural" -> "IMOVEL_RURAL";
-            case "municipio" -> "MUNICIPIO";
-            case "area_protegida" -> "AREA_PROTEGIDA";
-            case "desmatamento" -> "DESMATAMENTO";
-            case "embargo", "embargo_ambiental" -> "EMBARGO";
-            case "foco_calor" -> "FOCO_CALOR";
-            default -> null;
-        };
+    public ResultadoPublicacaoTudo publicar() {
+        return publicarTudo();
     }
 
     /**

@@ -3,24 +3,27 @@
 Este documento reúne todas as 18 fontes de dados cadastradas no DataGIS, suas respectivas tabelas de destino na camada Silver e o mapeamento de-para campo a campo.
 Você pode editar diretamente este arquivo para ajustar colunas de origem, colunas de destino ou regras de validação.
 
-OBS IMPORTANTE: Tudo que estiver relacionado a orgão será buscado diretamente dos dados da fonte de dados em nosso sitema. Não buscando mais em dados brutos e não precisando de validações. Não sendo necessário vincular esse item no mapeamento coluna.
-OBS IMPORTANTE: tudo relacionado a tipo_area_categoria será buscado diretamente de categoria_area_protegida. Não sendo necessário vincular esse item no mapeamento coluna.
+OBS IMPORTANTE:
+1. Tudo que estiver relacionado a "orgao" é atribuído diretamente a partir dos metadados da fonte de dados no sistema. Não é buscado nos dados brutos e não requer validações no de-para. Não sendo necessário e nem permitido vincular esse item no mapeamento de coluna.
+2. Tudo que for relacionado a "tipo_area_protegida" é derivado automaticamente a partir de "categoria_area_protegida". Não sendo necessário vincular tipo_area_protegida no mapeamento de coluna. Em contrapartida, "categoria_area_protegida" é de preenchimento obrigatório para áreas protegidas.
+3. Tudo relacionado a "unidade_federativa" em município é preenchido automaticamente com o valor padrão do estado do Paraná (PR). Não sendo necessário vincular no mapeamento de coluna.
+4. Regra de Bloqueio de Ingestão por Mapeamento Incompleto: O sistema bloqueia preventivamente a execução da fonte (manual ou agendada) caso alguma coluna física da tabela Silver marcada como NOT NULL não esteja mapeada. Colunas que não possuem restrição NOT NULL na tabela física da Silver (por exemplo, situacao_imovel em imovel_rural) são opcionais e não impedem a ingestão.
 
 ---
 
 ## 1. Regras e Colunas Canônicas Permitidas por Tabela Silver
 
-A coluna de destino (`Coluna Destino (Silver)`) deve obrigatoriamente existir na tabela física de destino na Silver:
+A coluna de destino (`Coluna Destino (Silver)`) deve obrigatoriamente existir na tabela física de destino na Silver (colunas autogeradas como `orgao`, `tipo_area_protegida` e `unidade_federativa` foram removidas do catálogo de seleção manual):
 
 | Tabela Silver | Colunas Canônicas Disponíveis |
 | :--- | :--- |
 | **`imovel_rural`** | `cod_imovel`, `situacao_imovel`, `condicao_imovel`, `tipo_imovel`, `area_ha`, `modulos_fiscais`, `municipio`, `data_registro`, `geometria` |
-| **`area_protegida`** | `codigo_origem`, `nome`, `area_ha`, `tipo_area_protegida`, `categoria_area_protegida`, `orgao`, `bioma`, `ato_legal`, `geometria` |
-| **`embargo_ambiental`** | `numero_termo`, `orgao`, `auto_infracao`, `data_embargo`, `area_embargada_ha`, `tipo_area_embargo`, `cpf_cnpj`, `nome_autuado`, `municipio`, `descricao`, `num_processo`, `num_auto_infracao`, `geometria` |
-| **`auto_infracao`** | `numero_auto`, `data_auto`, `valor_multa`, `orgao`, `tipo_auto_infracao`, `tipo_infracao`, `tipo_pessoa`, `status_auto_infracao`, `cpf_cnpj_infrator`, `nome_infrator`, `municipio`, `descricao`, `num_processo`, `geometria`, `houve_embargo`, `houve_apreensao` |
+| **`area_protegida`** | `codigo_origem`, `nome`, `area_ha`, `categoria_area_protegida`, `bioma`, `ato_legal`, `geometria` |
+| **`embargo_ambiental`** | `numero_termo`, `auto_infracao`, `data_embargo`, `area_embargada_ha`, `tipo_area_embargo`, `cpf_cnpj`, `nome_autuado`, `municipio`, `descricao`, `num_processo`, `num_auto_infracao`, `geometria` |
+| **`auto_infracao`** | `numero_auto`, `data_auto`, `valor_multa`, `tipo_auto_infracao`, `tipo_infracao`, `tipo_pessoa`, `status_auto_infracao`, `cpf_cnpj_infrator`, `nome_infrator`, `municipio`, `descricao`, `num_processo`, `geometria`, `houve_embargo`, `houve_apreensao` |
 | **`desmatamento`** | `identificador_origem`, `ano`, `area_ha`, `classe_prodes`, `satelite`, `sensor`, `data_imagem`, `geometria` |
 | **`foco_calor`** | `identificador_origem`, `data_hora`, `satelite`, `bioma`, `municipio`, `latitude`, `longitude`, `risco_fogo`, `dias_sem_chuva`, `precipitacao_mm`, `frp`, `geometria` |
-| **`municipio`** | `cod_ibge`, `nome`, `unidade_federativa`, `bioma_predominante`, `area_km2`, `geometria` |
+| **`municipio`** | `cod_ibge`, `nome`, `bioma_predominante`, `area_km2`, `geometria` |
 | **`reserva_legal`** | `identificador_origem`, `cod_imovel`, `area_ha`, `situacao_bruto`, `condicao_bruto`, `geometria` |
 | **`app_declarada`** | `identificador_origem`, `cod_imovel`, `area_ha`, `situacao_bruto`, `condicao_bruto`, `geometria` |
 | **`vegetacao_nativa_declarada`** | `identificador_origem`, `cod_imovel`, `area_ha`, `situacao_bruto`, `condicao_bruto`, `geometria` |
@@ -64,7 +67,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | Coluna Origem (Bruto) | Coluna Destino (Silver) | Destino Tipo | Tipo de Dado | Obrigatório | Validações / Regras |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `cod_imovel` | `cod_imovel` | COLUNA | texto | Sim | Chave natural (Código SICAR) |
-| `status_imovel` | `situacao_imovel` | COLUNA | texto | Sim | Domínio: `situacao_imovel` (AT, PE, CA, etc.) |
+| `status_imovel` | `situacao_imovel` | COLUNA | texto | Não | Domínio: `situacao_imovel` (AT, PE, CA, etc.) |
 | `condicao` | `condicao_imovel` | COLUNA | texto | Não | Domínio: `condicao_imovel` |
 | `tipo_imovel` | `tipo_imovel` | COLUNA | texto | Não | Domínio: `tipo_imovel` |
 | `area` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
@@ -82,7 +85,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | Coluna Origem (Bruto) | Coluna Destino (Silver) | Destino Tipo | Tipo de Dado | Obrigatório | Validações / Regras |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `COD_IMOVEL` | `cod_imovel` | COLUNA | texto | Sim | Chave natural |
-| `STATUS_IMOVEL` | `situacao_imovel` | COLUNA | texto | Sim | Domínio: `situacao_imovel` |
+| `STATUS_IMOVEL` | `situacao_imovel` | COLUNA | texto | Não | Domínio: `situacao_imovel` |
 | `CONDICAO` | `condicao_imovel` | COLUNA | texto | Não | Domínio: `condicao_imovel` |
 | `TIPO_IMOVEL` | `tipo_imovel` | COLUNA | texto | Não | Domínio: `tipo_imovel` |
 | `NUM_AREA` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
@@ -147,7 +150,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `cnuc` | `codigo_origem` | COLUNA | texto | Sim | Chave natural CNUC |
 | `nomeuc` | `nome` | COLUNA | texto | Sim |  |
 | `areahaalb` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
-| `categoria` | `categoria_area_protegida` | COLUNA | texto | Não | Domínio: `categoria_area_protegida` |
+| `categoria` | `categoria_area_protegida` | COLUNA | texto | Sim | Domínio: `categoria_area_protegida` |
 | `biomas` | `bioma` | COLUNA | texto | Não | Domínio: `bioma` |
 | `criacaoato` | `ato_legal` | COLUNA | texto | Não |  |
 | `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
@@ -163,7 +166,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `terrai_cod` | `codigo_origem` | COLUNA | texto | Sim | Chave natural FUNAI |
 | `terrai_nom` | `nome` | COLUNA | texto | Sim |  |
 | `superficie` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
-| `modalidade` | `categoria_area_protegida` | COLUNA | texto | Não | Domínio: `categoria_area_protegida` |
+| `modalidade` | `categoria_area_protegida` | COLUNA | texto | Sim | Domínio: `categoria_area_protegida` |
 | `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
 
 ---
@@ -177,7 +180,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `cd_cnuc` | `codigo_origem` | COLUNA | texto | Sim | Chave natural CNUC |
 | `nome_uc` | `nome` | COLUNA | texto | Sim |  |
 | `ha_total` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
-| `categoria` | `categoria_area_protegida` | COLUNA | texto | Não | Domínio: `categoria_area_protegida` |
+| `categoria` | `categoria_area_protegida` | COLUNA | texto | Sim | Domínio: `categoria_area_protegida` |
 | `cria_ato` | `ato_legal` | COLUNA | texto | Não |  |
 | `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
 
@@ -192,7 +195,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `geocodigo` | `codigo_origem` | COLUNA | texto | Sim | Chave natural CNFP |
 | `nome` | `nome` | COLUNA | texto | Sim |  |
 | `area_ha` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
-| `categoria` | `categoria_area_protegida` | COLUNA | texto | Não | Domínio: `categoria_area_protegida` |
+| `categoria` | `categoria_area_protegida` | COLUNA | texto | Sim | Domínio: `categoria_area_protegida` |
 | `bioma` | `bioma` | COLUNA | texto | Não | Domínio: `bioma` |
 | `atolegal` | `ato_legal` | COLUNA | texto | Não | Ato legal |
 | `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |

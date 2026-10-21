@@ -6,7 +6,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -26,9 +25,8 @@ public class GoldPublicacaoController {
 
     /** Recalcula os 7 indicadores (ISAP/IAE/IRL/IAPP/IDesmat/IFC/ICV) e publica todo imóvel + todas as camadas de mapa. */
     @PostMapping("/publicar")
-    public ResponseEntity<GoldPublicacaoService.ResultadoPublicacaoTudo> publicar(
-            @RequestParam(required = false) Long loteId) {
-        return ResponseEntity.ok(service.publicar(loteId));
+    public ResponseEntity<GoldPublicacaoService.ResultadoPublicacaoTudo> publicar() {
+        return ResponseEntity.ok(service.publicarTudo());
     }
 
     /** Recalcula e publica só 1 imóvel. */
