@@ -259,7 +259,8 @@ Validar na fatia de cálculo.
 > (`mapa_camada` + `feature_publicada` genérica — todo polígono/ponto que o Leaflet
 > desenha); **(3)** detalhe congelado por imóvel (`imovel_publicado` + `sobreposicao_
 > publicada`, com `geometria_intersecao` em precisão total — artefato de auditoria).
-> **O portal lê só a Gold, nunca a Silver.**
+> **O portal lê só a Gold, nunca a Silver.** O mapa lê as camadas pelas views
+> `gold.vw_mapa_*` (V079), que já filtram a última publicação concluída (§9.43).
 
 **`hash_versao` — [RESOLVIDO, 2026-10-04]:** implementado em `pkg_gold_publicacao.
 registrar_resultado` exatamente como proposto em `docs/gold-procedures-calculo-
@@ -524,6 +525,9 @@ starters `-test` granulares do Boot 4, mais tudo do §4.4 acima.
 ### 4.6. Ambiente de desenvolvimento em containers — **[DECIDIDO, implementado e testado end-to-end]**
 Dev roda **3 containers via `docker compose`**: `oracle` + `backend` + `frontend`.
 **Desde 2026-10-12 são 4**: entrou o `keycloak` (login/RBAC, porta 8180 — §9.39).
+**Desde 2026-10-20 são 5** (+ 1 que roda e termina): entrou o `geoserver` (mapa de
+cobertura, painel em `127.0.0.1:8085`) e o `geoserver-config`, que configura o GeoServer
+pela API REST e sai (§9.43).
 Testado em 2026-09-02 no WSL: os 3 sobem, Oracle fica `healthy`, backend conecta e
 migra Flyway em `CONTROLE`, `curl localhost:8080/actuator/health` → `200 UP`, Vite serve
 em `localhost:5173` e o proxy `/api` alcança o backend pela rede Docker.
@@ -2239,7 +2243,160 @@ criadas pela `V077`; sem elas o IFC é desenhado em escala percentual.
     possui `indicador:visualizar`.
   - **Interseção com a LIZARDS-35 (visualização em mapa).** Ambas as tarefas alteram
     `Sidebar.vue` e `router/index.js`; convém alinhar a ordem de merge para evitar conflito
-    nesses dois arquivos.
+    nesses dois arquivos. **[RESOLVIDO na §9.44]:** o mapa entrou dentro da tela
+    Conjuntos e Cobertura e não mexe em nenhum dos dois arquivos.
+
+### 9.43. Mapa de cobertura — backend (banco, GeoServer e proxy) — **[FEITO e validado contra o Oracle real, 2026-10-20, `LIZARDS-35`]**
+Branch `feat/mapa-cobertura`, a partir da `sprint-2`. A tela está na §9.44.
+
+- **Objetivo:** mostrar no mapa a situação de um município ou imóvel do Paraná — os 7
+  indicadores e o aviso de interseção com as camadas de alerta. Decisões do usuário: o mapa
+  entra na tela Conjuntos e Cobertura; mostra só o Paraná; qualquer sobreposição conta (sem
+  área mínima); o GeoServer desenha e destaca, mas **o aviso e a contagem vêm dos valores
+  dos indicadores** (ver "Validação" abaixo).
+- **`V079__gold_views_mapa_cobertura.sql`:** `gold.vw_mapa_feature_vigente` concentra a
+  regra "versão válida = última publicação `CONCLUIDA` da camada" (V067) e 7 views finas
+  sobre ela (`vw_mapa_limite_pr`, `_municipio`, `_imovel`, `_area_protegida`, `_embargo`,
+  `_desmatamento`, `_foco_calor`), com metadado espacial — exigido pelo GeoServer. Camada
+  nova no mapa = linha em `gold.mapa_camada` + view de 3 linhas + metadado. Também cadastra
+  a camada **`LIMITE_PR`** (contorno do estado, base do mapa).
+- **`V080__gold_indice_espacial_feature_publicada.sql`:** índice espacial em
+  `gold.feature_publicada`. Cruzar Ponta Grossa com os imóveis pela view: 6,1 s → 0,04 s
+  (plano com `DOMAIN INDEX`, mesmo resultado, 2.654). **Pegadinha:** como na V049, o R-tree
+  exige `CREATE TABLE/SEQUENCE` + `UNLIMITED TABLESPACE` **diretos** no schema `GOLD`; sem
+  eles o `CREATE INDEX` não falha limpo — o índice fica com `DOMIDX_OPSTATUS = FAILED` e a
+  tabela passa a **recusar INSERT** (testado), o que pararia a publicação da Gold. O
+  `CONTROLE` também não enxerga os privilégios do `GOLD` (`DBA_SYS_PRIVS` invisível). Por
+  isso a migration faz uma **sonda** numa tabela descartável antes; sem o grant, falha com
+  `ORA-20080` e a instrução, sem deixar nada pela metade. O grant entrou no
+  `infra/oracle-init/01-criar-schemas.sh`; **banco já existente roda uma vez, como SYS**
+  (imagem Enterprise, por isso o `ORACLE_SID`):
+  ```
+  printf 'ALTER SESSION SET CONTAINER = FREEPDB1;\nGRANT CREATE TABLE, CREATE SEQUENCE, UNLIMITED TABLESPACE TO gold;\n' \
+    | docker compose exec -T -e ORACLE_SID=ORCLCDB oracle sqlplus -s / as sysdba
+  ```
+- **Contorno do Paraná (`GoldPublicacaoService`):** publicado como camada, a partir da
+  união dos 399 municípios da Silver (~14 s, 1 polígono, 199.891 km²). A união sai com
+  **9.794 buracos falsos** (frestas entre municípios vizinhos — a malha da V037 foi
+  simplificada a 5 m e as divisas não encaixam; o maior tem 2,6 ha). Com eles o
+  simplificador não reduz nada (45 mil vértices); `SimplificadorGeometriaMapa.
+  simplificarContornoExterno` descarta os buracos e simplifica a ~50 m: 6.044 vértices,
+  140 KB de GeoJSON, mesma área.
+- **Bug antigo corrigido — anel no sentido errado:** 2.101 dos 4.611 imóveis da camada de
+  mapa estavam inválidos pro Oracle (`ORA-13367`). O JTS não impõe sentido de anel e o
+  `SDO_GEOMETRY(wkt)` não corrige; o CAR manda o anel no sentido horário. O
+  `SimplificadorGeometriaMapa` agora orienta (externo anti-horário, buraco horário) em toda
+  camada. Republicados: 4.603 válidos (os 8 restantes já vêm inválidos da Silver).
+- **GeoServer como código:** serviço `geoserver` (`docker.osgeo.org/geoserver:3.0.2`,
+  extensões `oracle` + `querylayer`, volume `geoserver-data`, painel só em
+  `127.0.0.1:8085`) e `geoserver-config` (`curlimages/curl`, roda
+  `infra/geoserver/configurar.sh` e termina). O script cria workspace `datagis`, datastore
+  `gold` (Oracle, usuário `APP_USER`), as 7 camadas e os estilos de
+  `infra/geoserver/estilos/*.sld`; é idempotente — reaplicar com
+  `docker compose run --rm geoserver-config`. Variáveis novas no `.env`:
+  `GEOSERVER_ADMIN_PASSWORD`, `GEOSERVER_PORT`. **Pegadinhas:** o REST de estilo sem
+  extensão responde 500 pra estilo existente (consultar com `.xml`); o GeoServer devolve
+  erro com HTTP 200 (`ows:ExceptionReport`); a primeira subida baixa as extensões da
+  internet (alguns minutos).
+- **Proxy `GET /api/indicadores/geoserver/{wms|wfs}`** (`GeoServerProxyController`/
+  `Service`/`Properties`): o navegador nunca fala com o GeoServer direto. Cai na regra
+  existente `indicador:visualizar`; GET não entra no log de auditoria. **Lista fechada:**
+  só `wms` (GetMap, GetLegendGraphic) e `wfs` (GetFeature, DescribeFeatureType); só as 7
+  `vw_mapa_*` em LAYERS/LAYER/QUERY_LAYERS/TYPENAMES/TYPENAME **e dentro de
+  `querySingle`/`queryCollection` no CQL**; `SLD`/`SLD_BODY` proibidos; `SERVICE` tem que
+  bater com o caminho. Encaminha pro serviço virtual do workspace
+  (`/geoserver/datagis/{wms|wfs}`), reencodando cada valor (sinal de `+` não vira espaço).
+  Status e Content-Type do GeoServer passam adiante; fora do ar → 502. Config
+  `app.geoserver.url` (compose: `GEOSERVER_URL=http://geoserver:8080/geoserver`).
+- **KPI de interseção:** `/api/indicadores/municipios` ganhou `qtdImoveisComIntersecao` —
+  imóveis com ISAP, IAE, IDESMAT ou IFC > 0 (`ConsultaIndicadoresService.COM_INTERSECAO`).
+  IRL, IAPP e ICV ficam de fora (cruzar Reserva Legal/APP/vegetação não é alerta).
+- **Testes:** `SimplificadorGeometriaMapaTest` (8), `GeoServerProxyServiceTest` (22 — o que
+  passa, como chega no GeoServer e tudo o que é barrado), `GeoServerProxyControllerTest`
+  (3), +1 em `ConsultaIndicadoresServiceTest`, rota nova no `MatrizAcessoTest`,
+  `MapaCoberturaViewsOracleIT` (4, Oracle real: só a versão CONCLUIDA mais recente aparece;
+  camada sem publicação concluída não mostra nada; interseção pela view usa o índice;
+  metadado das 7 views). **Suíte: 722 testes, 0 falhas** (fora o `DatagisApplicationTests`
+  de sempre, §9.3).
+- **Ao vivo (tokens reais):** analista 200 (PNG e GeoJSON); operador 403; sem token 401;
+  camada ou operação fora da lista 400; POST 405.
+- **Validação do aviso contra os indicadores (2026-10-20):** dos 24 imóveis com IAE > 0, 23
+  também cruzam embargo no mapa. As 2 divergências confirmam a decisão e expõem um bug:
+  - `PR-4119905-C4FE…`: o mapa diz que cruza, IAE = 0. Com a geometria da Silver reparada,
+    o embargo fica a 0,1 m — a simplificação de 5 m do mapa criou a sobreposição. **Mapa
+    errado, indicador certo** — exatamente o motivo de o aviso vir do indicador.
+  - `PR-4119905-97E4…`: IAE = 5,5% (108 ha), o mapa diz que não cruza. Com a geometria
+    reparada, o embargo mais próximo está a **579 m**: a geometria do imóvel na Silver é
+    inválida (`ORA-13356`, vértice duplicado) e o Oracle calculou uma interseção falsa, sem
+    erro. **Indicador errado** — a tela mostra um alerta que não existe.
+- **[EM ABERTO]**
+  - **Geometria inválida na Silver gera indicador falso.** `silver.imovel_rural` tem 1.928
+    geometrias com anel invertido (`13367`), 357 com vértice duplicado (`13356`) e 8 com
+    auto-interseção (`13349`). O caso `97E4…` acima prova o impacto: alerta falso de IAE.
+    Correção sugerida, em task própria: orientar/retificar a geometria na promoção
+    Bronze→Silver (mesmo tratamento do `SimplificadorGeometriaMapa`) ou aplicar
+    `SDO_UTIL.RECTIFY_GEOMETRY` nas procedures antes do cálculo, e republicar.
+  - **Mapa e indicadores são publicações separadas da Gold** e podem divergir: local, o mapa
+    mostrava 24 imóveis × embargo e o indicador só 1, porque os indicadores eram de antes da
+    ingestão dos embargos. `POST /api/gold/publicar` faz os dois juntos; publicar só uma
+    camada pela tela da Gold deixa o descompasso. A tela mostra a data da publicação dos
+    indicadores para o usuário perceber.
+  - **Camadas de IRL, IAPP e ICV no mapa** dependem da entrega de outro integrante (camadas
+    de Reserva Legal, APP e Vegetação Nativa na Gold). Quando chegar: view nova
+    `vw_mapa_*` + metadado, nome na lista `CAMADAS` do `GeoServerProxyService` e do
+    `configurar.sh`, um `.sld`, e preencher `camada` em `CAMADAS_INDICADOR` da tela. O aviso
+    desses 3 indicadores já funciona sem a camada, porque vem do valor.
+
+### 9.44. Mapa de cobertura — frontend — **[FEITO e validado no navegador, 2026-10-20, `LIZARDS-35`]**
+Repositório `datagis-frontend`, branch `feat/mapa-cobertura`, a partir da `sprint-2`.
+Depende da §9.43.
+
+- **Tela Conjuntos e Cobertura (`ConjuntosView.vue`) reescrita como o mapa.** A lista de
+  conjuntos e o formulário "Novo Conjunto" saíram (decisão do usuário; o `POST /conjuntos`
+  continua no backend, só sem tela, e o `conjuntoService.js` ficou sem uso). Rota, item de
+  menu e permissão (`conjunto:visualizar`) não mudaram.
+- **Só o Paraná:** contorno vindo da Gold (`vw_mapa_limite_pr`, não mais arquivo fixo);
+  máscara cobrindo tudo fora do estado, na cor do fundo da página (acompanha o tema);
+  `maxBounds` + `minZoom` — testado no navegador arrastando 1.200 px e afastando o zoom: o
+  mapa não sai do estado. Sem o contorno publicado, a tela avisa em vez de mostrar o mapa
+  solto.
+- **Municípios / Imóveis:** seleção pela lista, pela busca do código CAR ou **clique no
+  mapa**. Selecionado fica em amarelo e enquadrado; com município em foco, o WMS desenha só
+  os imóveis dele (`CQL_FILTER=MUNICIPIO_COD_IBGE=…`). Clique em município sem imóveis
+  publicados avisa e não seleciona.
+- **KPIs:** imóveis, municípios, interseções e os 7 indicadores coloridos pelas faixas do
+  catálogo (`tipo_indicador`). Geral = média ponderada pela área (mesma conta do backend).
+  **Interseções:** geral e município = `qtdImoveisComIntersecao` do backend; imóvel = quantas
+  camadas de alerta ele cruza. O título mostra a data da última publicação dos indicadores.
+- **Aviso de interseção vem do valor do indicador** (decisão da §9.43): restrição (ISAP,
+  IAE, IDESMAT, IFC) alerta se > 0; IRL alerta se = 0 (sem Reserva Legal declarada); IAPP e
+  ICV são informativos. Indicador nulo aparece como "Indicador não calculado", nunca como
+  alerta. O GeoServer só destaca no mapa as feições que cruzam (`INTERSECTS` +
+  `querySingle`) e informa quantas são.
+- **`camadaWmsAutenticada.js`:** o `L.tileLayer.wms` padrão põe a URL direto no `<img>` e o
+  navegador não manda o token — o proxy recusaria. Cada tile é baixado pelo `apiFetch` e
+  entra como blob; resposta que não é imagem (erro do GeoServer com HTTP 200) vira erro do
+  tile.
+- **`geoserverService.js`:** todas as chamadas pelo proxy. **Pegadinha:** o ponto do clique
+  vai como `SRID=4326;POINT(lon lat)`. Sem SRID, o GeoServer (WFS 2.0) lê o EPSG:4674 como
+  latitude primeiro e o clique nunca acha nada — o protótipo do spike tinha esse bug.
+- **Bug antigo corrigido (`vite.config.js`):** F5 ou URL digitada em `/conjuntos` caía no
+  backend (401), porque o proxy do endpoint legado `/conjuntos` tem o mesmo caminho da tela.
+  `bypass`: pedido de página (`Accept: text/html`) fica no Vite.
+- **Testes:** `ConjuntosView.test.js` (17, reescrito — KPIs geral/município/imóvel, aviso
+  pelos indicadores, faixas e sentido, indicador nulo, situação de cada camada, destaque só
+  das camadas com dado, filtro do WMS, mapa preso ao Paraná, contorno ausente, clique),
+  `geoserverService.test.js` (10), `camadaWmsAutenticada.test.js` (3). **Suíte: 149, 0
+  falhas; build ok.**
+- **Validado no navegador real** (Brave headless, logado como `analista`): login; 64 tiles
+  pelo proxy sem erro; KPIs iguais à API (24 imóveis com interseção no geral, 22 em Ponta
+  Grossa); seleção por lista e por clique (município e imóvel); F5 na rota.
+- **[EM ABERTO]**
+  - **IRL, IAPP e ICV zerados no banco local de quem não ingeriu** Reserva Legal, APP e
+    Vegetação Nativa: o aviso diz "4.611 imóveis sem Reserva Legal declarada". Não é erro da
+    tela — é o problema de zero × não declarado da §9.40.
+  - **Um alerta falso de IAE** (`PR-4119905-97E4…`) por geometria inválida na Silver —
+    ver §9.43. A tela mostra o que o indicador diz; a correção é no cálculo.
 
 ---
 
