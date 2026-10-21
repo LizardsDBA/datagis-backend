@@ -96,6 +96,10 @@ GRANT EXECUTE ON UTL_I18N TO gold;
 -- indice espacial manualmente.
 GRANT CREATE TABLE, CREATE SEQUENCE, UNLIMITED TABLESPACE, CREATE SESSION TO silver;
 GRANT DROP ANY INDEX TO ${APP_USER};
+-- Mesma exigencia pro indice espacial da Gold (V080, gold.feature_publicada - mapa
+-- de cobertura, LIZARDS-35). Sem CREATE SESSION: ninguem precisa logar como GOLD.
+-- Banco criado antes desta linha: rodar o GRANT abaixo uma vez como SYS (ver V080).
+GRANT CREATE TABLE, CREATE SEQUENCE, UNLIMITED TABLESPACE TO gold;
 
 EXIT;
 EOSQL
