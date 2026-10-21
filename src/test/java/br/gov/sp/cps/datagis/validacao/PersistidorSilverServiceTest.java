@@ -22,6 +22,7 @@ class PersistidorSilverServiceTest {
     @BeforeEach
     void setUp() {
         jdbcTemplate = mock(JdbcTemplate.class);
+        when(jdbcTemplate.execute(any(String.class), any(org.springframework.jdbc.core.PreparedStatementCallback.class))).thenReturn(1);
         persistidor = new PersistidorSilverService(jdbcTemplate, "SILVER", "CONTROLE", null);
     }
 
@@ -89,6 +90,63 @@ class PersistidorSilverServiceTest {
 
         Long idCodigo = persistidor.resolverIdReferencia("tipo_imovel", "IRU");
         assertThat(idCodigo).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("Deve extrair e persistir auto de infração com houve_embargo, houve_apreensao e orgao da fonte")
+    void devePersistirAutoInfracaoComNovosCampos() {
+        // Mock da busca do orgao da fonte no schema controle
+        when(jdbcTemplate.query(
+                eq("SELECT orgao FROM CONTROLE.fonte_dado WHERE id = ?"),
+                any(org.springframework.jdbc.core.RowMapper.class),
+                eq(10L)))
+                .thenReturn(java.util.List.of("IBAMA"));
+
+        br.gov.sp.cps.datagis.bronze.RegistroBruto reg = br.gov.sp.cps.datagis.bronze.RegistroBruto.builder()
+                .id(100L)
+                .fonteDadoId(10L)
+                .loteIngestaoId(1L)
+                .payload("{\"numero_auto\":\"AI-999\",\"houve_embargo\":\"S\",\"houve_apreensao\":\"SIM\"}")
+                .build();
+
+        java.util.Map<String, Object> attrs = new java.util.HashMap<>();
+        attrs.put("numero_auto", "AI-999");
+        attrs.put("houve_embargo", "S");
+        attrs.put("houve_apreensao", "SIM");
+        attrs.put("valor_multa", 1500.50);
+
+        RegistroAprovadoSilver apr = new RegistroAprovadoSilver(reg, attrs, null);
+
+        persistidor.persistirAutoInfracao(apr);
+
+        org.mockito.Mockito.verify(jdbcTemplate).execute(
+                org.mockito.ArgumentMatchers.contains("MERGE INTO SILVER.auto_infracao"),
+                any(org.springframework.jdbc.core.PreparedStatementCallback.class));
+    }
+
+    @Test
+    @DisplayName("Deve extrair e persistir foco de calor com dias_sem_chuva, precipitacao_mm e frp")
+    void devePersistirFocoCalorComNovosCampos() {
+        br.gov.sp.cps.datagis.bronze.RegistroBruto reg = br.gov.sp.cps.datagis.bronze.RegistroBruto.builder()
+                .id(200L)
+                .fonteDadoId(7L)
+                .loteIngestaoId(1L)
+                .payload("{\"id\":\"FOCO-123\",\"dias_sem_chuva\":\"5\",\"precipitacao_mm\":\"0.0\",\"frp\":\"12.4\"}")
+                .build();
+
+        java.util.Map<String, Object> attrs = new java.util.HashMap<>();
+        attrs.put("identificador_origem", "FOCO-123");
+        attrs.put("dias_sem_chuva", 5);
+        attrs.put("precipitacao_mm", 0.0);
+        attrs.put("frp", 12.4);
+
+        RegistroAprovadoSilver apr = new RegistroAprovadoSilver(reg, attrs, "POINT(-51.2 -24.5)");
+
+        persistidor.persistirFocoCalor(apr);
+
+        org.mockito.Mockito.verify(jdbcTemplate).execute(
+                org.mockito.ArgumentMatchers.contains("MERGE INTO SILVER.foco_calor"),
+                any(org.springframework.jdbc.core.PreparedStatementCallback.class));
     }
 
     private void mockTabelaCondicaoImovel() throws SQLException {

@@ -457,3 +457,22 @@ Com 2 feito e 4/7 indicadores calculando com dado real no circuito (ISAP, IAE,
 IDesmat, IFC — `CLAUDE.md` §9.36), só falta o item 1 (IRL/IAPP/ICV) pros 7
 indicadores funcionarem de ponta a ponta no circuito de homologação — que já é o
 escopo que o próprio desafio autoriza explicitamente (CLAUDE.md §5.2).
+
+### 9.5. Publicação Consolidada via Botão Único Global e Descontinuação de Migração por Lote — [FEITO, 2026-10-20, LIZARDS-29]
+
+1. **Decisão Arquitetural:**
+   - A camada Gold é essencialmente set-based, versionada e consolidada: os indicadores espaciais cruzam geometrias de imóveis com a totalidade das restrições territoriais (áreas protegidas, embargos e desmatamento), e as 6 camadas cartográficas representam a visão completa publicada.
+   - A migração fragmentada por lote individual (antigo `POST /api/gold/lotes/{id}/publicar`) foi descontinuada e removida do backend e do frontend para evitar dados parciais, retrabalho de publicação concorrente de camadas cartográficas e estados intermediários inconsistentes.
+
+2. **Fluxo de Execução do Botão Único Global (`POST /api/gold/publicar`):**
+   - O disparo da migração é realizado por um botão de ação global na tela de Gestão de Lotes (`LotesView.vue`).
+   - O endpoint `POST /api/gold/publicar` não recebe parâmetros de lote e inicia uma orquestração assíncrona gerenciada por `GoldPublicacaoService`:
+     1. Obtém todos os imóveis cadastrados na camada Silver (`SELECT cod_imovel FROM silver.imovel_rural`);
+     2. Executa as procedures PL/SQL para cálculo dos 7 indicadores (`pkg_calculo_territorial`, `pkg_calculo_ambiental`, `pkg_calculo_conservacao`) e publica o detalhe congelado em `gold.imovel_publicado`;
+     3. Publica as 6 camadas cartográficas no bloco do mapa (`gold.publicacao_camada_mapa` e feições simplificadas);
+     4. Promove atomicamente todos os lotes com status `PROMOVIDO_SILVER` para `PROMOVIDO_GOLD` (`UPDATE controle.lote_ingestao SET status = 'PROMOVIDO_GOLD' WHERE status = 'PROMOVIDO_SILVER'`).
+
+3. **Monitoramento e Polling Assíncrono:**
+   - O endpoint `GET /api/gold/publicar/status` fornece o progresso em tempo real da publicação (imóveis processados, total, camadas publicadas, status `EM_ANDAMENTO`, `CONCLUIDO` ou `ERRO`).
+   - O frontend apresenta um modal com barra de progresso e stepper visual, realizando polling a cada 2 segundos até a conclusão da esteira.
+

@@ -25,7 +25,7 @@ public class GoldPublicacaoController {
 
     /** Recalcula os 7 indicadores (ISAP/IAE/IRL/IAPP/IDesmat/IFC/ICV) e publica todo imóvel + todas as camadas de mapa. */
     @PostMapping("/publicar")
-    public ResponseEntity<GoldPublicacaoService.ResultadoPublicacaoTudo> publicarTudo() {
+    public ResponseEntity<GoldPublicacaoService.ResultadoPublicacaoTudo> publicar() {
         return ResponseEntity.ok(service.publicarTudo());
     }
 
