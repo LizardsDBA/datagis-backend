@@ -1,0 +1,66 @@
+# Ambiente publicado (instancia OCI, https://datagis.com.br). Override do
+# docker-compose.yml - so troca o que muda entre dev e servidor:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env --env-file .env.prod up -d
+#
+# - Entra o Caddy (HTTPS + roteamento por caminho, infra/caddy/Caddyfile). E o unico com
+#   porta publicada; Oracle, backend e Keycloak so ficam na rede interna do Docker
+#   (`!reset` remove o `ports` herdado - porta publicada pelo Docker ignora o iptables).
+# - Keycloak passa a responder em https://datagis.com.br/auth (mesmo dominio do portal).
+# - Frontend deixa de rodar o Vite: compila uma vez (npm run build) e o Caddy serve o dist.
+# - Usuarios de teste (login = senha) desligados: num site publico seriam uma porta
+#   aberta. O primeiro administrador e criado pelo console do Keycloak.
+# - .env.prod (so no servidor, fora do git) sobrescreve a senha do console do Keycloak.
+# - O realm versionado (infra/keycloak) so conhece http://localhost:5173 e fica assim - o
+#   dev da equipe nao muda. As URLs de https://datagis.com.br sao cadastradas uma vez no
+#   client datagis-frontend direto no Keycloak do servidor (kcadm.sh), depois da 1a subida.
+#
+# Backend continua em modo dev (./mvnw spring-boot:run) nesta sprint - empacotar em jar
+# fica pra depois (CLAUDE.md §4.6).
+services:
+  oracle:
+    ports: !reset []
+
+  keycloak:
+    environment:
+      KC_HOSTNAME: https://datagis.com.br/auth
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_PROXY_HEADERS: xforwarded
+    ports: !reset []
+
+  backend:
+    environment:
+      KEYCLOAK_URL_INTERNA: http://keycloak:8080/auth
+      KEYCLOAK_URL_PUBLICA: https://datagis.com.br/auth
+      APP_KEYCLOAK_USUARIOS_DEV: "false"
+    ports: !reset []
+
+  frontend:
+    environment:
+      VITE_KEYCLOAK_URL: https://datagis.com.br/auth
+    command: sh -c "npm install && npm run build"
+    ports: !reset []
+    restart: "no"
+
+  caddy:
+    image: caddy:2.10.2
+    depends_on:
+      frontend:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+      keycloak:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./datagis-frontend/dist:/srv:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:
