@@ -2248,7 +2248,7 @@ e o CSS do front não a alcança (ver o último item).
 
 - **Regra da entrega: só acrescentar.** Nenhuma variável, classe ou linha existente foi
   renomeada ou alterada. O tema claro continua idêntico ao que era, e o escuro é uma
-  camada a mais por cima: na branch são 3.835 linhas acrescentadas contra 0 removidas em
+  camada a mais por cima: na branch são 3.945 linhas acrescentadas contra 0 removidas em
   relação à `sprint-2`.
 - **Mecanismo (`src/tema.js`):** o tema vive no atributo `data-tema` do `<html>`.
   `iniciarTema()` roda no `main.js` antes de montar o app, para a tela não piscar no tema
