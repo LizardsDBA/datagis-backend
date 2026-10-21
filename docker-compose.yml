@@ -64,6 +64,50 @@ services:
       - ./infra/keycloak:/opt/keycloak/data/import:ro
     restart: unless-stopped
 
+  # Mapa de cobertura (LIZARDS-35): desenha as camadas da Gold (WMS) e responde as
+  # consultas de intersecao (WFS + INTERSECTS, que vira SDO_RELATE no Oracle). Le so
+  # as views gold.vw_mapa_* (V079). O navegador nunca fala com ele direto - passa pelo
+  # proxy do backend, com o login do Keycloak; a porta abaixo e so pro painel de
+  # administracao, e fica presa no 127.0.0.1.
+  # A extensao "oracle" ja traz o driver JDBC. Na primeira subida as extensoes sao
+  # baixadas da internet (uns minutos).
+  geoserver:
+    image: docker.osgeo.org/geoserver:3.0.2
+    depends_on:
+      oracle:
+        condition: service_healthy
+    environment:
+      INSTALL_EXTENSIONS: "true"
+      STABLE_EXTENSIONS: oracle,querylayer
+      SKIP_DEMO_DATA: "true"
+      GEOSERVER_ADMIN_USER: admin
+      GEOSERVER_ADMIN_PASSWORD: ${GEOSERVER_ADMIN_PASSWORD}
+      EXTRA_JAVA_OPTS: "-Xms256m -Xmx1g"
+    ports:
+      - "127.0.0.1:${GEOSERVER_PORT:-8085}:8080"
+    volumes:
+      - geoserver-data:/opt/geoserver_data
+    restart: unless-stopped
+
+  # Configura o GeoServer pela API REST (workspace, conexao com o Oracle, camadas e
+  # estilos de infra/geoserver) e termina. Sem configuracao manual pelo painel: mudou
+  # um estilo ou entrou camada nova, roda de novo com
+  #   docker compose run --rm geoserver-config
+  geoserver-config:
+    image: curlimages/curl:8.11.1
+    depends_on:
+      geoserver:
+        condition: service_started
+    entrypoint: ["sh", "/config/configurar.sh"]
+    environment:
+      GEOSERVER_URL: http://geoserver:8080/geoserver
+      GEOSERVER_ADMIN_PASSWORD: ${GEOSERVER_ADMIN_PASSWORD}
+      APP_USER: ${APP_USER}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD}
+    volumes:
+      - ./infra/geoserver:/config:ro
+    restart: "no"
+
   backend:
     build:
       context: .
@@ -81,6 +125,7 @@ services:
       KEYCLOAK_URL_INTERNA: http://keycloak:8080
       KEYCLOAK_URL_PUBLICA: http://localhost:${KEYCLOAK_PORT:-8180}
       KEYCLOAK_BACKEND_CLIENT_SECRET: ${KEYCLOAK_BACKEND_CLIENT_SECRET}
+      GEOSERVER_URL: http://geoserver:8080/geoserver
       APP_KEYCLOAK_PROVISIONAR: "true"
       APP_KEYCLOAK_USUARIOS_DEV: "true"
       JAVA_TOOL_OPTIONS: "-Xmx8g"
@@ -113,3 +158,4 @@ volumes:
   keycloak-data:
   maven-repo:
   frontend-node-modules:
+  geoserver-data:
