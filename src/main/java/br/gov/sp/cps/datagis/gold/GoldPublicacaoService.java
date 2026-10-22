@@ -45,6 +45,8 @@ public class GoldPublicacaoService {
 
     private static final Logger log = LoggerFactory.getLogger(GoldPublicacaoService.class);
 
+    public static final String STATUS_PROMOVIDO_GOLD = "PROMOVIDO_GOLD";
+
     /** Camadas semeadas em gold.mapa_camada (V018) — publicadas na mesma ordem fixa. */
     private static final List<String> CODIGOS_MAPA_CAMADA = List.of(
             "MUNICIPIO", "AREA_PROTEGIDA", "DESMATAMENTO", "EMBARGO", "IMOVEL_RURAL", "FOCO_CALOR");
@@ -115,7 +117,9 @@ public class GoldPublicacaoService {
     private final JdbcTemplate jdbcTemplate;
     private final SimplificadorGeometriaMapa simplificador;
 
-    public GoldPublicacaoService(JdbcTemplate jdbcTemplate, SimplificadorGeometriaMapa simplificador) {
+    public GoldPublicacaoService(
+            JdbcTemplate jdbcTemplate,
+            SimplificadorGeometriaMapa simplificador) {
         this.jdbcTemplate = jdbcTemplate;
         this.simplificador = simplificador;
     }
@@ -215,8 +219,21 @@ public class GoldPublicacaoService {
             }
         }
 
+        try {
+            jdbcTemplate.update("UPDATE controle.lote_ingestao SET status = ? WHERE status = 'PROMOVIDO_SILVER'", STATUS_PROMOVIDO_GOLD);
+        } catch (Exception e) {
+            log.warn("publicarTudo: erro ao atualizar status dos lotes para PROMOVIDO_GOLD: {}", e.getMessage());
+        }
+
         return new ResultadoPublicacaoTudo(
                 codigosImovel.size(), sucesso, falhas, camadasPublicadas, camadasComFalha);
+    }
+
+    /**
+     * Disparo padrão de publicação da camada Gold, delegando para {@link #publicarTudo()}.
+     */
+    public ResultadoPublicacaoTudo publicar() {
+        return publicarTudo();
     }
 
     /**
