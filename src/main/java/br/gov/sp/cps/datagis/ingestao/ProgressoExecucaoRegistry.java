@@ -46,4 +46,11 @@ public class ProgressoExecucaoRegistry {
     public Optional<ProgressoExecucao> obter(Long fonteId) {
         return Optional.ofNullable(estados.get(fonteId));
     }
+
+    /** Retorna true se a fonte possui execução ativa em andamento (nem CONCLUIDO nem ERRO). */
+    public boolean isExecutando(Long fonteId) {
+        return obter(fonteId)
+                .map(p -> p.fase() != FaseExecucao.CONCLUIDO && p.fase() != FaseExecucao.ERRO)
+                .orElse(false);
+    }
 }

@@ -2403,7 +2403,29 @@ Branch: `feat/migracao-gold` (Task: `LIZARDS-29`).
 - Flexibilização da obrigatoriedade: apenas colunas com restrição relacional NOT NULL no schema físico da Silver bloqueiam a ingestão da fonte. Colunas opcionais (ex.: `imovel_rural.situacao_imovel`) não bloqueiam mais a execução.
 - `area_protegida.categoria_area_protegida` mantida como obrigatória no de-para para garantir a resolução da constraint NOT NULL de `tipo_area_protegida_id` na Silver física.
 - Descontinuação da migração por lotes individuais e remoção completa de código legado de recálculo fragmentado por lote no backend e frontend.
-- Implementação da migração consolidada para a Gold via botão único global (`POST /api/gold/publicar`) na interface de Gestão de Lotes, com promoção atômica em massa de lotes `PROMOVIDO_SILVER` para `PROMOVIDO_GOLD` e polling de status em tempo real (`GET /api/gold/publicar/status`).
+### 10.9. Arquitetura de Processamento em Segundo Plano (Assíncrono) e Polling em Tempo Real (2026-10-21)
+Branch: `feat/carregamento-segundo-plano`.
+
+1. **Infraestrutura Assíncrona no Spring Boot (`@EnableAsync` e `AsyncConfig`):**
+   - Configurado o thread pool dedicado `datagisTaskExecutor` (`ThreadPoolTaskExecutor`) com capacidade de 4 a 8 threads simultâneas, fila de 100 tarefas e prefixo de thread `datagis-async-`.
+   - Adicionado `DelegatingSecurityContextAsyncTaskExecutor` para propagar de forma transparente o `SecurityContext` do Spring Security (tokens JWT / Keycloak) para as threads em segundo plano.
+   - Criada a exceção `OperacaoEmAndamentoException` mapeada globalmente em `TratadorDeErro` para responder com `HTTP 409 Conflict`, garantindo bloqueio atômico contra requisições concorrentes sobre o mesmo recurso em processamento.
+
+2. **Ingestão Assíncrona de Fontes (`IngestaoController` e `IngestaoExecucaoService`):**
+   - Endpoints `POST /api/fontes-dados/{id}/executar` e `POST /api/fontes-dados/{id}/upload` agora respondem imediatamente com `HTTP 202 Accepted` e o snapshot de status `ExecucaoResponse`.
+   - Tratamento de upload multipart em background: os bytes do arquivo são persistidos em arquivo temporário no disco (`Files.createTempFile`) antes do retorno da requisição HTTP e excluídos com segurança no bloco `finally` da execução assíncrona.
+   - Consulta contínua via `GET /api/fontes-dados/{id}/progresso` consumindo o `ProgressoExecucaoRegistry`. Se uma execução já estiver em andamento para a fonte, novas tentativas disparam `409 Conflict`.
+   - Frontend (`CadastroFontes.vue`): polling dinâmico de 1s e recuperação automática de fontes em execução no carregamento da tela (`onMounted`).
+
+3. **Transição Bronze→Silver e Quarentena Assíncrona (`LoteIngestaoController` e `QuarentenaController`):**
+   - Criados `ProgressoTransicao`, `ProgressoTransicaoResponse` e o registrador thread-safe `ProgressoTransicaoRegistry` rastreando etapas (`VALIDANDO_QUARENTENA`, `CARREGANDO_BRONZE`, `VALIDANDO_REGRAS`, `PERSISTINDO_SILVER`, `CONCLUIDO`, `RETIDO_QUARENTENA`).
+   - `POST /api/quarentena/lotes/{loteId}/liberar` e `POST /api/lotes/{id}/reprocessar` desacoplados da thread HTTP, respondendo imediatamente com `HTTP 202 Accepted`.
+   - Novo endpoint `GET /api/lotes/{id}/progresso` para acompanhamento de percentual e etapas em tempo real.
+   - Frontend (`LotesView.vue`): substituído o timer simulado por polling real via `obterProgressoLote(loteId)`, atualizando o stepper de 4 etapas e a barra de progresso. Suporte a retomada automática de monitoramento pós-refresh via `sessionStorage` e `verificarLoteLiberandoAtivo()`.
+
+4. **Publicação Consolidada na Camada Gold (`GoldPublicacaoController` e `GoldPublicacaoService`):**
+   - `POST /api/gold/publicar` desacoplado com `HTTP 202 Accepted` e verificação de concorrência com `409 Conflict`.
+   - Monitoramento contínuo no frontend (`LotesView.vue`) via `obterStatusGold()` a cada 2s com retomada automática de estado ao recarregar a tela.
 
 
 
