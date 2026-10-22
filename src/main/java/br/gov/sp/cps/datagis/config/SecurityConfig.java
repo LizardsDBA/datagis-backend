@@ -52,7 +52,7 @@ public class SecurityConfig {
             .sessionManagement(sessao -> sessao.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 // Publico: health do compose/monitoramento, documentacao da API e pagina de erro
-                .requestMatchers("/actuator/health/**", "/error").permitAll()
+                .requestMatchers("/actuator/health/**", "/error", "/api/monitoramento/**").permitAll()
                 .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
 
                 // Fontes de dados, mapeamentos, execucao, upload e progresso
