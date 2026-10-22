@@ -260,7 +260,7 @@ Validar na fatia de cálculo.
 > desenha); **(3)** detalhe congelado por imóvel (`imovel_publicado` + `sobreposicao_
 > publicada`, com `geometria_intersecao` em precisão total — artefato de auditoria).
 > **O portal lê só a Gold, nunca a Silver.** O mapa lê as camadas pelas views
-> `gold.vw_mapa_*` (V079), que já filtram a última publicação concluída (§9.43).
+> `gold.vw_mapa_*` (V080), que já filtram a última publicação concluída (§9.43).
 
 **`hash_versao` — [RESOLVIDO, 2026-10-04]:** implementado em `pkg_gold_publicacao.
 registrar_resultado` exatamente como proposto em `docs/gold-procedures-calculo-
@@ -2244,7 +2244,9 @@ criadas pela `V077`; sem elas o IFC é desenhado em escala percentual.
   - **Interseção com a LIZARDS-35 (visualização em mapa).** Ambas as tarefas alteram
     `Sidebar.vue` e `router/index.js`; convém alinhar a ordem de merge para evitar conflito
     nesses dois arquivos. **[RESOLVIDO na §9.44]:** o mapa entrou dentro da tela
-    Conjuntos e Cobertura e não mexe em nenhum dos dois arquivos.
+    Conjuntos e Cobertura e não mexe no `router/index.js`. Em 2026-10-22 a LIZARDS-35
+    passou a mexer no `Sidebar.vue`: o item "Indicadores e Resultados" saiu do menu (a
+    tela abre pela Conjuntos e Cobertura, ver §9.44).
 
 ### 9.43. Mapa de cobertura — backend (banco, GeoServer e proxy) — **[FEITO e validado contra o Oracle real, 2026-10-20, `LIZARDS-35`]**
 Branch `feat/mapa-cobertura`, a partir da `sprint-2`. A tela está na §9.44.
@@ -2254,13 +2256,13 @@ Branch `feat/mapa-cobertura`, a partir da `sprint-2`. A tela está na §9.44.
   entra na tela Conjuntos e Cobertura; mostra só o Paraná; qualquer sobreposição conta (sem
   área mínima); o GeoServer desenha e destaca, mas **o aviso e a contagem vêm dos valores
   dos indicadores** (ver "Validação" abaixo).
-- **`V079__gold_views_mapa_cobertura.sql`:** `gold.vw_mapa_feature_vigente` concentra a
+- **`V080__gold_views_mapa_cobertura.sql`:** `gold.vw_mapa_feature_vigente` concentra a
   regra "versão válida = última publicação `CONCLUIDA` da camada" (V067) e 7 views finas
   sobre ela (`vw_mapa_limite_pr`, `_municipio`, `_imovel`, `_area_protegida`, `_embargo`,
   `_desmatamento`, `_foco_calor`), com metadado espacial — exigido pelo GeoServer. Camada
   nova no mapa = linha em `gold.mapa_camada` + view de 3 linhas + metadado. Também cadastra
   a camada **`LIMITE_PR`** (contorno do estado, base do mapa).
-- **`V080__gold_indice_espacial_feature_publicada.sql`:** índice espacial em
+- **`V081__gold_indice_espacial_feature_publicada.sql`:** índice espacial em
   `gold.feature_publicada`. Cruzar Ponta Grossa com os imóveis pela view: 6,1 s → 0,04 s
   (plano com `DOMAIN INDEX`, mesmo resultado, 2.654). **Pegadinha:** como na V049, o R-tree
   exige `CREATE TABLE/SEQUENCE` + `UNLIMITED TABLESPACE` **diretos** no schema `GOLD`; sem
@@ -2311,6 +2313,12 @@ Branch `feat/mapa-cobertura`, a partir da `sprint-2`. A tela está na §9.44.
 - **KPI de interseção:** `/api/indicadores/municipios` ganhou `qtdImoveisComIntersecao` —
   imóveis com ISAP, IAE, IDESMAT ou IFC > 0 (`ConsultaIndicadoresService.COM_INTERSECAO`).
   IRL, IAPP e ICV ficam de fora (cruzar Reserva Legal/APP/vegetação não é alerta).
+- **Renumeradas antes do merge (2026-10-22):** as duas migrations nasceram como V079 e
+  V080, mas a `sprint-2` recebeu antes a `V079__seed_reconfiguracao_completa_mapeamento_coluna`
+  (LIZARDS-29). Duas V079 fazem o Flyway recusar a subida, então as nossas viraram **V080**
+  (views) e **V081** (índice). Os números antigos nunca chegaram ao remoto; só o banco local
+  de quem desenvolveu os tinha aplicado (acertado no `flyway_schema_history` e aplicada a
+  V079 da LIZARDS-29 com `spring.flyway.out-of-order=true` uma única vez).
 - **Testes:** `SimplificadorGeometriaMapaTest` (8), `GeoServerProxyServiceTest` (22 — o que
   passa, como chega no GeoServer e tudo o que é barrado), `GeoServerProxyControllerTest`
   (3), +1 em `ConsultaIndicadoresServiceTest`, rota nova no `MatrizAcessoTest`,
@@ -2364,8 +2372,9 @@ Depende da §9.43.
   mapa**. Selecionado fica em amarelo e enquadrado; com município em foco, o WMS desenha só
   os imóveis dele (`CQL_FILTER=MUNICIPIO_COD_IBGE=…`). Clique em município sem imóveis
   publicados avisa e não seleciona.
-- **KPIs:** imóveis, municípios, interseções e os 7 indicadores coloridos pelas faixas do
-  catálogo (`tipo_indicador`). Geral = média ponderada pela área (mesma conta do backend).
+- **KPIs:** imóveis, municípios, interseções e o valor bruto dos 7 indicadores, **sem cor
+  de faixa** (decisão da equipe, 2026-10-21: a tela é só visual, o usuário não analisa o
+  dado aqui; a classificação por faixa fica na tela Indicadores e Resultados). Geral = média ponderada pela área (mesma conta do backend).
   **Interseções:** geral e município = `qtdImoveisComIntersecao` do backend; imóvel = quantas
   camadas de alerta ele cruza. O título mostra a data da última publicação dos indicadores.
 - **Aviso de interseção vem do valor do indicador** (decisão da §9.43): restrição (ISAP,
@@ -2391,6 +2400,119 @@ Depende da §9.43.
 - **Validado no navegador real** (Brave headless, logado como `analista`): login; 64 tiles
   pelo proxy sem erro; KPIs iguais à API (24 imóveis com interseção no geral, 22 em Ponta
   Grossa); seleção por lista e por clique (município e imóvel); F5 na rota.
+- **Tema escuro no mapa (2026-10-21, depois do merge da LIZARDS-38 na `sprint-2`):** a branch
+  foi rebaseada sobre a `sprint-2`. O rebase não deu conflito, mas o Git colou no fim da
+  `ConjuntosView.vue` o bloco escuro da **tela antiga** (296 linhas, classes que não existem
+  mais, algumas com o mesmo nome das novas — `.titulo`, `.subtitulo`, `.mapa-dica`); foi
+  substituído por um bloco próprio. A tela usa só variáveis do `style.css`, que o escuro já
+  remapeia, então o bloco cobre só o que o Leaflet cria (`:deep()`): controles,
+  atribuição e tooltips. **Pegadinha:** a 38 escurece o mapa com `filter: invert` no
+  `.leaflet-tile-pane` inteiro, mas as camadas do GeoServer (WMS) também são tiles nesse
+  painel e ficariam com as cores invertidas (imóvel azul virando laranja). O OpenStreetMap
+  passou a um painel próprio (`fundo`, `zIndex` 150) e o filtro vale só nele. A máscara e o
+  contorno do Paraná leem as cores de `--cor-slate-100`/`--cor-slate-900` e são repintados
+  num `watch` de `estadoTema.atual` — trocar o tema com a tela aberta funciona sem
+  recarregar. **Menu moderno da 38** (`appearance: base-select`): com a altura fixa do campo,
+  o texto e a seta do `<select>` subiam pro topo da caixa; corrigido com `align-items:
+  center` dentro de `@supports`. Testes: +2 no `ConjuntosView.test.js` (OpenStreetMap no
+  painel `fundo` e camadas do GeoServer fora dele; troca de tema repinta máscara e contorno);
+  o `temaEscuro.test.js` da 38 aceita o bloco novo. **Suíte: 227, 0 falhas; build ok.**
+  Conferido no navegador nos dois temas: filtro só no painel do fundo, 48 tiles do
+  GeoServer sem filtro, máscara de `#f1f5f9` para `#1C2530` ao trocar o tema.
+- **Melhorias visuais (2026-10-21):**
+  - **Mapa maior sem faixa vazia:** zoom fracionado (`zoomSnap: 0.25`, `zoomDelta: 0.5`) —
+    o enquadramento do Paraná não cai mais num nível inteiro. Altura `clamp(560px, 60vh,
+    720px)`, medida pra caber sem rolar numa janela de 1000px. **Pegadinha achada:** o
+    Paraná é enquadrado duas vezes (caixa aproximada, depois o contorno da Gold); com o
+    `fitBounds` animado, o `getZoom()` lido logo depois ainda é o anterior e o zoom mínimo
+    ficava meio nível abaixo do estado (dava pra afastar). Agora `fitBounds(..., { animate:
+    false })`.
+  - **Divisas municipais discretas:** `vw_mapa_municipio.sld` com 2 regras por escala —
+    acima de 1:1.500.000 (estado inteiro) linha fina `#94a3b8` 0,5 px e opacidade 0,55;
+    abaixo (zoom de cidade) o tracejado de antes.
+  - **Municípios com imóveis publicados destacados:** estilo extra
+    `vw_mapa_municipio_com_dados.sld` (violeta `#7c3aed`, preenchimento 14%), pedido pela
+    tela via `STYLES` na mesma camada de municípios com `CQL_FILTER=COD_NATURAL IN (...)`
+    dos códigos que vieram de `/api/indicadores/municipios` — município novo publicado
+    entra sozinho. Item próprio na legenda, com liga/desliga. São **duas camadas**: o
+    preenchimento (`vw_mapa_municipio_com_dados`, abaixo dos imóveis, `zIndex` 6) e o
+    contorno (`vw_mapa_municipio_com_dados_contorno`, acima dos imóveis e abaixo dos
+    alertas, `zIndex` 11) — com uma só, onde os imóveis cobrem o município quase inteiro
+    (Maringá, Ponta Grossa) o destaque sumia. O liga/desliga controla as duas. `configurar.sh` ganhou
+    `publicar_estilo` e a lista `ESTILOS_EXTRAS` (estilo que não é padrão de camada).
+  - **Carregamento visível:** aviso "Carregando mapa…" sobre o mapa enquanto alguma camada
+    WMS carrega (eventos `loading`/`load`/`remove` do Leaflet — o `remove` evita o aviso
+    preso quando a camada é desligada no meio) ou alguma consulta ao GeoServer está em
+    andamento. Enquanto os indicadores não chegam, KPIs mostram "—" e o aviso de cada
+    camada "Carregando…" (antes mostrava 0 imóveis e "Indicador não calculado", dando a
+    impressão de falta de dado).
+  - **Informações no mapa (clique e mouse):** o clique continua selecionando e abre um
+    balão no ponto com tudo do item — imóvel: código, município, área, camadas de alerta
+    que cruza ("Cruza N camada(s) de alerta: IAE", mesmo termo do KPI) e o valor dos 7
+    indicadores; município: imóveis, área, imóveis com sobreposição e os 7
+    indicadores agregados; município sem dados: o nome e "Ainda sem imóveis com indicadores
+    publicados". Mouse parado 400 ms mostra uma etiqueta curta (nome/código, município e
+    resumo do alerta). Como o mapa é imagem (WMS), a tela pergunta ao GeoServer o que está
+    no ponto (`identificarNoPonto`, que passou a devolver `{ codigo, rotulo }` — o rótulo
+    dá o nome até de município sem dado); mexeu o mouse, a etiqueta some, e resposta que
+    chega depois é descartada (contador de consulta). Os dados do conteúdo vêm do que a
+    tela já carregou, sem chamada nova. Texto vindo dos dados entra escapado no HTML do
+    Leaflet. Estilos com `:deep()` a partir de `.mapa` e popup escuro no bloco do tema.
+    Descartado: carregar os imóveis como vetor pra etiqueta ser instantânea (pesado com
+    4.611 e inviável no estado inteiro, ~556 mil).
+  - **Atalhos e ajudas (2026-10-21):**
+    - *Imóveis com alerta* no painel quando há município selecionado: os que têm ISAP,
+      IAE, IDESMAT ou IFC > 0 (mesma regra do KPI, por isso a contagem bate — 22 em Ponta
+      Grossa), primeiro quem cruza mais camadas e, no empate, a maior sobreposição
+      percentual. Mostra 8 e um "Mostrar todos". Clicar passa para a visão de imóvel nele.
+    - *Seleção na URL* (`?municipio=<IBGE>` ou `?imovel=<CAR>`, `router.replace`): F5
+      volta no mesmo item e o link pode ser enviado. Aplicada só depois que os indicadores
+      chegam; código desconhecido é ignorado.
+    - *Botão "ver o Paraná inteiro"* (abaixo do zoom, reenquadra sem limpar a seleção) e
+      *régua de escala* em metros (`L.control.scale`).
+    - *Dica do KPI:* passar o mouse (ou focar pelo teclado) num card mostra o que a sigla
+      significa (`tipo_indicador.descricao`, sem acento porque vem assim do catálogo —
+      [EM ABERTO] da §9.40). Chegou a ter legenda de cores (Bom/Atenção/Crítico/Não
+      calculado), sentido e faixas na dica; **tudo removido** na mesma data, junto com as
+      cores dos cards e do balão, pela decisão de a tela ser só visual.
+    - *Aviso que leva ao motivo:* os códigos no "Atenção: N camadas com alerta — IAE IRL"
+      são botões. Clicar abre a aba certa da lista do município ou, sem lista (imóvel
+      selecionado, ou IAPP/ICV), rola até o item da camada no painel e o destaca por 2,5 s
+      — é onde está a explicação; IRL, IAPP e ICV nem têm camada no mapa. A lista do
+      município ganhou abas *Sobreposição* (ISAP/IAE/IDESMAT/IFC > 0, igual ao KPI) e *Sem
+      Reserva Legal* (IRL = 0, maiores primeiro); aba vazia fica desabilitada e a tela abre
+      na que tem imóvel. No banco local, Curitiba mostra os 111 sem Reserva Legal — é o
+      zero × não declarado da §9.40, não erro da tela.
+    - *Botão "Indicadores e Resultados"* (era "Ver na tabela"; só com
+      `indicador:visualizar`): abre `/indicadores?municipio=` ou `?visao=imovel&imovel=`. A
+      `IndicadoresView` (LIZARDS-34) passou a ler essa query ao abrir — filtra e abre o
+      detalhe do item; sem query, comportamento igual ao de antes.
+    - **Indicadores e Resultados saiu do menu lateral (2026-10-22, pedido do usuário).** A
+      tela continua em `/indicadores` (rota e permissão iguais) e passa a ser aberta pelo
+      botão acima. A seção "Publicação & Resultados (Gold)" sumiu do `Sidebar.vue` (ficou
+      vazia) e o item Conjuntos e Cobertura virou "Mapa, indicadores e resultados" com
+      `rotasRelacionadas: ['/indicadores']` — com a tabela aberta, ele continua marcado
+      como ativo no menu. Na `IndicadoresView` entrou o botão **"Ver no mapa"** (só com
+      `conjunto:visualizar`), que volta para `/conjuntos` no município/imóvel aberto
+      (`?municipio=`/`?imovel=`) ou no recorte inteiro. Testes: +3 no `Sidebar.test.js`, +4
+      no `IndicadoresView.test.js`; suíte **266, 0 falhas**, build ok; ida e volta
+      conferidas no navegador.
+    - **Mesma área, um nome só (2026-10-22, pedido do usuário):** o item do menu e o título
+      da tela do mapa passaram de "Conjuntos e Cobertura" para **"Indicadores e
+      Resultados"** (subtítulo do item: "Indicadores, Mapa e Cobertura", a pedido), o mesmo nome da tela de tabela.
+      As duas telas se alternam por **"Ver em tabela"** (no mapa; era "Indicadores e
+      Resultados") e **"Ver no mapa"** (na tabela). Rotas (`/conjuntos`, `/indicadores`),
+      permissões e o nome do arquivo `ConjuntosView.vue` não mudaram — renomear a rota
+      quebraria links já enviados (`?municipio=`/`?imovel=`). Suíte 266, build ok, conferido
+      no navegador.
+  - Testes: +15 no `ConjuntosView.test.js` e o de `identificarNoPonto` ajustado; depois +11
+    (atalhos), +1 (dica do KPI) e +3 (aviso que leva ao motivo) no
+    `ConjuntosView.test.js` e +3 no `IndicadoresView.test.js`; depois os de faixa e legenda
+    viraram testes de "sem cor" (tela só visual). Suíte do frontend **259, 0 falhas**, build ok. Atalhos conferidos no navegador (URL, lista,
+    reenquadrar, escala, tabela aberta no imóvel) nos dois temas. Conferido no navegador nas duas visões (etiqueta
+    e balão de Ponta Grossa e de um imóvel com embargo) e no tema escuro.
+    Conferido no navegador: aviso de carregamento aparece e some, "—" durante o
+    carregamento, mapa de 600 px cabendo na tela, zoom-out travado no estado inteiro.
 - **[EM ABERTO]**
   - **IRL, IAPP e ICV zerados no banco local de quem não ingeriu** Reserva Legal, APP e
     Vegetação Nativa: o aviso diz "4.611 imóveis sem Reserva Legal declarada". Não é erro da
