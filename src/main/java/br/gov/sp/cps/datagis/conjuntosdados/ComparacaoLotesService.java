@@ -58,6 +58,11 @@ public class ComparacaoLotesService {
             ComparacaoLotesDto.ADICIONADO, ComparacaoLotesDto.REMOVIDO,
             ComparacaoLotesDto.MODIFICADO, ComparacaoLotesDto.INALTERADO);
 
+    /** Ordem do resultado: o que mudou primeiro, os inalterados por último. */
+    private static final List<String> ORDEM_SITUACAO = List.of(
+            ComparacaoLotesDto.ADICIONADO, ComparacaoLotesDto.REMOVIDO,
+            ComparacaoLotesDto.MODIFICADO, ComparacaoLotesDto.INALTERADO);
+
     private final LoteIngestaoRepository loteIngestaoRepository;
     private final FonteDadoRepository fonteDadoRepository;
     private final RegistroBrutoRepository registroBrutoRepository;
@@ -145,10 +150,13 @@ public class ComparacaoLotesService {
 
         List<Diferenca> diferencas = new ArrayList<>();
         for (String chave : chaves) {
-            parear(porChaveAtual.getOrDefault(chave, List.of()),
+            parear(chave, porChaveAtual.getOrDefault(chave, List.of()),
                     porChaveAnterior.getOrDefault(chave, List.of()), true, diferencas);
         }
-        parear(semChaveAtual, semChaveAnterior, false, diferencas);
+        parear(null, semChaveAtual, semChaveAnterior, false, diferencas);
+        // Estável: dentro de cada situação mantém a ordem do lote. Assim a primeira página
+        // mostra as mudanças, e não milhares de inalterados na frente delas.
+        diferencas.sort(java.util.Comparator.comparingInt(d -> ORDEM_SITUACAO.indexOf(d.situacao())));
 
         int adicionados = 0, removidos = 0, modificados = 0, inalterados = 0;
         for (Diferenca d : diferencas) {
@@ -176,7 +184,7 @@ public class ComparacaoLotesService {
                 loteAtual.getId(), loteAtual.getDataExecucao(),
                 loteAnterior.getId(), loteAnterior.getDataExecucao(),
                 fonte.getId(), fonte.getNome(),
-                true, null,
+                campoChave, true, null,
                 new ResumoLotes(registrosAtual.size(), registrosAnterior.size(),
                         adicionados, removidos, modificados, inalterados),
                 paginaResultado, filtradas.size(), pagina, tamanho);
@@ -202,7 +210,8 @@ public class ComparacaoLotesService {
      * como saber que dois registros diferentes são "o mesmo", então sobra vira
      * adicionado/removido. O excedente de um dos lados é adicionado/removido.
      */
-    private void parear(List<Registro> atuais, List<Registro> anteriores, boolean temChave, List<Diferenca> saida) {
+    private void parear(String chave, List<Registro> atuais, List<Registro> anteriores, boolean temChave,
+            List<Diferenca> saida) {
         // Índice pelo conteúdo: o grupo dos sem chave pode ter o lote inteiro
         Map<Conteudo, ArrayDeque<Registro>> anterioresPorConteudo = new HashMap<>();
         anteriores.forEach(r -> anterioresPorConteudo.computeIfAbsent(r.conteudo(), k -> new ArrayDeque<>()).add(r));
@@ -214,7 +223,7 @@ public class ComparacaoLotesService {
             Registro igual = iguais == null ? null : iguais.pollFirst();
             if (igual != null) {
                 casados.add(igual);
-                saida.add(new Diferenca(atual, igual, ComparacaoLotesDto.INALTERADO, List.of()));
+                saida.add(new Diferenca(chave, atual, igual, ComparacaoLotesDto.INALTERADO, List.of()));
             } else {
                 restoAtual.add(atual);
             }
@@ -224,17 +233,17 @@ public class ComparacaoLotesService {
         if (temChave) {
             int pares = Math.min(restoAtual.size(), restoAnterior.size());
             for (int i = 0; i < pares; i++) {
-                saida.add(compararCampos(restoAtual.get(i), restoAnterior.get(i)));
+                saida.add(compararCampos(chave, restoAtual.get(i), restoAnterior.get(i)));
             }
             restoAtual = restoAtual.subList(pares, restoAtual.size());
             restoAnterior = restoAnterior.subList(pares, restoAnterior.size());
         }
 
-        restoAtual.forEach(r -> saida.add(new Diferenca(r, null, ComparacaoLotesDto.ADICIONADO, List.of())));
-        restoAnterior.forEach(r -> saida.add(new Diferenca(null, r, ComparacaoLotesDto.REMOVIDO, List.of())));
+        restoAtual.forEach(r -> saida.add(new Diferenca(chave, r, null, ComparacaoLotesDto.ADICIONADO, List.of())));
+        restoAnterior.forEach(r -> saida.add(new Diferenca(chave, null, r, ComparacaoLotesDto.REMOVIDO, List.of())));
     }
 
-    private Diferenca compararCampos(Registro atual, Registro anterior) {
+    private Diferenca compararCampos(String chave, Registro atual, Registro anterior) {
         List<CampoAlterado> camposAlterados = new ArrayList<>();
         Set<String> todasChaves = new LinkedHashSet<>(anterior.dados().keySet());
         todasChaves.addAll(atual.dados().keySet());
@@ -255,13 +264,14 @@ public class ComparacaoLotesService {
         }
 
         String situacao = camposAlterados.isEmpty() ? ComparacaoLotesDto.INALTERADO : ComparacaoLotesDto.MODIFICADO;
-        return new Diferenca(atual, anterior, situacao, camposAlterados);
+        return new Diferenca(chave, atual, anterior, situacao, camposAlterados);
     }
 
     private DiferencaRegistro paraDto(Diferenca d) {
         Registro atual = d.atual();
         Registro anterior = d.anterior();
         return new DiferencaRegistro(
+                d.chave(),
                 atual != null ? atual.bruto().getId() : null,
                 anterior != null ? anterior.bruto().getId() : null,
                 atual != null ? atual.bruto().getNumeroLinha() : null,
@@ -296,6 +306,7 @@ public class ComparacaoLotesService {
     private record Conteudo(Map<String, Object> dados, String geometriaWkt) {
     }
 
-    private record Diferenca(Registro atual, Registro anterior, String situacao, List<CampoAlterado> camposAlterados) {
+    private record Diferenca(String chave, Registro atual, Registro anterior, String situacao,
+            List<CampoAlterado> camposAlterados) {
     }
 }
