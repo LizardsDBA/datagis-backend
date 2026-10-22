@@ -102,6 +102,45 @@ class ComparacaoLotesServiceTest {
         assertThat(r.resumo().inalterados()).isEqualTo(6);
         DiferencaRegistro novo = comparar(ComparacaoLotesDto.ADICIONADO).registros().get(0);
         assertThat(novo.dadosAtual()).containsEntry("cod_imovel", "PR-NOVO");
+        assertThat(novo.chave()).isEqualTo("PR-NOVO");
+    }
+
+    @Test
+    void cadaItemTrazAChaveNaturalEOCampoUsado() {
+        lotes(List.of(imovel("PR-1", 1, QUADRADO)), List.of(imovel("PR-1", 2, QUADRADO)));
+
+        ComparacaoLotesDto r = comparar(null);
+
+        assertThat(r.campoChave()).isEqualTo("cod_imovel");
+        assertThat(r.registros()).singleElement().satisfies(d -> {
+            assertThat(d.chave()).isEqualTo("PR-1");
+            assertThat(d.situacao()).isEqualTo(ComparacaoLotesDto.MODIFICADO);
+        });
+    }
+
+    @Test
+    void semFiltroOQueMudouVemPrimeiroEOsInalteradosPorUltimo() {
+        lotes(List.of(imovel("PR-1", 1, QUADRADO), imovel("PR-2", 2, QUADRADO), imovel("PR-3", 9, QUADRADO),
+                        imovel("PR-NOVO", 4, QUADRADO)),
+                List.of(imovel("PR-1", 1, QUADRADO), imovel("PR-2", 2, QUADRADO), imovel("PR-3", 3, QUADRADO),
+                        imovel("PR-VELHO", 5, QUADRADO)));
+
+        assertThat(comparar(null).registros())
+                .extracting(DiferencaRegistro::chave, DiferencaRegistro::situacao)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("PR-NOVO", ComparacaoLotesDto.ADICIONADO),
+                        org.assertj.core.groups.Tuple.tuple("PR-VELHO", ComparacaoLotesDto.REMOVIDO),
+                        org.assertj.core.groups.Tuple.tuple("PR-3", ComparacaoLotesDto.MODIFICADO),
+                        org.assertj.core.groups.Tuple.tuple("PR-1", ComparacaoLotesDto.INALTERADO),
+                        org.assertj.core.groups.Tuple.tuple("PR-2", ComparacaoLotesDto.INALTERADO));
+    }
+
+    @Test
+    void registroSemChaveVemComChaveNula() {
+        RegistroBruto semChave = RegistroBruto.builder().id(1L).payload("{\"x\":1}").build();
+        lotes(List.of(semChave), List.of());
+
+        assertThat(comparar(null).registros()).singleElement().satisfies(d -> assertThat(d.chave()).isNull());
     }
 
     @Test
@@ -207,6 +246,7 @@ class ComparacaoLotesServiceTest {
 
         assertThat(r.loteAnteriorEncontrado()).isFalse();
         assertThat(r.mensagem()).contains("primeiro lote");
+        assertThat(r.campoChave()).isNull();
     }
 
     @Test
