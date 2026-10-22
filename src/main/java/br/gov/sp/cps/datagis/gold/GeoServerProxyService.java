@@ -40,7 +40,7 @@ public class GeoServerProxyService {
 
     static final String WORKSPACE = "datagis";
 
-    /** As views da V079. Camada nova no mapa entra aqui tambem. */
+    /** As views da V080. Camada nova no mapa entra aqui tambem. */
     static final Set<String> CAMADAS = Set.of(
             "vw_mapa_limite_pr", "vw_mapa_municipio", "vw_mapa_imovel", "vw_mapa_area_protegida",
             "vw_mapa_embargo", "vw_mapa_desmatamento", "vw_mapa_foco_calor");
