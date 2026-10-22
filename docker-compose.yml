@@ -66,7 +66,7 @@ services:
 
   # Mapa de cobertura (LIZARDS-35): desenha as camadas da Gold (WMS) e responde as
   # consultas de intersecao (WFS + INTERSECTS, que vira SDO_RELATE no Oracle). Le so
-  # as views gold.vw_mapa_* (V079). O navegador nunca fala com ele direto - passa pelo
+  # as views gold.vw_mapa_* (V080). O navegador nunca fala com ele direto - passa pelo
   # proxy do backend, com o login do Keycloak; a porta abaixo e so pro painel de
   # administracao, e fica presa no 127.0.0.1.
   # A extensao "oracle" ja traz o driver JDBC. Na primeira subida as extensoes sao
