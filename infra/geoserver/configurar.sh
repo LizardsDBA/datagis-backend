@@ -23,6 +23,8 @@ DIR="$(dirname "$0")"
 WS=datagis
 DS=gold
 CAMADAS="vw_mapa_limite_pr vw_mapa_municipio vw_mapa_imovel vw_mapa_area_protegida vw_mapa_embargo vw_mapa_desmatamento vw_mapa_foco_calor"
+# Estilos que nao sao o padrao de nenhuma camada: a tela pede pelo parametro STYLES.
+ESTILOS_EXTRAS="vw_mapa_municipio_com_dados vw_mapa_municipio_com_dados_contorno"
 
 # Codigo HTTP de uma chamada REST (corpo descartado).
 http() {
@@ -84,6 +86,20 @@ else
         "$GS/rest/workspaces/$WS/datastores" -d "$DATASTORE"
 fi
 
+# Cria ou atualiza o estilo estilos/<nome>.sld no workspace.
+publicar_estilo() {
+    sld="$DIR/estilos/$1.sld"
+    # Consulta com .xml: sem extensao o GeoServer 3.0.2 responde 500 pra estilo que existe.
+    if [ "$(http "$GS/rest/workspaces/$WS/styles/$1.xml")" != "200" ]; then
+        exigir "estilo $1" -X POST -H 'Content-Type: application/vnd.ogc.sld+xml' \
+            "$GS/rest/workspaces/$WS/styles?name=$1" --data-binary "@$sld"
+    else
+        # Reenviado sempre: editar o .sld no repositorio e rodar de novo ja aplica.
+        exigir "estilo $1 (atualizado)" -X PUT -H 'Content-Type: application/vnd.ogc.sld+xml' \
+            "$GS/rest/workspaces/$WS/styles/$1" --data-binary "@$sld"
+    fi
+}
+
 echo "[geoserver-config] camadas e estilos"
 for camada in $CAMADAS; do
     nativo=$(printf '%s' "$camada" | tr '[:lower:]' '[:upper:]')
@@ -101,19 +117,14 @@ for camada in $CAMADAS; do
         echo "  ok   camada $camada (ja existia)"
     fi
 
-    sld="$DIR/estilos/$camada.sld"
-    # Consulta com .xml: sem extensao o GeoServer 3.0.2 responde 500 pra estilo que existe.
-    if [ "$(http "$GS/rest/workspaces/$WS/styles/$camada.xml")" != "200" ]; then
-        exigir "estilo $camada" -X POST -H 'Content-Type: application/vnd.ogc.sld+xml' \
-            "$GS/rest/workspaces/$WS/styles?name=$camada" --data-binary "@$sld"
-    else
-        # Reenviado sempre: editar o .sld no repositorio e rodar de novo ja aplica.
-        exigir "estilo $camada (atualizado)" -X PUT -H 'Content-Type: application/vnd.ogc.sld+xml' \
-            "$GS/rest/workspaces/$WS/styles/$camada" --data-binary "@$sld"
-    fi
+    publicar_estilo "$camada"
     exigir "estilo padrao de $camada" -X PUT -H 'Content-Type: text/xml' \
         "$GS/rest/layers/$WS:$camada" \
         -d "<layer><defaultStyle><name>$camada</name><workspace>$WS</workspace></defaultStyle></layer>"
+done
+
+for estilo in $ESTILOS_EXTRAS; do
+    publicar_estilo "$estilo"
 done
 
 echo "[geoserver-config] conferencia (feicoes por camada, via WFS):"
