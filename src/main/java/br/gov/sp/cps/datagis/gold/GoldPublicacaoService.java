@@ -49,7 +49,7 @@ public class GoldPublicacaoService {
     private static final List<String> CODIGOS_MAPA_CAMADA = List.of(
             "MUNICIPIO", "LIMITE_PR", "AREA_PROTEGIDA", "DESMATAMENTO", "EMBARGO", "IMOVEL_RURAL", "FOCO_CALOR");
 
-    /** Contorno do Paraná (V079): 1 feature só, a união dos 399 municípios. */
+    /** Contorno do Paraná (V080): 1 feature só, a união dos 399 municípios. */
     private static final String CAMADA_LIMITE_PR = "LIMITE_PR";
 
     /** ~50 m. A união sai com ~62 mil vértices; nos 5 m padrão ficariam ~26 mil
