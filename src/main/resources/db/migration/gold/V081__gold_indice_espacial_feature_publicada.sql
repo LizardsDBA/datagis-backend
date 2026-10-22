@@ -3,7 +3,7 @@
 -- O GeoServer traduz o INTERSECTS do WFS em SDO_RELATE(..., 'mask=anyinteract') no
 -- Oracle (confirmado no spike). Sem indice, cada consulta e TABLE ACCESS FULL -
 -- cruzar Ponta Grossa com os 2.654 imoveis levou 6,1 s; com indice o plano passa a
--- DOMAIN INDEX. As views vw_mapa_* (V079) leem desta tabela, entao o indice vale
+-- DOMAIN INDEX. As views vw_mapa_* (V080) leem desta tabela, entao o indice vale
 -- pra todas.
 --
 -- PRE-REQUISITO: o schema GOLD precisa de CREATE TABLE, CREATE SEQUENCE e UNLIMITED
@@ -61,7 +61,7 @@ BEGIN
             'O schema ' || v_dono || ' nao tem privilegio para criar indice espacial. '
             || 'Rode uma vez, como SYS: ALTER SESSION SET CONTAINER = FREEPDB1; '
             || 'GRANT CREATE TABLE, CREATE SEQUENCE, UNLIMITED TABLESPACE TO ' || v_dono || '; '
-            || 'e reinicie o backend (detalhes no cabecalho da V080). Erro original: '
+            || 'e reinicie o backend (detalhes no cabecalho da V081). Erro original: '
             || SUBSTR(v_erro, 1, 1500));
     END IF;
 
