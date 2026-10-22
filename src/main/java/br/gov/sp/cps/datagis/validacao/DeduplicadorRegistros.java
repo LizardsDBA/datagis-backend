@@ -193,6 +193,17 @@ public class DeduplicadorRegistros {
         return extrairCampoDoPayload(r, campoChave);
     }
 
+    /**
+     * Valor da chave natural de um registro bruto, com os mesmos aliases de fonte usados na
+     * deduplicação (ex.: {@code numero_termo} também aceita {@code num_tad}). Usado também
+     * pela comparação entre lotes (LIZARDS-30), para parear o mesmo registro nos dois lotes.
+     *
+     * @return o valor da chave, ou {@code null} se o payload não tiver o campo
+     */
+    public String extrairChaveNatural(RegistroBruto r, String campoChave) {
+        return extrairCampoDoPayload(r, campoChave);
+    }
+
     private String extrairCampoDoPayload(RegistroBruto r, String campo) {
         if (r == null || r.getPayload() == null || r.getPayload().isBlank()) {
             return null;
