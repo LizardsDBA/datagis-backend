@@ -1,11 +1,25 @@
 services:
   oracle:
-    # Imagem COMPLETA + faststart (nao -slim): o -slim remove o Oracle Spatial, e a
-    # Silver usa SDO_GEOMETRY (SRID 4674). Trocar de volta pro -slim quebra V012+.
-    # -faststart mantem todos os componentes e ainda sobe rapido (DB pre-criado).
-    image: gvenzl/oracle-free:23.26.3-faststart
+    # [TROCADO - ver docs/tutorial-oracle-enterprise-dev-local.md] gvenzl/oracle-free
+    # tem limite de 12GB embutido na licenca (Oracle Database Free), nao e config -
+    # Enterprise Edition oficial da Oracle nao tem esse limite. Licenca de
+    # desenvolvedor gratuita (OTN), valida so pra dev/teste - nunca producao (decisao
+    # do time de deixar "ambiente de producao" pra decidir depois, CLAUDE.md §3.4).
+    # Exige docker login container-registry.oracle.com antes de conseguir puxar -
+    # cada pessoa da equipe precisa fazer isso uma vez na propria maquina (tutorial).
+    # Fixado pela digest exata (nao "latest") - mesmo principio de pinar versao
+    # exata ja usado pra gvenzl (§4.6) - a tag "latest" deste repositorio resolveu
+    # pra esta digest em 2026-10-10, Oracle Database 26ai (Oracle Linux 8.10).
+    image: container-registry.oracle.com/database/enterprise@sha256:224c51ce1555ff7b75882a84b621c52b6d5ece00c96b0c5cd84e667333ad5cd7
     environment:
-      ORACLE_PASSWORD: ${ORACLE_PASSWORD}
+      ORACLE_PWD: ${ORACLE_PASSWORD}
+      # Mesmo nome de sempre (FREEPDB1) de proposito - evita precisar trocar
+      # SPRING_DATASOURCE_URL e todo o resto do codigo/testes que ja referencia esse
+      # nome. Por padrao esta imagem usaria ORCLCDB/ORCLPDB1.
+      ORACLE_PDB: FREEPDB1
+      # Esta imagem nao consome essas 3 pra criar usuario automatico (diferente da
+      # gvenzl) - ficam aqui so pra 01-criar-schemas.sh conseguir ler (ele quem
+      # cria o APP_USER agora, na mao).
       APP_USER: ${APP_USER}
       APP_USER_PASSWORD: ${APP_USER_PASSWORD}
       SCHEMA_PASSWORD: ${SCHEMA_PASSWORD}
@@ -13,13 +27,41 @@ services:
       - "${ORACLE_PORT:-1521}:1521"
     volumes:
       - oracle-data:/opt/oracle/oradata
-      - ./infra/oracle-init:/container-entrypoint-initdb.d
-    healthcheck:
-      test: ["CMD", "healthcheck.sh"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 60s
+      # Convencao oficial desta imagem (diferente de /container-entrypoint-initdb.d
+      # da gvenzl) - roda uma vez so, depois do banco criado. 01-criar-schemas.sh
+      # agora tambem cria o APP_USER (esta imagem nao tem APP_USER/APP_USER_PASSWORD
+      # automatico como a gvenzl tinha).
+      - ./infra/oracle-init:/opt/oracle/scripts/setup
+    # Sem healthcheck customizado - a imagem ja vem com um embutido no Dockerfile
+    # oficial (CMD-SHELL checkDBLockStatus.sh, start_period 900s) - confirmado via
+    # `docker inspect ... --format '{{json .Config.Healthcheck}}'`. O
+    # depends_on: condition: service_healthy do backend ja usa esse healthcheck
+    # nativo sem precisar declarar nada aqui.
+    restart: unless-stopped
+
+  # Login e controle de acesso (RBAC, LIZARDS-47). Modo dev: banco interno do proprio
+  # Keycloak (H2 em arquivo) no volume keycloak-data - nao usa o Oracle. O realm
+  # "datagis" (clients + conta de servico do backend) vem do JSON versionado em
+  # infra/keycloak e so e importado na primeira subida; roles, perfis e usuarios de
+  # teste sao mantidos pelo proprio backend na subida (KeycloakProvisionador), entao
+  # mudar o catalogo de roles no codigo NAO exige recriar este volume.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      # Issuer fixo = endereco que o NAVEGADOR enxerga. O backend fala com o Keycloak
+      # pela rede do Docker (keycloak:8080), mas o token sempre sai com
+      # iss=http://localhost:8180/realms/datagis - sem isso o issuer mudaria conforme
+      # quem pergunta e o backend recusaria o token.
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-8180}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    ports:
+      - "${KEYCLOAK_PORT:-8180}:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
     restart: unless-stopped
 
   backend:
@@ -29,11 +71,18 @@ services:
     depends_on:
       oracle:
         condition: service_healthy
+      keycloak:
+        condition: service_started
     environment:
       SPRING_PROFILES_ACTIVE: docker
       SPRING_DATASOURCE_URL: jdbc:oracle:thin:@oracle:1521/FREEPDB1
       SPRING_DATASOURCE_USERNAME: ${APP_USER}
       SPRING_DATASOURCE_PASSWORD: ${APP_USER_PASSWORD}
+      KEYCLOAK_URL_INTERNA: http://keycloak:8080
+      KEYCLOAK_URL_PUBLICA: http://localhost:${KEYCLOAK_PORT:-8180}
+      KEYCLOAK_BACKEND_CLIENT_SECRET: ${KEYCLOAK_BACKEND_CLIENT_SECRET}
+      APP_KEYCLOAK_PROVISIONAR: "true"
+      APP_KEYCLOAK_USUARIOS_DEV: "true"
       JAVA_TOOL_OPTIONS: "-Xmx8g"
     ports:
       - "${BACKEND_PORT:-8080}:8080"
@@ -61,5 +110,6 @@ services:
 
 volumes:
   oracle-data:
+  keycloak-data:
   maven-repo:
   frontend-node-modules:

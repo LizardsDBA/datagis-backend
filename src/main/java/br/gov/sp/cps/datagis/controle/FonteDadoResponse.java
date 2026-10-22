@@ -8,6 +8,7 @@ public record FonteDadoResponse(
         String nome,
         String orgao,
         String tipoAquisicao,
+        String entidadeSilver,
         String urlOrigem,
         String cronExpressao,
         String formatoEsperado,
@@ -19,14 +20,25 @@ public record FonteDadoResponse(
         Long ultimaDuracaoMs,
         String ultimoStatusExecucao,
         String ultimoErroMensagem,
-        LocalDateTime dataAdd) {
+        LocalDateTime dataAdd,
+        Boolean mapeamentoCompleto,
+        Integer totalColunasSilver,
+        Integer totalColunasMapeadas,
+        java.util.List<String> colunasSilverFaltantes) {
 
     public static FonteDadoResponse de(FonteDado fonte) {
+        return de(fonte, null);
+    }
+
+    public static FonteDadoResponse de(
+            FonteDado fonte,
+            ValidacaoMapeamentoFonteService.StatusMapeamentoFonte status) {
         return new FonteDadoResponse(
                 fonte.getId(),
                 fonte.getNome(),
                 fonte.getOrgao(),
                 fonte.getTipoAquisicao(),
+                fonte.getEntidadeSilver(),
                 fonte.getUrlOrigem(),
                 fonte.getCronExpressao(),
                 fonte.getFormatoEsperado(),
@@ -38,6 +50,10 @@ public record FonteDadoResponse(
                 fonte.getUltimaDuracaoMs(),
                 fonte.getUltimoStatusExecucao(),
                 fonte.getUltimoErroMensagem(),
-                fonte.getDataAdd());
+                fonte.getDataAdd(),
+                status != null ? status.completo() : false,
+                status != null ? status.totalColunasEsperadas() : 0,
+                status != null ? status.totalColunasMapeadas() : 0,
+                status != null ? status.colunasFaltantes() : java.util.Collections.emptyList());
     }
 }

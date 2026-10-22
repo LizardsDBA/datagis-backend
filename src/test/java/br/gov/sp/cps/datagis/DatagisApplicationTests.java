@@ -32,5 +32,4 @@ class DatagisApplicationTests {
 	@Test
 	void contextLoads() {
 	}
-
 }

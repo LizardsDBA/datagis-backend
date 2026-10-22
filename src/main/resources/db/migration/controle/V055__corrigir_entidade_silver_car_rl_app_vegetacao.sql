@@ -1,0 +1,9 @@
+-- [SEM EFEITO - ver V031 e V053] Corrigia entidade_silver (NULL -> app_declarada/
+-- reserva_legal/vegetacao_nativa_declarada) pras 3 fontes da V053, e acrescentava o
+-- mapeamento objectid->identificador_origem. Com a reordenacao do catalogo de
+-- fontes, o V031 ja seeda entidade_silver correto pra todas as 18 fontes (nunca
+-- passa por NULL) e o V053 ja inclui o mapeamento objectid->identificador_origem. Mantida como no-op
+-- (em vez de apagada) pra nao furar a sequencia de versoes do Flyway; o texto
+-- original e o raciocinio do bug (entidade_silver NULL arriscava corromper
+-- silver.imovel_rural via fallback por nome) ficam no historico do git.
+-- (migration sem nenhum statement executavel - Flyway so marca como aplicada)

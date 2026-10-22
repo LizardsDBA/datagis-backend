@@ -34,6 +34,7 @@ public class FonteDadoService {
                 .nome(dados.nome())
                 .orgao(dados.orgao())
                 .tipoAquisicao(dados.tipoAquisicao())
+                .entidadeSilver(dados.entidadeSilver())
                 .urlOrigem(dados.urlOrigem())
                 .cronExpressao(dados.cronExpressao())
                 .formatoEsperado(dados.formatoEsperado())
@@ -63,6 +64,7 @@ public class FonteDadoService {
         fonte.setNome(dados.nome());
         fonte.setOrgao(dados.orgao());
         fonte.setTipoAquisicao(dados.tipoAquisicao());
+        fonte.setEntidadeSilver(dados.entidadeSilver());
         fonte.setUrlOrigem(dados.urlOrigem());
         fonte.setCronExpressao(dados.cronExpressao());
         fonte.setFormatoEsperado(dados.formatoEsperado());
@@ -75,6 +77,12 @@ public class FonteDadoService {
         sincronizarAgendamento(salva);
 
         return salva;
+    }
+
+    public FonteDado atualizarEntidadeSilver(Long id, String entidadeSilver) {
+        FonteDado fonte = buscarPorId(id);
+        fonte.setEntidadeSilver(entidadeSilver != null && !entidadeSilver.isBlank() ? entidadeSilver.trim() : null);
+        return repository.save(fonte);
     }
 
     public List<FonteDado> listar() {

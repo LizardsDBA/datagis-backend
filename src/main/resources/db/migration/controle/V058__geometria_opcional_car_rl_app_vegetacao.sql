@@ -1,0 +1,8 @@
+-- [SEM EFEITO - ver V053] Mudava geometria de obrigatorio=1 pra 0 nas 3 fontes
+-- (APP/RL/Vegetacao Nativa), achado ao vivo (3 registros de Reserva Legal
+-- "proposta", cod_tema=ARL_PROPOSTA, sem geometria ainda - estagio legitimo do
+-- SICAR). Com a reordenacao do catalogo de fontes, o V053 ja cadastra o
+-- mapeamento_coluna de geometria direto com obrigatorio=0. Mantida como no-op (em
+-- vez de apagada) pra nao furar a sequencia de versoes do Flyway; o raciocinio
+-- completo fica no historico do git.
+-- (migration sem nenhum statement executavel - Flyway so marca como aplicada)

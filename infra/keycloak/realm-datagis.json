@@ -1,0 +1,67 @@
+{
+  "realm": "datagis",
+  "displayName": "DataGIS",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "internationalizationEnabled": true,
+  "supportedLocales": ["pt-BR", "en"],
+  "defaultLocale": "pt-BR",
+  "clients": [
+    {
+      "clientId": "datagis-frontend",
+      "name": "DataGIS - Portal (Vue)",
+      "description": "Login do frontend. Cliente publico com PKCE - nao guarda segredo.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:5173"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*"
+      }
+    },
+    {
+      "clientId": "datagis-dev",
+      "name": "DataGIS - Token de desenvolvimento",
+      "description": "SOMENTE DESENVOLVIMENTO: permite pegar token com usuario/senha via curl para testar a API pelo Swagger. Remover em qualquer ambiente que nao seja local.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "datagis-backend",
+      "name": "DataGIS - Backend (administracao de usuarios)",
+      "description": "Conta de servico usada pelo backend para cadastrar usuarios, atribuir roles e manter o catalogo de roles/perfis sincronizado com o codigo.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "datagis-backend-dev-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-datagis-backend",
+      "enabled": true,
+      "serviceAccountClientId": "datagis-backend",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-users", "query-users", "manage-realm", "view-realm"]
+      }
+    }
+  ]
+}

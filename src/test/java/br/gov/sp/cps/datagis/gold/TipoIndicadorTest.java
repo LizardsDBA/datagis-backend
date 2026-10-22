@@ -2,6 +2,7 @@ package br.gov.sp.cps.datagis.gold;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Convert;
 import jakarta.persistence.Table;
 import java.time.LocalDateTime;
@@ -24,6 +25,19 @@ class TipoIndicadorTest {
         assertThat(tipo.getTemFonte()).isTrue();
         assertThat(tipo.getAtivo()).isTrue();
         assertThat(tipo.getDataAdd()).isNull();
+
+        // V077: a maioria dos indicadores é percentual, então o padrão evita que um
+        // tipo cadastrado pela tela de administração nasça sem unidade.
+        assertThat(tipo.getUnidade()).isEqualTo("PERCENTUAL");
+        assertThat(tipo.getUnidadeSimbolo()).isEqualTo("%");
+
+        // V076: classificação não tem padrão. Indicador sem faixa definida fica neutro
+        // na tela em vez de herdar limites de outro indicador.
+        assertThat(tipo.getDimensao()).isNull();
+        assertThat(tipo.getSentido()).isNull();
+        assertThat(tipo.getLimiteBom()).isNull();
+        assertThat(tipo.getLimiteAtencao()).isNull();
+        assertThat(tipo.getOrdemExibicao()).isNull();
     }
 
     @Test
@@ -45,6 +59,32 @@ class TipoIndicadorTest {
         assertThat(tipo.getTemFonte()).isFalse();
         assertThat(tipo.getAtivo()).isFalse();
         assertThat(tipo.getDataAdd()).isEqualTo(data);
+    }
+
+    @Test
+    @DisplayName("Deve carregar os campos de catálogo usados pela tela de indicadores")
+    void deveCarregarCamposDeCatalogo() {
+        // IFC é o caso que motivou a V077: único indicador de densidade do catálogo,
+        // calculado como focos / área do imóvel * 1.000 pela pkg_calculo_ambiental.
+        TipoIndicador tipo = TipoIndicador.builder()
+                .codigo("IFC")
+                .descricao("Índice de Focos de Calor")
+                .dimensao("AMBIENTAL")
+                .sentido("MENOR_MELHOR")
+                .limiteBom(30)
+                .limiteAtencao(60)
+                .ordemExibicao(7)
+                .unidade("DENSIDADE")
+                .unidadeSimbolo("focos/1.000 ha")
+                .build();
+
+        assertThat(tipo.getDimensao()).isEqualTo("AMBIENTAL");
+        assertThat(tipo.getSentido()).isEqualTo("MENOR_MELHOR");
+        assertThat(tipo.getLimiteBom()).isEqualTo(30);
+        assertThat(tipo.getLimiteAtencao()).isEqualTo(60);
+        assertThat(tipo.getOrdemExibicao()).isEqualTo(7);
+        assertThat(tipo.getUnidade()).isEqualTo("DENSIDADE");
+        assertThat(tipo.getUnidadeSimbolo()).isEqualTo("focos/1.000 ha");
     }
 
     @Test
@@ -85,5 +125,16 @@ class TipoIndicadorTest {
         Convert convertAtivo = TipoIndicador.class.getDeclaredField("ativo").getAnnotation(Convert.class);
         assertThat(convertAtivo).isNotNull();
         assertThat(convertAtivo.converter()).isEqualTo(NumericBooleanConverter.class);
+
+        // Campos com nome diferente do atributo: divergência aqui só apareceria em
+        // tempo de execução, contra o banco.
+        assertThat(nomeDaColuna("limiteBom")).isEqualTo("limite_bom");
+        assertThat(nomeDaColuna("limiteAtencao")).isEqualTo("limite_atencao");
+        assertThat(nomeDaColuna("ordemExibicao")).isEqualTo("ordem_exibicao");
+        assertThat(nomeDaColuna("unidadeSimbolo")).isEqualTo("unidade_simbolo");
+    }
+
+    private String nomeDaColuna(String atributo) throws NoSuchFieldException {
+        return TipoIndicador.class.getDeclaredField(atributo).getAnnotation(Column.class).name();
     }
 }

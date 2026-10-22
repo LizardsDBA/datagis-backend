@@ -195,8 +195,8 @@ class TransicaoBronzeSilverServiceTest {
     }
 
     @Test
-    @DisplayName("Liberação manual de lote deve transformar e promover registros rejeitados para a Silver")
-    void devePromoverRejeitadosQuandoLoteForLiberado() {
+    @DisplayName("Liberação manual de lote com registros reprovados na revalidação mantém itens na Quarentena e bloqueia envio para a Silver")
+    void deveBloquearLiberacaoQuandoHouverRegistrosReprovadosNaRevalidacao() {
         Long loteId = 5L;
         FonteDado fonte = FonteDado.builder().id(1L).nome("CAR Teste").entidadeSilver("imovel_rural").build();
         LoteIngestao lote = LoteIngestao.builder().id(loteId).fonteDado(fonte).status("RETIDO_QUARENTENA").build();
@@ -211,15 +211,15 @@ class TransicaoBronzeSilverServiceTest {
         when(orquestradorValidacao.orquestrarLote(eq(1L), anyList(), eq("cod_imovel")))
                 .thenReturn(new ResultadoOrquestracao(List.of(apr1), List.of(rej2), List.of(), 2, 1, 1, 0));
 
-        RegistroAprovadoSilver aprRej2 = new RegistroAprovadoSilver(reg2, Map.of("cod_imovel", "PR-2"), null);
-        when(orquestradorValidacao.transformarRegistro(eq(1L), eq(reg2))).thenReturn(aprRej2);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> transicaoService.liberarLoteParaSilver(loteId, 10L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("não pode ser liberado para a Silver")
+                .hasMessageContaining("mantidos na Quarentena");
 
-        boolean sucesso = transicaoService.liberarLoteParaSilver(loteId, 10L);
-
-        assertThat(sucesso).isTrue();
-        assertThat(lote.getStatus()).isEqualTo(TransicaoBronzeSilverService.STATUS_PROMOVIDO_SILVER);
-        verify(persistidorSilverService).persistirAprovados(eq("imovel_rural"), eq(List.of(apr1, aprRej2)));
-        verify(jdbcTemplate, atLeastOnce()).update(anyString(), eq("CORRIGIDO_REPROCESSADO"), eq(10L), eq(loteId));
+        // Regra All-or-Nothing mantida: nada vai para a Silver e o lote continua RETIDO_QUARENTENA
+        assertThat(lote.getStatus()).isEqualTo(TransicaoBronzeSilverService.STATUS_RETIDO_QUARENTENA);
+        verify(persistidorSilverService, never()).persistirAprovados(anyString(), anyList());
+        verify(loteIngestaoRepository, atLeastOnce()).save(lote);
     }
 
     @Test

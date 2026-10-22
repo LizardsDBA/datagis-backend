@@ -58,6 +58,8 @@ class ConjuntosDadosServiceTest {
         when(loteIngestaoRepository.findFirstByFonteDadoIdAndStatusOrderByIdDesc(7L, "PROMOVIDO_SILVER"))
                 .thenReturn(Optional.of(lote));
         when(transicaoService.resolverEntidadeSilver(fonte)).thenReturn("municipio");
+        when(jdbcTemplate.queryForObject(contains("all_tables"), eq(Integer.class), eq("MUNICIPIO")))
+                .thenReturn(1);
 
         LoteResumoDto resumo = service().buscarUltimoLotePromovido(7L);
 
@@ -119,6 +121,8 @@ class ConjuntosDadosServiceTest {
         LoteIngestao lote = LoteIngestao.builder().id(7L).fonteDado(fonte).build();
         when(loteIngestaoRepository.findByIdComFonte(7L)).thenReturn(Optional.of(lote));
         when(transicaoService.resolverEntidadeSilver(fonte)).thenReturn("municipio");
+        when(jdbcTemplate.queryForObject(contains("all_tables"), eq(Integer.class), eq("MUNICIPIO")))
+                .thenReturn(1);
 
         List<Map<String, Object>> colunasMetadados = List.of(
                 Map.of("COLUMN_NAME", "ID", "DATA_TYPE", "NUMBER"),
@@ -160,6 +164,8 @@ class ConjuntosDadosServiceTest {
         when(registroBrutoRepository.findById(38L)).thenReturn(Optional.of(bronze));
         when(fonteDadoRepository.findById(1L)).thenReturn(Optional.of(fonte));
         when(transicaoService.resolverEntidadeSilver(fonte)).thenReturn("imovel_rural");
+        when(jdbcTemplate.queryForObject(contains("all_tables"), eq(Integer.class), eq("IMOVEL_RURAL")))
+                .thenReturn(1);
         when(jdbcTemplate.queryForList(contains("all_tab_columns"), eq("IMOVEL_RURAL")))
                 .thenReturn(List.of(Map.of("COLUMN_NAME", "ID", "DATA_TYPE", "NUMBER")));
         when(jdbcTemplate.queryForList(contains("all_cons_columns"), eq("IMOVEL_RURAL")))
@@ -178,6 +184,8 @@ class ConjuntosDadosServiceTest {
         LoteIngestao lote = LoteIngestao.builder().id(1L).fonteDado(fonte).build();
         when(loteIngestaoRepository.findByIdComFonte(1L)).thenReturn(Optional.of(lote));
         when(transicaoService.resolverEntidadeSilver(fonte)).thenReturn("imovel_rural");
+        when(jdbcTemplate.queryForObject(contains("all_tables"), eq(Integer.class), eq("IMOVEL_RURAL")))
+                .thenReturn(1);
 
         when(jdbcTemplate.queryForList(contains("all_tab_columns"), eq("IMOVEL_RURAL")))
                 .thenReturn(List.of(

@@ -261,15 +261,28 @@ Validar na fatia de cálculo.
 > publicada`, com `geometria_intersecao` em precisão total — artefato de auditoria).
 > **O portal lê só a Gold, nunca a Silver.**
 
-**Ponto crítico ainda em aberto:** o algoritmo de `hash_versao` (amarra dado-fonte +
-regra + resultado) ainda não foi detalhado — a coluna existe, a lógica de cálculo não.
+**`hash_versao` — [RESOLVIDO, 2026-10-04]:** implementado em `pkg_gold_publicacao.
+registrar_resultado` exatamente como proposto em `docs/gold-procedures-calculo-
+publicacao.md` §4 — SHA-256 via `DBMS_CRYPTO.HASH` sobre uma string canônica
+(`cod_imovel|regra_calculo_id|lotes_csv|indicador:valor:area:percentual`). Idempotente:
+recalcular sem mudança de dado-fonte devolve o mesmo `indicador_versao_id` em vez de
+duplicar linha.
+
+**Transição Silver→Gold (cálculo dos indicadores + publicação) — [IMPLEMENTADO em
+PL/SQL, 2026-10-04 — ver §9.33]**, diferente de Bronze→Silver (que é Java, §9.23-25).
+4 dos 7 indicadores calculam de verdade contra dado real (ISAP, IAE, IDesmat, IFC);
+ICV/IRL/IAPP seguem stub (bloqueio SICAR Temas). Testado contra os 4.608 imóveis reais
+do CAR/PR via `POST /api/gold/publicar`. Design original, cobertura por indicador e
+trade-offs em `docs/gold-procedures-calculo-publicacao.md`.
 
 ### 2.7. Schema de controle (transversal)
-- `usuario`, `papel`, `usuario_papel` — RBAC (**adiado**, ver seção 4)
+- ~~`usuario`, `papel`, `usuario_papel`~~ — **não serão criadas**: identidade e RBAC
+  moram no Keycloak (§9.39, decisão de 2026-10-12)
 - `fonte_dado` — catálogo de fontes (ver seção 2.8, estendido para agendamento)
 - `lote_ingestao` (fonte_dado_id, arquivo_origem, data_upload, usuário, hash_arquivo)
 - `pipeline_execucao` — histórico de execuções (substitui o que seria "DAG run" do Airflow)
-- `log_auditoria` — **append-only**, sem UPDATE/DELETE possível (RN025 do DRN)
+- `log_auditoria` — **append-only**, sem UPDATE/DELETE possível (RN025 do DRN) —
+  **criada em 2026-10-13 (`V075`, LIZARDS-48, §9.39)**
 
 ### 2.8. `fonte_dado` — extensão para agendamento automático e ingestão genérica
 Discutido: além do cadastro básico, a fonte de dado pode ter aquisição automatizada
@@ -510,6 +523,7 @@ starters `-test` granulares do Boot 4, mais tudo do §4.4 acima.
 
 ### 4.6. Ambiente de desenvolvimento em containers — **[DECIDIDO, implementado e testado end-to-end]**
 Dev roda **3 containers via `docker compose`**: `oracle` + `backend` + `frontend`.
+**Desde 2026-10-12 são 4**: entrou o `keycloak` (login/RBAC, porta 8180 — §9.39).
 Testado em 2026-09-02 no WSL: os 3 sobem, Oracle fica `healthy`, backend conecta e
 migra Flyway em `CONTROLE`, `curl localhost:8080/actuator/health` → `200 UP`, Vite serve
 em `localhost:5173` e o proxy `/api` alcança o backend pela rede Docker.
@@ -553,6 +567,10 @@ esquecido.
   `oracle-data` para datafiles, `infra/oracle-init/` montado em
   `/container-entrypoint-initdb.d`, `healthcheck: healthcheck.sh` (nativo da imagem).
   `backend` usa `depends_on: { oracle: { condition: service_healthy } }`.
+  **Isso só vale no `docker compose up`** — no reboot do PC o Docker religa tudo junto
+  (`restart: unless-stopped` ignora `depends_on`). Por isso o backend também espera o
+  banco sozinho: `spring.flyway.connect-retries=60` + `connect-retries-interval=5`
+  (até 5 min) no `application.properties` (2026-10-01).
 - `backend`: volume nomeado `maven-repo` → `/root/.m2` (cache de dependência entre subidas).
   `SPRING_DATASOURCE_URL/USERNAME/PASSWORD` vêm direto do `.env` via `environment:` do
   compose — Spring Boot faz o binding automático, **sem precisar de
@@ -713,6 +731,20 @@ formatos" do desafio oficial da Visiona**.
   têm fonte de dado funcionando até hoje, por causa do bloqueio de credenciamento acima).
   Demais linhas: atendidas de forma exata ou com formato de acesso equivalente
   (ex.: GeoJSON via API no lugar de `.shp` estático — mesma fonte/órgão, canal diferente).
+- **`docs/tutorial-acesso-fontes-pendentes.md` (2026-10-03, prioridade máxima) —**
+  passo a passo real do credenciamento Conecta Gov (autocadastro + certificado digital
+  ICP-Brasil + pedido formal de órgão à SGD/ME + IP allowlist Serpro — processo pesado,
+  provavelmente exige apoio institucional da FATEC/Visiona, não é algo que o time resolve
+  sozinho) **e** reteste ao vivo do Plano B (vegetação nativa via IAT): achado novo que
+  **muda o status anterior** — o candidato `Vegetacao_Nativa_IAT_2021` é só tabela
+  (197.963 registros, sem geometria consultável), não serve pra interseção geoespacial
+  do jeito que está hoje. Plano B segue em aberto, não resolvido.
+  **Atualizado no mesmo dia** com uma §0 nova: cruzamento das 10 linhas do slide oficial
+  contra o `controle.fonte_dado` **consultado direto no banco** (não documentação) — 6
+  linhas 100% cobertas, 3 gaps de verdade (os de cima), e **2 achados novos que não são
+  gap de pesquisa, só de cadastro**: IBGE (limites de biomas) e INCRA (quilombolas +
+  assentamentos) já tinham fonte validada desde a v2 mas nunca viraram `fonte_dado` —
+  URLs prontas pra cadastrar no próprio tutorial §0.
 
 ### 5.8. Arquitetura de ingestão genérica por formato — **[DECIDIDO e implementado, 2026-09-08/09 — substitui a lógica CAR-específica da §5.2/§5.6]**
 
@@ -772,7 +804,10 @@ fonte cadastrada é editável (útil pra corrigir URL/circuito sem nova migratio
 `IngestaoGeoJsonExecutorTest`, `LoteIngestaoWriterTest`, `PaginadorUrlGeoJsonTest`,
 `TratadorDeErroTest`, `FonteDadoServiceTest`), `BUILD SUCCESS`.
 
-### 5.3. Spring Security — bypass temporário
+### 5.3. Spring Security — bypass temporário — **[SUBSTITUÍDO em 2026-10-12 pelo RBAC com Keycloak, §9.39]**
+> Histórico. O `SecurityConfig` agora valida JWT do Keycloak e libera cada rota por
+> permissão — ver §9.39 e `docs/controle-de-acesso-rbac.md`.
+
 A dependência `spring-boot-starter-security` fica no projeto (para não reconfigurar
 Maven depois), mas com uma configuração provisória liberando tudo, marcada para
 remoção quando RF001/RN008-012 forem implementados:
@@ -1149,10 +1184,20 @@ Branch `feat/upload-shp`. Detalhe completo, achados e itens em aberto em
   meio do recebimento, não devolve resposta HTTP).
 - **Testado com arquivo de produção real**: 218MB, 559.899 registros, ~3 min,
   processamento síncrono (sem chunk/batch) sem erro.
-- **Achado real comparando com a fonte via WFS**: o Shapefile bulk traz o **histórico
-  completo** do CAR (`situacao_imovel` = `AT`/`CA`/`PE`), o WFS só devolve o vigente.
-  Refina a regra de dedup do §3.5 do doc de modelagem — duplicata **dentro do mesmo
-  lote** (não entre lotes) precisa de regra própria (manter só `AT`).
+- **Achado real comparando com a fonte via WFS**: o Shapefile bulk traz o histórico
+  completo do CAR (`situacao_imovel` = `AT`/`CA`/`PE`). Refina a regra de dedup do §3.5
+  do doc de modelagem — duplicata **dentro do mesmo lote** (não entre lotes) precisa de
+  regra própria (manter só `AT`).
+  **[CORRIGIDO em 2026-10-07]** A premissa original aqui ("o WFS só devolve o vigente")
+  estava **errada** — testado ao vivo comparando as 2 fontes (`docs/tutorial-acesso-
+  fontes-pendentes.md` §0-bis): o WFS, sem filtro nenhum, já devolve AT+PE+CA+SU
+  (confirmado via `CQL_FILTER` por status, soma bate exato com o total sem filtro —
+  557.854 em 2026-10-07). Ou seja, o WFS automatizado (fonte `#1`, já ativa) **já tem o
+  histórico completo que achávamos que só o Shapefile manual (`#12`) trazia** — a
+  necessidade de upload manual pra esse propósito específico é bem menor do que
+  documentado aqui originalmente. A regra de dedup continua válida (os dois têm
+  histórico, então os dois precisam dela), mas a justificativa de "por que cadastramos
+  o upload manual" deixa de ser "é a única fonte com histórico".
 
 ### 9.13. Regras de validação em mapeamento_coluna — [FEITO, 2026-09-13, `V029`]
 Migration `V029__evoluir_mapeamento_coluna_regras_validacao.sql` adiciona suporte
@@ -1437,6 +1482,856 @@ disparar.
   - De-para dinâmico de colunas gerenciável pelo analista;
   - **202 testes unitários no backend aprovados** (100% de sucesso).
   - **Build frontend Vite concluído com sucesso** (`✓ built in 2.10s`).
+
+### 9.31. Seeds: só fontes + lote de municípios do PR — [DECIDIDO, 2026-10-01, branch `feat/ajuste-seeds`]
+- **Seeds de demonstração removidas** (`seed-demo/V021`–`V023`, `V026`, `V027`) e a location
+  saiu do `spring.flyway.locations`. Bronze/Silver/Gold/Quarentena nascem vazias, exceto
+  tabelas de referência/catálogo (V011, V015/V017/V030, V016/V018), que os validadores e
+  as FKs exigem. Banco de dev antigo precisa de `docker compose down -v` (Flyway recusa
+  versão aplicada que sumiu dos arquivos).
+- **Única seed de dado: `V037__seed_lote_ibge_malha_municipal_pr.sql`**, arquivo SQL pronto (gerado uma vez a partir do serviço do IAT; o gerador não fica no repo).
+  1 `lote_ingestao`
+  (`PROMOVIDO_SILVER`) da fonte 'IBGE - Malha Municipal (PR)' → 399 `registro_bruto` →
+  399 `silver.municipio`, linhagem ligada. Existe pra nenhuma fonte cair em
+  `REFERENCIA_NAO_ENCONTRADA` por falta de município.
+- **Resolução da geometria:** mesmo serviço do IAT da fonte 7, com
+  `maxAllowableOffset=0.00005` (~5 m, ~14 MB; com 0.0001 o servidor gera auto-interseção em 3 municípios). Resolução total = ~62 MB (pesado pra
+  migration e pro mapa); API do IBGE `qualidade=maxima` (3,6 MB) descartada porque não
+  traz nome nem área, e o validador casa município também pelo nome (focos, ICMBio).
+- **Conferido contra as fontes reais:** CAR, Focos IAT, Embargos/Autos IBAMA casam 100%.
+  Embargos/Autos ICMBio têm ~37 registros com nome que não é município do PR ou está
+  escrito errado na origem ("Cap. Leônidas Marques", "Tuneiras de Oeste", Naviraí/MS,
+  "Mar territorial"...) — esses vão pra Quarentena por desenho.
+- **[EM ABERTO] `bronze.registro_bruto.hash_registro` nunca é preenchido** (achado
+  2026-10-01). O `LoteIngestaoWriter` monta o `RegistroBruto` sem `.hashRegistro(...)`
+  nos dois caminhos de gravação — por isso `hash_origem` também sai vazio em toda a
+  Silver. Não confundir com `lote_ingestao.hash_conteudo` (hash do lote inteiro, que
+  funciona). Correção: SHA-256 de `payload` + `geometria_wkt` por registro. Combinado
+  fazer depois, em branch `fix/` própria.
+
+### 9.32. Design de Silver→Gold via PL/SQL — [DOCUMENTADO, 2026-10-03, pré-desenvolvimento]
+Nada implementado ainda — sessão de documentação, a pedido do time, antes de abrir as 3
+tasks do board (`LIZARDS-31` Conservação, Territorial, Ambiental). Ver
+`docs/gold-procedures-calculo-publicacao.md` (novo) e §2.6.
+
+- **Decisão proposta**: Silver→Gold (cálculo dos 7 indicadores + publicação nos 3
+  blocos da Gold) vira **PL/SQL** (packages por task), diferente de Bronze→Silver
+  (Java). Trade-offs documentados, não só vantagens — time ainda não escreveu PL/SQL
+  neste projeto, teste só via Oracle real (sem mock), mesmo padrão `*OracleIT` do §9.28.
+- **Achado que muda o escopo das 3 tasks**: `LIZARDS-31` (Conservação/ICV) e metade de
+  Territorial (IRL, IAPP) **não têm fonte de dado hoje** (`tipo_indicador.tem_fonte=0`
+  na `V016`, gap já conhecido desde `docs/checklist-cobertura-fontes.md` — API SICAR
+  Temas exige credenciamento Serpro fora do alcance do time). Só ISAP, IAE, IDesmat e
+  IFC são calculáveis de verdade agora; o resto vira stub até a fonte aparecer.
+- Proposta de algoritmo pra `hash_versao` (§2.6) — primeira vez que esse ponto em
+  aberto ganha um desenho concreto.
+- **Itens em aberto que a equipe ainda precisa fechar**: confirmar a ida pra PL/SQL;
+  validar o algoritmo de hash; Quartz+Job vs. `DBMS_SCHEDULER` pra disparar a
+  publicação; tolerância de generalização de geometria do mapa; donos de cada
+  package/task (tabela em branco no documento, a preencher).
+
+### 9.33. Implementação das procedures Gold + achado crítico de índice espacial — **[FEITO e testado contra o Oracle real, 2026-10-04, `LIZARDS-31`/`LIZARDS-32`/`LIZARDS-33`]**
+Branch `feat/procedures-indicadores`, a partir da `sprint-1`. Implementa de verdade o
+design do §9.32: `pkg_gold_publicacao` (compartilhada) + `pkg_calculo_ambiental`
+(IDesmat, IFC) + `pkg_calculo_territorial` (ISAP, IAE reais; IRL, IAPP stub) +
+`pkg_calculo_conservacao` (ICV stub) — migrations `V043`-`V047`. Orquestração
+"pra cada imóvel, calcula os 4 reais, publica" fica no Java (`GoldPublicacaoService`,
+`GoldPublicacaoController`, `POST /api/gold/publicar` e `.../imoveis/{cod}/recalcular`),
+não em PL/SQL — pacote não pode chamar de volta quem o chama sem dependência circular.
+
+**Achado crítico, só aparece em volume real (não no teste sintético) — `SDO_ANYINTERACT`
+nunca usa índice espacial:** `SDO_ANYINTERACT(a, b) = 'TRUE'` **nunca** aciona índice
+espacial no Oracle desta instância, mesmo com o índice existindo e válido — confirmado
+via `EXPLAIN PLAN`/`DBMS_XPLAN.DISPLAY`, sempre `TABLE ACCESS FULL` com filtro, nunca
+`DOMAIN INDEX`. Só `SDO_RELATE(a, b, 'mask=ANYINTERACT') = 'TRUE'` é reconhecido pelo
+otimizador como acesso indexado. Sem saber disso, calcular ISAP/IAE pra 200 imóveis
+contra os 16 mil `area_protegida`/2,5 mil `embargo_ambiental` reais levava **~42
+minutos**; trocando pra `SDO_RELATE` + índice espacial de verdade (`V049`, silver),
+caiu pra **~1 segundo** (~2.400x). Todo `SDO_ANYINTERACT` da Gold foi trocado por
+`SDO_RELATE(...,'mask=ANYINTERACT')`.
+
+**Criar o índice espacial em si teve 3 pegadinhas de privilégio/recurso reais** (doc
+completo no cabeçalho de `V049__indices_espaciais_calculo.sql`):
+1. `CREATE INDEX ... INDEXTYPE IS MDSYS.SPATIAL_INDEX` roda rotina ODCI interna que
+   precisa de `CREATE TABLE`/`CREATE SEQUENCE`/`UNLIMITED TABLESPACE` **diretos** (não
+   "ANY") no schema **dono da tabela** (`silver`), não no `CONTROLE` que tem privilégio
+   `ANY` de sobra — sem isso dá `ORA-01031`/`ORA-29855`. Mesma exigência pro `DROP`
+   (`DROP ANY INDEX` do `CONTROLE` não basta; precisou conectar como `silver` direto).
+   Grants permanentes adicionados em `infra/oracle-init/01-criar-schemas.sh`.
+2. `area_protegida` tem polígonos nacionais (MMA/SFB) de até **164 mil vértices** —
+   construir o R-tree estourava `PGA_AGGREGATE_LIMIT` (`ORA-04036`) até no default de
+   2G. Resolvido subindo pra **8G**, e precisa subir **primeiro no `CDB$ROOT`, depois
+   no PDB** (senão `ORA-56747`, limite do PDB não pode exceder o do root) — também
+   persistido no init script.
+3. Um índice com `STATUS='VALID'` no catálogo (`all_indexes` e
+   `mdsys.sdo_index_metadata_table`) pode não funcionar de verdade se a criação morreu
+   no meio (ex. pelo `ORA-04036` acima) — só o `EXPLAIN PLAN` mostrando `DOMAIN INDEX`
+   de fato confirma. Confiar só no `STATUS` é enganoso.
+
+**Segundo bug achado testando a publicação completa contra os 4.608 imóveis reais —
+`publicar_camada_mapa` não era resiliente:** fazia um único `INSERT...SELECT` com
+`SDO_UTIL.SIMPLIFY` por linha; uma geometria ruim de `area_protegida` dava
+`ORA-13199: the given geometry cannot be rectified` e abortava a camada inteira (0
+features publicadas, apesar de 16 mil boas). Reescrita linha a linha (`FOR` +
+`BEGIN/EXCEPTION WHEN OTHERS`), mesmo princípio já usado na ingestão Bronze→Silver
+(§5.8 item 2: pula e loga a linha ruim, publica as demais). Resultado real: **16.084 de
+16.086** features de `AREA_PROTEGIDA` publicadas, só 2 geometrias genuinamente
+inválidas puladas (logadas por `id`/`codigo_origem`). Mesmo achado revelou que uma
+geometria pode ser **lenta sem ser inválida** (uma UC de 146 mil vértices levou ~5min
+pra simplificar sozinha, sem erro) — não dá pra prever só pela contagem de vértices.
+
+**Terceiro bug — `publicar_imovel` não era idempotente:** `registrar_resultado` já
+reusa o mesmo `indicador_versao_id` (via `hash_versao`) quando nada mudou, mas
+`publicar_imovel` fazia um `INSERT` direto em `imovel_publicado` — rodar a publicação
+de novo sem mudança de dado violava `UQ_IMOVEL_PUBLICADO`. Corrigido com um guard
+(`SELECT COUNT(*)` antes do insert) que torna republicar um no-op quando a versão já
+foi publicada.
+
+**Resultado final validado contra o Oracle real:** `gold.imovel_publicado` = 4.608
+linhas (100% dos imóveis Silver). Camadas: `MUNICIPIO` 399, `EMBARGO` 2.519,
+`IMOVEL_RURAL` 4.606 (2 a menos = os 2 imóveis com `geometria IS NULL` na Silver,
+esperado), `AREA_PROTEGIDA` 16.084. `DESMATAMENTO` e `FOCO_CALOR` seguem em 0 —
+**não são bug desta sessão**: `silver.desmatamento` está vazia (WFS do PRODES/INPE
+instável, todas as tentativas de ingestão falharam hoje) e `silver.foco_calor` também
+(bug real e separado: o endpoint de liberar quarentena trava em lotes muito grandes —
+333 mil e 152 mil registros — fica pra uma sessão própria). Suíte completa rodada ao
+final: **401 testes, 0 falhas, 1 erro** (o `DatagisApplicationTests` de sempre, §9.3 —
+sem Docker-in-Docker dentro do container do backend), zero regressão.
+
+**Commits divididos pelas 3 tasks do board** conforme o conteúdo de cada um (pacote
+compartilhado + indicadores ambientais + as correções de mapeamento ficaram no
+commit de `LIZARDS-33`; ISAP/IAE + o índice espacial ficaram em `LIZARDS-32`; o stub
+do ICV em `LIZARDS-31`) — não existe uma divisão 1:1 perfeita entre arquivo e task
+porque `pkg_gold_publicacao` é infraestrutura compartilhada pelos 3.
+
+### 9.34. IAPP/IRL/ICV deixam de ser gap — fonte achada e cadastrada, sem credenciamento — **[FONTE CADASTRADA, 2026-10-07, `LIZARDS-24`]**
+Os 3 indicadores que só tinham stub nas procedures Gold (§9.33) por falta de fonte
+ganharam fonte real, achada a partir de uma URL do portal ArcGIS do IAT/PR. Detalhe
+completo, verificação ao vivo e os 4 passos (cadastrar → ingerir → modelar Silver →
+calcular) em `docs/tutorial-acesso-fontes-pendentes.md` §0-bis — resumo aqui:
+
+- **Serviço**: `00_PUBLICACOES/Base_Geo_Cadastro_Ambiental_rural` no geoportal IAT/PR
+  (`geopr.iat.pr.gov.br`), público, sem credenciamento. 9 camadas do CAR; as 3
+  relevantes pros indicadores: `APP Total` (381.962 polígonos → IAPP), `Reserva Legal`
+  (347.867 → IRL), `Vegetação Nativa` (393.153 → ICV + numerador do IAPP via
+  interseção com APP Total).
+- **Verificado via `curl` direto no ArcGIS REST**, não suposição: geometria real com
+  `outSR=4674`, `cod_imovel` no mesmo formato de `silver.imovel_rural.cod_imovel`,
+  `des_condic` com o mesmo texto do SICAR que `ValidadorDominio` já resolve (§9.17).
+- **Comparação de confiabilidade feita ao vivo** (mesma sessão) entre as 3 fontes de
+  *perímetro* de imóvel disponíveis (WFS `#1`, Shapefile `#12`, e a camada `Área
+  Imóvel` deste mesmo serviço IAT): WFS SICAR (`#1`) é a mais confiável — domínio
+  oficial direto (`geoserver.car.gov.br`), `cod_municipio_ibge` numérico como chave
+  (evita erro de nome de município, já visto nesta sessão), e teste cruzado do mesmo
+  `cod_imovel` entre WFS e IAT deu área/geometria idênticas (24 vértices nos dois). A
+  camada `Área Imóvel` do IAT **não foi cadastrada** por ser redundante e menos
+  completa (sem status `CA`).
+- **Achado que corrige §9.12**: o WFS SICAR, testado sem filtro, já devolve
+  AT+PE+CA+SU (não só o vigente como a nota antiga dizia) — ver correção em §9.12.
+- **Cadastrado em `V053__seed_fontes_car_app_rl_vegetacao_nativa.sql`**: as 3 fontes
+  (`API_REST`/`GEOJSON`, mesma família ArcGIS já suportada por
+  `IngestaoGeoJsonExecutor`, zero código novo) + `mapeamento_coluna` deliberadamente
+  mínimo (mesmo motivo do `V041`/MMA-SFB: ativar integridade cruzada com
+  `imovel_rural` agora quarentenaria quase tudo, já que a Silver só tem os ~4.608
+  imóveis do circuito de homologação, não os ~350-390 mil que essas camadas cobrem).
+- **[EM ABERTO]** Nada ingerido ainda. Faltam os passos 2-4 do tutorial §0-bis: rodar
+  ingestão de teste real, decidir a modelagem Silver (tabelas novas tipo
+  `silver.reserva_legal`/`silver.app_declarada`/`silver.vegetacao_nativa_declarada`,
+  cada uma com FK pra `imovel_rural`), e implementar `calcular_irl`/`calcular_iapp`/
+  `calcular_icv` de verdade (hoje stub, `pkg_calculo_territorial`/`pkg_calculo_
+  conservacao`) usando `SDO_RELATE` desde o início (não repetir o achado do
+  `SDO_ANYINTERACT`, §9.33).
+
+### 9.35. Catálogo de fontes reordenado por ordem de ingestão + nenhuma fonte com cron — **[DECIDIDO e aplicado, 2026-10-09]**
+As 18 fontes nasciam com o ID na ordem em que foram descobertas/cadastradas ao
+longo das sprints (espalhadas por 7 migrations: `V003`, `V006`, `V009`, `V025`,
+`V039`, `V041`, `V053`). Pedido do time: reordenar pra refletir a **ordem desejável
+de ingestão** (pré-requisitos primeiro) em vez da ordem histórica de descoberta, e
+tirar o `cron_expressao` de todas (nenhuma fonte roda mais por agendamento
+automático por ora — só disparo manual, até o fluxo de cálculo/publicação da Gold
+estar fechado de ponta a ponta).
+
+**IDs novos (consolidados em `V003`, que passou de "cadastro manual do CAR" pra
+seed único de todo o catálogo):**
+
+| ID | Fonte | ID antigo |
+|---|---|---|
+| 1 | IBGE - Malha Municipal (PR) | 7 |
+| 2 | IBGE - Limites de biomas | 13 |
+| 3 | CAR - Imóveis (PR) | 1 |
+| 4 | IAT/PR - APP Total (CAR) | 16 |
+| 5 | IAT/PR - Reserva Legal (CAR) | 17 |
+| 6 | IAT/PR - Vegetação Nativa (CAR) | 18 |
+| 7 | ICMBio - Unidades de Conservação (PR) | 2 |
+| 8 | IAT/PR - Terras Indígenas (FUNAI) | 8 |
+| 9 | MMA - Unidades de Conservacao (CNUC nacional) | 14 |
+| 10 | SFB - Cadastro Nacional de Florestas Publicas (CNFP) | 15 |
+| 11 | IAT/PR - Embargos IBAMA | 5 |
+| 12 | IAT/PR - Embargos ICMBio | 9 |
+| 13 | IAT/PR - Autos de Infração IBAMA | 10 |
+| 14 | IAT/PR - Autos de Infração ICMBio | 11 |
+| 15 | INPE (PRODES) - Desmatamento Mata Atlântica (PR) | 3 |
+| 16 | IAT/PR - Focos de Calor (INPE) | 4 |
+| 17 | INPE (Queimadas) - Focos de calor, Brasil (mensal) | 6 |
+| 18 | CAR - Imóveis (PR) via Shapefile (upload) | 12 |
+
+**3 pegadinhas reais achadas fazendo isso (nenhuma óbvia antes de tentar) — guardar
+pra não repetir o retrabalho:**
+1. **`fonte_dado.entidade_silver` e `campo_geometria_lat`/`campo_geometria_lon` não
+   existem ainda no ponto em que o seed consolidado roda** (`V003`, a migration
+   mais antiga que semeia `fonte_dado`) — essas colunas só nascem em `V010`
+   (`ADD entidade_silver`) e `V005` (`ADD campo_geometria_lat/lon`), ambas
+   numericamente DEPOIS de `V003`. Botar essas colunas direto no `INSERT` do `V003`
+   quebra com `ORA-00904: invalid identifier`. Corrigido: `V003` só usa as colunas
+   que já existiam desde `V001`; `entidade_silver` passou a ser setado em bloco no
+   `V031` (que já roda depois do `V010`), **por NOME, não por id** — e
+   `campo_geometria_lat/lon` da fonte CSV do INPE em um `UPDATE` no `V006` (que já
+   roda depois do `V005`). Regra geral: ao consolidar um seed na migration mais
+   antiga possível, cada coluna usada no `INSERT` tem que já existir **naquela
+   versão**, não na versão atual da tabela.
+2. **`V031__seed_mapeamentos_fontes_padrao.sql` tinha ~90 ocorrências de
+   `fonte_dado_id` **hard-coded por número** (`WHERE id IN (1, 12)`,
+   `VALUES (2, 'cnuc', ...)` etc.), um padrão bem diferente do resto do projeto
+   (que resolve por `nome` via subquery) — passou batido numa primeira varredura
+   por grep porque o padrão de busca procurava `fonte_dado_id = N`, não `f.id IN
+   (N)`/`VALUES (N,`. **Lição**: ao reordenar/renumerar qualquer catálogo com ID
+   `IDENTITY`, rodar pelo menos 2 buscas (uma pelo nome da coluna FK, outra por
+   `VALUES (` seguido de número pequeno) antes de assumir que achou todas as
+   referências. Corrigido com substituição em passe único (script Python, evitando
+   colisão entre id antigo e novo no meio da troca) + reescrita do bloco de
+   `entidade_silver` pra usar nome em vez de id (elimina a fragilidade de vez).
+3. **`V048` e `V051` também tinham `fonte_dado_id` fixo por número** (correções de
+   mapeamento achadas testando ingestão real, ex. `WHERE fonte_dado_id = 2`) -
+   atualizados pros IDs novos, com o número antigo anotado em comentário pra
+   rastreabilidade.
+
+Migrations que perderam efeito prático (`V035`, `V052` — preenchiam/ajustavam cron;
+`V055`, `V056`, `V058` — fixes das 3 fontes novas do CAR, agora já corretas desde o
+cadastro) foram mantidas como **no-op documentado** (comentário `[SEM EFEITO - ver
+X]`), não apagadas — apagar um número de versão já no histórico do Flyway é pior
+que deixar um arquivo sem statement executável.
+
+**Verificado ao vivo, banco resetado do zero**: `docker compose down` + `docker
+volume rm` + `up -d` aplica as 61 migrations limpo; `fonte_dado` confere exatamente
+a tabela acima, nenhuma linha com `cron_expressao`; ingestão de teste no CAR (novo
+id 3) e na APP Total (novo id 4) promovem pra Silver normalmente (4.611 e 3.180
+registros, bate com os números já conhecidos); suíte completa **401 testes, 0
+falhas, 1 erro** (o `DatagisApplicationTests` de sempre, §9.3).
+
+### 9.36. 4 indicadores funcionando de ponta a ponta no circuito + simplificação de mapa migrada pra Java/JTS — **[FEITO e validado contra o Oracle real, 2026-10-11, `LIZARDS-24`/`LIZARDS-50`]**
+Sessão longa, trocou Oracle Free por Enterprise Edition (§9.34/tutorial próprio),
+filtrou os endpoints restantes pelo circuito (`V061`) e destravou os 4 indicadores
+com fonte (ISAP, IAE, IDesmat, IFC) de verdade contra dado real, não só sintético.
+Design original e formulário em `docs/gold-procedures-calculo-publicacao.md` §9.
+
+**Bug 1 — ISAP/IAE/IDesmat zerando ou explodindo com imóvel real (`V060`/`V063`/`V064`):**
+- `V060` já corrigia o padrão "dissolver antes de interseccionar quebra com geometria
+  'inválida' real" pra ISAP/IAE (achado anterior a esta sessão). `V064` replicou o
+  mesmo fix pro IDesmat, que tinha o mesmo bug e nunca tinha sido corrigido lá.
+- **Achado novo nesta sessão**: alguns imóveis tinham `SDO_GEOM.SDO_AREA` da própria
+  geometria do imóvel devolvendo um valor absurdo (12,75 **bilhões** de hectares pra
+  um imóvel de 0,18 ha segundo `area_ha`, calculado em Java/JTS na ingestão) —
+  geometria com vértice duplicado faz o Oracle devolver área/interseção sem sentido
+  **sem lançar erro**. Como `area_ha` (JTS) já é confiável, a correção (`V063`/
+  `V064`) é um sanity clamp: a área de interseção nunca pode exceder a área do
+  próprio imóvel — se `SDO_GEOM` devolver mais que isso, trunca pra `area_ha`, nunca
+  propaga um percentual impossível (chegava a 12 milhões% antes do fix).
+
+**Bug 2 — camada de mapa DESMATAMENTO travando/estourando memória (resolvido
+removendo a causa, não contornando) — `LIZARDS-50`:**
+Publicar a camada de mapa (bloco 2, `SDO_UTIL.SIMPLIFY` em PL/SQL) contra os 1.428
+polígonos reais do PRODES expôs, em sequência, 4 sintomas que pareciam problemas
+diferentes mas eram o mesmo limite de fundo:
+1. 1 geometria com 634 mil ordenadas fazia o `SIMPLIFY` sozinho estourar
+   `ORA-04036` (PGA 8GB) — tentativas de mitigar (pular por tamanho de vértice,
+   lote pequeno + timeout, liberar memória de sessão a cada N linhas) reduziam o
+   estrago mas nunca resolviam de vez, porque **outras** geometrias, isoladas,
+   também estouravam sozinhas (não era 1 outlier, era o motor de `SIMPLIFY` do
+   Oracle sendo caro demais em memória pra geometria complexa em geral).
+2. **Decisão de negócio: nenhum registro pode ser descartado** (nem o mais pesado)
+   — forçou resolver de verdade, não mascarar. Solução: `SimplificadorGeometriaMapa`
+   (Java/JTS, `TopologyPreservingSimplifier`) substitui o `SDO_UTIL.SIMPLIFY` **só**
+   na publicação de camada de mapa (não nos cálculos de indicador, que continuam em
+   PL/SQL — fazem interseção espacial de verdade, perto do dado). Roda no heap da
+   JVM do backend (`-Xmx8g`), memória separada do PGA do Oracle. `V070` removeu a
+   procedure `publicar_camada_mapa_lote` (ficou sem uso).
+3. Daí dois bugs secundários, achados só depois que o motor de memória parou de
+   ser o problema: `ORA-01461` (WKT simplificado >4000 caracteres não pode ser bind
+   de `String` comum — corrigido com `java.sql.Clob`, mesmo padrão já usado em
+   `PersistidorSilverService`) e colisão de número de versão (`ORA-00001`) com dado
+   publicado **antes** da tabela de controle de versão existir — corrigido calculando
+   a próxima versão como `GREATEST` entre `gold.publicacao_camada_mapa` e
+   `gold.feature_publicada`, não só a primeira.
+- **Resultado final**: as 6 camadas de mapa publicam 100%, 0 pulados (399 município,
+  16.059 área protegida, 1.428 desmatamento, 4.611 imóvel, 2.949 foco de calor,
+  incluindo a geometria de 634 mil ordenadas que antes era sempre descartada).
+- **Controle de execução novo** (`V067`): `gold.publicacao_camada_mapa`
+  (status/andamento — `total_processado`/`total_publicado`/`total_pulado`) +
+  `gold.publicacao_camada_mapa_erro` (1 linha por registro pulado, sempre com
+  motivo — nunca mais só `DBMS_OUTPUT.PUT_LINE` que ninguém olhava). Endpoints:
+  `POST /api/gold/mapa-camadas/{codigo}/publicar`,
+  `GET /api/gold/mapa-camadas/{codigo}/status`,
+  `GET /api/gold/publicacoes/{id}/erros`. A versão nova só fica "visível" (quem for
+  ler depois filtra por `status='CONCLUIDA'`) se processar inteira — nunca aparece
+  pela metade.
+
+**Bug 3 — CPF/CNPJ sem zero à esquerda rejeitando Embargos/Autos de verdade:**
+Fontes que mandam CPF/CNPJ como **número** (não string) no JSON/GeoJSON perdem
+zero(s) à esquerda no parsing (`"4579237927"` chegando com 10 dígitos em vez de 11,
+`"365707961"` com 9). `ValidadorCpfCnpj` agora repõe o(s) zero(s) perdido(s) antes
+de validar — o dígito verificador (módulo 11) continua sendo a prova real, se não
+bater mesmo com o zero reposto segue inválido. Resolveu Autos ICMBio (30/30
+promovido) de primeira.
+
+**Bug 4 — referência `num_auto_infracao` nos Embargos bloqueando mesmo sem CPF
+inválido, causa raiz diferente da esperada:**
+Depois do fix de CPF, Embargos IBAMA/ICMBio continuavam retidos por
+`REFERENCIA_NAO_ENCONTRADA` (`num_auto_infracao` → `silver.auto_infracao`).
+Cruzando contra os serviços reais do IAT/PR: o campo `num_auto_infracao` do
+**Embargo IBAMA** é alfanumérico (`"DBK2XZIO"`), mas o `num_auto_infracao` real dos
+**Autos IBAMA** é sempre numérico puro (`"368471"`) — formatos incompatíveis, nunca
+foi o mesmo identificador (provavelmente um código interno do GIS do IAT/PR, não
+uma FK de verdade). Pro ICMBio a referência é legítima (mesmo formato alfanumérico
+dos dois lados), só incompleta pelo recorte do circuito. Como o campo não é
+necessário pro cálculo do IAE (usa a geometria, não essa referência), relaxado nos
+dois (`V071`, `referencia_entidade_silver = NULL`). **Achado no caminho**: só mudar
+a config no banco não bastou — `OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico`
+tinha um fallback hardcoded que reaplicava a checagem por nome de atributo mesmo
+com a config explícita desligada; removido o caso `num_auto_infracao`/`auto_infracao`
+dessa inferência (teste `OrquestradorValidacaoTest` ajustado).
+**Novo endpoint** `POST /api/lotes/{id}/reprocessar` (`LoteIngestaoController`) —
+revalida um lote já ingerido contra a esteira de validação **atual**, sem precisar
+que a fonte externa mude (a detecção de "sem mudança", RN018, bloquearia uma nova
+ingestão real) — útil sempre que um bug de validação for corrigido depois que um
+lote já foi pra quarentena.
+
+**Resultado final, `POST /api/gold/publicar` completo contra os 4.611 imóveis**:
+4.611/4.611 publicados, 0 falha; 6/6 camadas publicadas, 0 falha. Indicadores com
+valor real (versão mais recente por imóvel, não histórico acumulado): ISAP 782
+imóveis, IAE 24, IDesmat 1.670, IFC 10. `silver.embargo_ambiental` = 124 registros
+(era 0 a sessão inteira). ICV/IRL/IAPP seguem stub — ver §9.37 pro gap achado
+analisando o que falta pra implementar de verdade.
+
+### 9.37. IRL/IAPP/ICV — implementados, decisão do percentual mínimo de RL tomada — **[FEITO, 2026-10-11, `V072`/`V073`]**
+`docs/gold-procedures-calculo-publicacao.md` §9.1 (2026-10-10) já mapeava a fórmula
+e confirmava a fonte ingerida (`app_declarada` 3.180, `reserva_legal` 2.777,
+`vegetacao_nativa_declarada` 3.182 — conferido de novo ao vivo em 2026-10-11, bate
+exato). **Achado analisando o que faltava pra implementar de verdade**: a fórmula do
+IRL pede comparar `SUM(area_ha)` de `reserva_legal` contra "o mínimo exigido pelo
+bioma" — mas `silver.bioma` **não tem nenhuma coluna de percentual mínimo**, e
+**nenhum dos 399 municípios tem `bioma_predominante_id` preenchido** (tudo NULL).
+Esse vínculo nunca foi populado. **Decisão tomada**: fixar 20% como constante na
+procedure (`c_percentual_minimo_mata_atlantica`, `V072`) em vez de popular o vínculo
+de verdade — defensável porque o recorte territorial do desafio **é** Paraná, bioma
+predominante Mata Atlântica (CLAUDE.md §1). Reversível com esforço pequeno e
+contido se o projeto um dia sair desse recorte (3 passos documentados no comentário
+da migration: coluna nova em `silver.bioma`, popular `bioma_predominante_id` via
+`SDO_RELATE` município×bioma, trocar a constante por JOIN na procedure - nenhum
+deles afeta os outros 6 indicadores nem invalida resultado já publicado, graças ao
+versionamento por hash). IAPP (`V072`, interseção `app_declarada` × `vegetacao_nativa_declarada`,
+mesmo padrão de intersecção-individual-depois-dissolve da V060) e ICV (`V073`, razão
+direta de área) não dependiam dessa peça - implementados junto. **Testado ao vivo**:
+imóvel real deu ICV=20,27%, IAPP=99,71%, IRL=18,93% (abaixo do mínimo de 20% - caso
+real de não conformidade, exatamente o que o indicador deve capturar). Os 7
+indicadores do desafio agora calculam de verdade no circuito de homologação.
+
+### 9.38. Roadmap: rastreamento de status/andamento ainda só existe na Gold, falta em Ingestão e Bronze→Silver
+Construído nesta sessão (§9.36) um padrão de controle de execução pra publicação Gold
+(indicadores + camadas de mapa): tabela de controle com status
+`EM_ANDAMENTO`/`CONCLUIDA`/`FALHOU`, contadores de andamento, tabela de erro por
+registro, endpoint `GET` de status. Motivo: o time vai construir uma tela de
+acompanhamento de processos, e precisa saber o que está rodando e o estado atual sem
+adivinhar.
+
+**Achado que expõe a mesma lacuna em outros 2 lugares**: tanto a execução de
+ingestão (`IngestaoController`/`IngestaoExecucaoService.executar`, dispara fetch +
+grava Bronze) quanto a transição Bronze→Silver (`TransicaoBronzeSilverService.processarLote`,
+chamada automaticamente ao fim de cada ingestão, e manualmente via
+`POST /api/lotes/{id}/reprocessar`, §9.36) são **100% síncronas, sem rastreamento
+nenhum** - a chamada HTTP só retorna quando tudo termina, e nada fica gravado como
+"em andamento" enquanto roda. Confirmado em código (sem `@Async`,
+sem `CompletableFuture`): se o usuário atualizar a tela no meio, o processo **continua
+rodando no backend** (não depende do navegador), mas a tela fica cega até o processo
+terminar sozinho e gravar o resultado final - não tem como saber que algo está
+rodando, só esperar.
+
+**Decisão de abordagem, já validada 2x nesta sessão (indicadores, camadas de mapa)**:
+envolver por fora, nunca mexer na lógica interna que já funciona e já foi testada a
+fundo (ingestão contra as 18 fontes reais, Bronze→Silver com toda a resiliência
+documentada em §5.8/§9.23-25). Concretamente: grava uma linha "EM_ANDAMENTO" antes
+de chamar o método existente, grava o resultado final depois (sucesso ou erro,
+relançando a exceção original pro `TratadorDeErro` continuar convertendo em
+400/502 do jeito que já faz hoje), nunca muda a assinatura nem o corpo do método
+existente, nunca muda a resposta do endpoint HTTP já consumido pela tela atual - o
+status novo é um efeito colateral consultável por um endpoint `GET` separado.
+
+**[EM ABERTO, registrado como roadmap, não implementado ainda]** - decisão da equipe
+de focar primeiro em fechar o que falta na Gold (ver §9.36/§9.37, "endpoint de status
+unificado" em andamento) antes de estender esse padrão pra Ingestão e Bronze→Silver.
+
+### 9.39. Login e controle de acesso (RBAC) com Keycloak — **[FEITO e testado ao vivo, 2026-10-12, `LIZARDS-47`]**
+Branch `feat/rbac-administrador` (backend e frontend), a partir da `sprint-2`. Guia de uso
+e de manutenção em **`docs/controle-de-acesso-rbac.md`**. Substitui o bypass da §5.3.
+
+- **Decisão da equipe (aprovada 2026-10-12):** identidade no **Keycloak**, não no Oracle —
+  as tabelas `usuario`/`papel`/`usuario_papel` previstas na §2.7 **não serão criadas**.
+- **Dois níveis:** o código confere só **roles de permissão** (`fonte:visualizar`,
+  `lote:gerenciar`, ... — enum `Permissao`); **perfis** são roles compostas do Keycloak
+  (enum `Perfil`). Usuário pode ter vários perfis + permissões avulsas. Os 4 tickets do
+  board (LIZARDS-45 Operador, 46 Analista, 47 Administrador, 48 Auditor) = 1 perfil cada,
+  **1 PR por ticket**; o 47 foi primeiro e carrega a fundação.
+- **Backend:** `spring-boot-starter-oauth2-resource-server` valida o JWT. Matriz de acesso
+  inteira no `SecurityConfig`, por rota; `anyRequest().denyAll()` no fim (rota nova nasce
+  fechada). `ConversorRolesKeycloak` mapeia `realm_access.roles` → authorities sem prefixo.
+  `KeycloakProvisionador` sincroniza o catálogo do código com o Keycloak na subida (cria,
+  ajusta composição, remove permissão que saiu do perfil; cria usuário de teste por perfil
+  se `app.keycloak.usuarios-dev=true`). `/api/admin/**` (cadastro de usuário, roles, senha
+  temporária) via `KeycloakAdminClient` (`RestClient` puro — a lib `keycloak-admin-client`
+  traz Jackson 2). Trava: admin não se desativa nem tira de si `usuario:gerenciar`.
+- **Frontend:** `keycloak-js` (Authorization Code + PKCE), app só monta logado; `apiFetch`
+  (`services/http.js`) substituiu os 36 `fetch` crus; `meta.permissao` nas rotas + guarda
+  no router; menu filtrado; rodapé com usuário real + sair; tela `/admin/usuarios`.
+- **Infra:** serviço `keycloak` (26.8.0, `start-dev`, H2 no volume `keycloak-data`), porta
+  8180. Realm `datagis` em `infra/keycloak/realm-datagis.json` (só clients + conta de
+  serviço — importado só na 1ª subida). `KC_HOSTNAME` fixo pra o `iss` não variar entre
+  navegador (`localhost:8180`) e backend (`keycloak:8080`).
+- **Testes:** `MatrizAcessoTest` (56 casos — libera com a permissão, nega com todas as
+  outras, 401 sem token, e varre todos os controllers pra pegar endpoint sem regra),
+  `ConversorRolesKeycloakTest`, `UsuarioAdminServiceTest`, `KeycloakProvisionadorTest`.
+  Backend **473 testes, 0 falhas** (incluindo os `*OracleIT`). Frontend 60 testes.
+- **Validado ao vivo:** 401 sem token; 401 com payload adulterado, assinatura adulterada e
+  token de outro realm; usuário só com `lote:visualizar` → 200 em `GET /api/lotes`, 403 em
+  liberar lote, fontes e admin.
+- **[EM ABERTO]**
+  - `conjuntosDadosService` (tela `/conjuntos-dados`, `dados:visualizar`) também chama
+    `GET /api/quarentena` → exige `quarentena:visualizar`. O Analista (LIZARDS-46) não tem
+    essa permissão: decidir no ticket dele se o perfil ganha ou a tela degrada.
+  - `analista_responsavel_id NUMBER` da quarentena não comporta o id do Keycloak (UUID);
+    as telas ainda mandam `analistaId = 1` fixo. Identidade real do autor vai pro log de
+    auditoria (LIZARDS-48).
+  - Botões de ação ainda não escondem por permissão (o backend já barra com 403) — cada
+    ticket de perfil faz isso nas telas dele. **Fontes, Mapeamento, Lotes e Quarentena
+    feitos na LIZARDS-45.**
+- **Mudança de plano (2026-10-13):** os 4 tickets vão na **mesma PR**
+  (`feat/rbac-administrador`), um commit por ticket.
+- **LIZARDS-45 (Operador) — FEITO 2026-10-13:** `Perfil.OPERADOR` (`fonte:*`, `lote:*`,
+  `quarentena:*`, `dados:visualizar`) + usuário de teste `operador`. Telas escondem ações
+  sem a permissão de escrita (tabela em `docs/controle-de-acesso-rbac.md`).
+  `MatrizAcessoTest.perfilAcessaSoOQueOPacoteDele` testa todo perfil × toda rota (perfil
+  novo entra sozinho); `PerfilTest` trava a composição aprovada. Confirmado ao vivo que o
+  provisionador cria perfil novo num Keycloak já existente, sem recriar volume. Backend 538
+  testes, frontend 64.
+- **LIZARDS-46 (Analista) — FEITO 2026-10-13:** `Perfil.ANALISTA` (`conjunto:*`,
+  `indicador:*`, `fonte:visualizar`, `dados:visualizar`) + usuário `analista`. Resolve o
+  [EM ABERTO] da `/conjuntos-dados`: a aba/atalhos "Quarentena" só aparecem com
+  `quarentena:visualizar` (Analista compara Bronze e Silver). Formulário de Conjuntos e
+  ações de tipo de indicador (Gold) escondidos sem permissão de escrita. Gold continua fora
+  do menu (LIZARDS-27). Backend 565 testes, frontend 67.
+- **LIZARDS-48 (Auditor) — FEITO 2026-10-13:** `Perfil.AUDITOR` (todas as `:visualizar` +
+  `auditoria:visualizar`, listadas uma a uma) + usuário `auditor`. **Log de auditoria**:
+  `V075__criar_log_auditoria.sql` (`controle.log_auditoria`, trigger append-only
+  `ORA-20025` — RN025, finalmente implementada; ver §2.7). `FiltroAuditoria` dentro da
+  cadeia do Spring Security, **antes do `ExceptionTranslationFilter`** — assim já sabe o
+  usuário do token e ainda vê o 403 (tentativa negada também fica registrada). Não é
+  `@Component` (seria registrado 2x). `DescricaoAcao` traduz método+rota em ação legível
+  casando os moldes por conta própria (o 403 nunca chega no controller).
+  `GET /api/auditoria` + tela `/auditoria`. Testes: `DescricaoAcaoTest` (varre controllers:
+  todo endpoint de escrita precisa de descrição), `LogAuditoriaOracleIT` (grava, filtra,
+  pagina, e UPDATE/DELETE dão `ORA-20025` no Oracle real), 2 casos no `MatrizAcessoTest`
+  provando a posição do filtro. Backend 604 unitários + 11 de Oracle, frontend 70.
+- **Pegadinha de contagem de testes:** o surefire (config padrão) **não roda `*IT`** no
+  `mvn test` comum — só `*Test`/`*Tests`. Os `*OracleIT` só executam com
+  `-Dtest=*OracleIT` (+ `DATAGIS_ORACLE_IT=true`). Contagens de "suíte completa" citadas
+  neste arquivo antes de 2026-10-13 não incluíam os ITs.
+
+### 9.40. Consulta dos dados finais em tabela — backend — **[FEITO e validado contra o Oracle real, 2026-10-17, `LIZARDS-34`]**
+Branch `feat/visualizacao-dados-tabela`, a partir da `sprint-2`. Esta entrega contempla
+exclusivamente o backend; a interface corresponde à segunda metade do ticket e será
+desenvolvida no repositório do frontend.
+
+- **Objetivo da funcionalidade:** apresentar a relação entre os 7 indicadores em um
+  determinado recorte territorial, em duas visões sobre o mesmo conjunto de dados: **por
+  imóvel** (uma linha por imóvel publicado) e **por município** (uma linha por município,
+  com indicadores agregados).
+- **Agregação executada no banco de dados.** O recorte de homologação contém 4.611
+  imóveis. A centralização do cálculo em uma única camada garante consistência entre a
+  tela de tabela e a de mapa (LIZARDS-35), que consomem o mesmo indicador.
+- **Média ponderada pela área, não média aritmética simples.** Em um município com uma
+  propriedade de 10.000 ha e cinquenta de 2 ha, os dois métodos produzem resultados
+  divergentes; para indicadores ambientais, a unidade de análise relevante é o território,
+  não o número de propriedades. O denominador considera a área apenas dos imóveis que
+  possuem valor para o indicador em questão — incluir os demais faria com que a ausência
+  de cálculo fosse interpretada como valor zero, reduzindo indevidamente a média.
+- **Alcance da ponderação por área.** Para os indicadores cujo denominador é a área do
+  imóvel — ICV, IRL, ISAP, IAE e IDESMAT — a média ponderada reproduz exatamente o
+  indicador territorial, pois a soma dos numeradores dividida pela soma das áreas é a
+  própria definição do índice no conjunto. O IAPP é exceção: a V072 o calcula sobre a área
+  de APP declarada, não sobre a área do imóvel, de modo que a ponderação pela área do
+  imóvel constitui aproximação. O IFC, apesar de ser indicador de densidade, também é
+  reproduzido de forma exata: como `valor_ifc = focos / área × 1000`, a soma de
+  `valor_ifc × área` dividida pela soma das áreas resulta em `Σfocos × 1000 / Σárea`, que é
+  a própria densidade de focos do município. A correção do IAPP exigiria publicar a área de
+  APP por imóvel na Gold, alteração que pertence às procedures (§9.37).
+- **Distinção entre `NULL` e zero.** O `NULLIF(..., 0)` no denominador previne divisão por
+  zero, e o `RowMapper` utiliza `rs.wasNull()` porque `getDouble` retorna `0` para valores
+  nulos. Indicador não calculado é serializado como `null` e renderizado como célula vazia;
+  valor zero efetivamente calculado é preservado e classificado na faixa correspondente. A
+  interface depende dessa distinção para não classificar como crítico um imóvel que apenas
+  não teve o indicador calculado.
+- **Exposição de `qtdImoveis` e `areaTotalHa`:** fornecem o contexto necessário à
+  interpretação do resultado agregado. Um município com 2 imóveis e 60.000 ha indica
+  concentração — o resultado é determinado por uma única propriedade.
+- **`V076__tipo_indicador_dimensao_e_faixas.sql`:** a tabela `gold.tipo_indicador` recebe
+  as colunas `dimensao` (CONSERVACAO | TERRITORIAL | AMBIENTAL), `sentido` (MAIOR_MELHOR |
+  MENOR_MELHOR), `limite_bom`, `limite_atencao` e `ordem_exibicao`, com restrições CHECK
+  sobre os dois domínios. O agrupamento por dimensão e os limites das faixas de
+  classificação residem no banco de dados: alterações de limite são efetuadas por `UPDATE`,
+  sem necessidade de nova versão do frontend. A coluna `sentido` é necessária porque ISAP,
+  IAE, IDESMAT e IFC são indicadores de polaridade inversa, nos quais valores menores
+  representam melhor desempenho; sem essa informação, o pior resultado seria classificado
+  como adequado.
+- **Polaridade do ISAP.** Apesar do nome sugerir o contrário, o ISAP é `MENOR_MELHOR`. A
+  `pkg_calculo_territorial` (V063) o define como a sobreposição do imóvel com unidade de
+  conservação, ou seja conflito territorial, sendo gêmeo do IAE em fórmula e em leitura. A
+  primeira versão da V076 o classificou como `MAIOR_MELHOR`, o que pintaria de verde
+  justamente o imóvel em situação mais irregular.
+- **Origem dos limites de faixa.** O PDF do desafio define a fórmula e a unidade de cada
+  indicador, não faixas de classificação; os valores gravados são portanto decisão de
+  produto e podem ser revistos pela equipe por `UPDATE`, sem alteração de código. A única
+  exceção é o IRL, que recebe 20 em `limite_bom` e em `limite_atencao` porque o percentual
+  mínimo de Reserva Legal na Mata Atlântica é 20% (Código Florestal, Lei 12.651/2012,
+  constante já fixada na V072): abaixo desse valor o imóvel está em desacordo com a lei,
+  acima está em conformidade, e não há faixa intermediária a representar.
+- **`V077__unidade_do_tipo_indicador.sql`:** acrescenta `unidade` (PERCENTUAL | DENSIDADE)
+  e `unidade_simbolo`, com restrição CHECK sobre o primeiro domínio e `DEFAULT` nas duas
+  colunas, de modo que indicador cadastrado posteriormente pela tela de administração
+  nasça como percentual. Seis dos sete indicadores são percentuais; o IFC não é: a
+  `pkg_calculo_ambiental` (V045) o calcula como focos de calor dentro do imóvel dividido
+  pela área do imóvel multiplicado por mil — focos por mil hectares — e grava `NULL` na
+  coluna percentual do resultado, deliberadamente. A página 6 do PDF do desafio define a
+  mesma fórmula. Sem essa informação no catálogo, a interface desenharia a barra do IFC em
+  escala percentual e exibiria o símbolo incorreto ao lado do valor. O comentário da V045
+  documenta a unidade para quem lê o SQL, mas não serve à aplicação para decidir como
+  exibir o número — razão pela qual se tornou coluna.
+- **Catálogo de indicadores sem endpoint adicional:** o `TipoIndicadorResponse` passou a
+  expor os sete campos, de modo que o `GET /api/indicadores/tipos` já existente atende ao
+  consumo de dimensões, faixas e unidades pelo frontend.
+- **Endpoints:** `GET /api/indicadores/imoveis` e `GET /api/indicadores/municipios`
+  (`ConsultaIndicadoresController` e `ConsultaIndicadoresService`). A implementação utiliza
+  `JdbcTemplate` com SQL nativo, seguindo o padrão adotado no `DominioService`, por se
+  tratar de consultas que cruzam schemas (`GOLD.imovel_publicado` e `SILVER.municipio`) e
+  realizam agregação. Os nomes de schema são obtidos via
+  `@Value("${spring.flyway.placeholders.*Schema}")`, sem valores fixos no código.
+- **Justificativa do uso exclusivo da camada Gold:** os valores de indicador são gravados
+  pelas procedures durante a promoção (§9.33, §9.36, §9.37) e existem somente nessa
+  camada; a Silver não possui a coluna `valor_icv`. A única informação obtida fora da Gold
+  é o nome do município (`LEFT JOIN SILVER.municipio`), tabela de referência cadastral. O
+  `LEFT JOIN` é intencional: imóvel cujo município ainda não foi carregado na Silver
+  permanece na listagem, sem o nome resolvido.
+- **Controle de acesso:** as rotas são cobertas pela regra preexistente para
+  `GET /api/indicadores/**`, que exige a permissão `indicador:visualizar`. Nenhuma regra
+  nova foi adicionada ao `SecurityConfig`.
+- **Testes:** o `ConsultaIndicadoresServiceTest` (11 casos) captura o SQL gerado e valida o
+  acesso à Gold, o join com a Silver, o `GROUP BY` e a ponderação por área — incluindo
+  asserção `doesNotContain("AVG(")`, que impede a substituição por média aritmética
+  simples. Em seguida captura o `RowMapper` e o executa contra um `ResultSet` simulado,
+  comprovando a conversão de `NULL` para `null` e a preservação do valor zero. O
+  `ConsultaIndicadoresControllerTest` (5 casos) valida o contrato JSON dos dois endpoints.
+  O `TipoIndicadorTest` passou de 5 para 6 casos, cobrindo os campos de catálogo no builder
+  — com o IFC como caso real de densidade — e conferindo por reflexão os nomes de coluna
+  que divergem do atributo (`limite_bom`, `limite_atencao`, `ordem_exibicao`,
+  `unidade_simbolo`), divergência que só se manifestaria em tempo de execução contra o
+  banco. O `TipoIndicadorControllerTest` passou de 10 para 11 casos, validando os sete
+  campos novos no JSON; o ISAP é montado sem unidade e a asserção exige `PERCENTUAL` e `%`
+  na resposta, cobrindo o caminho completo do valor padrão, do `@Builder.Default` até a
+  serialização. **Total: 18 testes novos, 0 falhas.** Nenhum deles inicializa o contexto
+  Spring ou acessa o Oracle, permitindo execução em pipeline sem banco de dados.
+  **Suíte completa: 631 testes, 0 falhas, 10 pulados.**
+- **Validação em ambiente real (token do perfil `analista`):** `/municipios` retorna
+  Curitiba (111 imóveis, 1.316,97 ha), Maringá (1.843 imóveis, 35.839,45 ha) e Ponta Grossa
+  (2.657 imóveis, 187.029,84 ha); `/imoveis` retorna o código completo e o nome do
+  município resolvido a partir da Silver. Os totais são consistentes com
+  `SELECT COUNT(DISTINCT municipio_cod_ibge), COUNT(*) FROM GOLD.imovel_publicado`, que
+  retorna 3 e 4.611. A consulta ao catálogo após as duas migrations devolve as sete linhas
+  esperadas: ICV, IRL e IAPP como `MAIOR_MELHOR`; ISAP, IAE, IDESMAT e IFC como
+  `MENOR_MELHOR`; IRL com 20 em ambos os limites; IFC como `DENSIDADE` com símbolo
+  `focos/1.000 ha` e os demais como `PERCENTUAL` com `%`.
+- **Escopo limitado a municípios com dado publicado.** A tabela `SILVER.municipio` contém
+  os 399 municípios do Paraná; a consulta retorna 3 porque apenas esses possuem imóveis
+  promovidos à Gold. Municípios sem promoção não possuem indicadores calculados, e sua
+  inclusão resultaria em 396 linhas sem conteúdo. A listagem é ampliada automaticamente à
+  medida que novos municípios forem ingeridos, sem alteração de código.
+- **Identificação do imóvel pelo código CAR.** A camada pública do IAT/PR
+  (`geopr.iat.pr.gov.br/.../Base_Geo_Cadastro_Ambiental_rural`) não disponibiliza o nome do
+  imóvel, por se tratar de dado pessoal sob a LGPD; o campo `nomeImovel` está disponível
+  apenas na API oficial do SICAR, cujo acesso exige credenciamento. Essa é a razão de
+  `silver.imovel_rural` não possuir coluna `nome`, enquanto `silver.area_protegida` possui.
+  A API retorna o código integral (`PR-4106902-00B2EA81...`); a abreviação é decisão de
+  apresentação do frontend, uma vez que a busca pelo código completo deve permanecer
+  funcional — há teste automatizado assegurando esse comportamento.
+- **Restrição de privilégio em migrations sobre schema de terceiros:** a instrução
+  `COMMENT ON COLUMN` aplicada a tabela de outro schema resulta em **`ORA-41900`**, pois o
+  usuário da aplicação possui `CREATE/ALTER ANY TABLE`, mas não `COMMENT ANY TABLE`. Como
+  o Oracle executa commit implícito em comandos DDL, o `ALTER TABLE ... ADD` é persistido
+  mesmo quando a migration falha em instrução posterior. O saneamento exige o `DROP` das
+  colunas criadas e a remoção do registro correspondente em
+  `DELETE FROM flyway_schema_history WHERE "version" = '0XX'` (nomes de coluna em minúsculas
+  e entre aspas). Por esse motivo, a V076 e a V077 foram escritas sem instruções `COMMENT`.
+- **Alteração de migration antes do merge, e o custo dela.** A V076 foi corrigida dentro
+  da própria branch, após o primeiro push e antes do merge, por conter valores errados de
+  `sentido` e de limite. A opção foi legítima porque a branch não havia sido integrada e
+  nenhum outro ambiente havia aplicado o arquivo — condição confirmada com a equipe antes
+  da alteração. O custo é que o Flyway guarda o checksum do arquivo no momento da
+  aplicação e aborta a inicialização quando ele diverge; o banco local exigiu
+  `UPDATE flyway_schema_history SET "checksum" = NULL WHERE "version" = '076'`, após o que
+  o próprio Flyway regrava o valor correto na subida seguinte. O nulo vale uma única vez e
+  substitui uma verificação automática por uma conferência manual, que neste caso foi feita
+  consultando as sete linhas de `tipo_indicador`. **Após o merge essa opção deixa de
+  existir:** migration integrada não se altera, e qualquer ajuste passa a exigir migration
+  nova, sob pena de impedir a inicialização do ambiente de todos os integrantes.
+- **Somente a versão mais recente de cada imóvel (commit `e2a4ac9`, 2026-10-17):** `gold.imovel_publicado` guarda uma linha por versão publicada
+  (chave `cod_imovel + indicador_versao_id`, histórico de auditoria). As duas consultas
+  do `ConsultaIndicadoresService` liam a tabela inteira: imóvel republicado aparecia
+  **duas vezes** na visão por imóvel e entrava **em dobro** na visão por município
+  (quantidade, área e média). Reproduzido ao vivo ingerindo os embargos e recalculando 1
+  imóvel de Ponta Grossa: 4.611 → 4.612 linhas, Ponta Grossa 2.657 → 2.658 imóveis e
+  187.061 → 189.297 ha. Corrigido com `ROW_NUMBER() OVER (PARTITION BY cod_imovel ORDER
+  BY data_publicacao DESC, id DESC)` + `WHERE i.ordem_versao = 1` nas duas consultas —
+  mesmo critério da comparação Silver → Gold da LIZARDS-30. 2 testes novos no
+  `ConsultaIndicadoresServiceTest` (um por visão). **Regra para qualquer consulta futura
+  sobre `imovel_publicado`: filtrar a versão mais recente** — ler a tabela inteira mostra
+  o histórico, não o estado atual.
+- **[EM ABERTO]**
+  - **Perfil Operador sem acesso à tela.** O `Perfil.OPERADOR` não possui a permissão
+    `indicador:visualizar` (§9.39, LIZARDS-45); a tela estará disponível para
+    Administrador, Analista e Auditor, mas não para o Operador. Caso a equipe decida
+    conceder a permissão, a alteração consiste em uma linha no `Perfil.java` e o ajuste
+    correspondente no `PerfilTest`, a ser entregue como `fix<LIZARDS-34>`.
+  - **Zeros por ausência de declaração — verificado em 2026-10-19.** Os zeros de IRL, ICV
+    e IAPP não são erro de cálculo nem perda no pipeline: a contagem na fonte (ArcGIS do
+    IAT/PR, filtrada pelo circuito), na Bronze e na Silver é idêntica — APP 3.180, Reserva
+    Legal 2.777, Vegetação Nativa 3.182 — e a quarentena dessas entidades está vazia. A
+    origem dos zeros é a inicialização `v_percentual := 0` nas procedures (V072/V073),
+    gravada mesmo quando o imóvel não possui linha de origem; não é regra do desafio, que
+    define a fórmula de cada indicador mas não o tratamento da ausência de declaração.
+    Classificação dos zeros publicados: IRL 1.876 (1.875 sem Reserva Legal declarada, 1
+    com declaração de área 0); ICV 1.440 (todos sem vegetação nativa declarada); IAPP 2.054
+    (1.434 sem APP declarada, 504 com APP e sem vegetação declarada, 116 com ambas e sem
+    sobreposição). Para IRL e ICV o zero é defensável do ponto de vista de conformidade — o
+    imóvel não comprova o percentual exigido —, embora "não declarou" e "declarou zero"
+    permaneçam indistinguíveis. Para o IAPP o zero é incorreto nos 1.434 casos sem APP
+    declarada: o denominador é a área de APP, e sem ela o indicador é indefinido, devendo
+    ser gravado `NULL`. A correção pertence às procedures (migration nova, branch própria).
+  - **Imóveis com CAR cancelado ou pendente publicados na Gold.** Dos 4.611 imóveis, 69
+    têm situação `CA` (cancelado) e 30 `PE` (pendente); os 69 cancelados apresentam IRL e
+    ICV zerados e entram nas médias por município. Cabe à equipe decidir se a publicação
+    deve se restringir a `AT`.
+  - **Cadastro de indicador pela tela não preenche os campos de exibição.** O
+    `TipoIndicadorRequest` não expõe `dimensao`, `sentido`, `limite_bom`, `limite_atencao`
+    nem `ordem_exibicao`; um indicador cadastrado pela tela nasce com esses campos nulos e
+    é exibido em grupo "sem dimensão", com coluna vazia, porque `gold.imovel_publicado`
+    possui somente as sete colunas `valor_*` fixas. A alteração de limites de faixa,
+    portanto, só é possível por `UPDATE` direto no banco.
+  - **`GET /api/indicadores/imoveis` sem paginação.** Adequado ao circuito de homologação
+    (4.611 linhas), inviável no estado inteiro (~556 mil imóveis no CAR/PR). Paginar no
+    servidor antes de ampliar o recorte.
+  - **Javadoc divergente do catálogo.** O comentário do campo `sentido` em
+    `TipoIndicador.java` ainda classifica o ISAP como "quanto maior melhor", contrariando a
+    V076 e o banco (`MENOR_MELHOR`). Corrigir apenas o comentário.
+  - **ISAP e IAE em exatamente 100%.** O travamento de sanidade da V063 compara a área da
+    interseção, calculada pelo `SDO_GEOM`, com a área do imóvel, calculada em Java/JTS na
+    ingestão. São dois motores distintos: num imóvel inteiramente contido em área
+    protegida os dois valores diferem nas últimas casas decimais e, quando o do Oracle vem
+    maior, o travamento corta para a área do imóvel e o percentual fecha em exatamente 100.
+    São 679 imóveis nessa condição, de 4.611. Amostragem confirmou geometria válida
+    (`VALIDATE_GEOMETRY_WITH_CONTEXT` = TRUE) e diferença na sétima casa decimal entre as
+    duas áreas, ou seja sobreposição real e não defeito. O valor exato de 100 continua não
+    distinguindo o caso legítimo do caso de geometria corrompida descrito na V063, mas
+    deixou de ser indício de problema por si só.
+  - **Textos do catálogo sem acentuação.** As descrições em `tipo_indicador.descricao`
+    foram cadastradas sem acento e são exibidas assim na interface. Adicionalmente, a
+    `regra_calculo` de ICV, IRL e IAPP ainda os descreve como não implementados, texto
+    anterior à V072 e à V073. A migration de correção está escrita, mas não foi incluída
+    nesta entrega por alterar conteúdo cadastrado por outro integrante.
+  - **Interseção com a LIZARDS-35 (visualização em mapa).** A agregação por município
+    atende às duas telas; recomenda-se o reaproveitamento de
+    `GET /api/indicadores/municipios` em vez de implementação duplicada. No frontend, ambas
+    as tarefas alteram `Sidebar.vue` e `router/index.js`, sendo necessário alinhar a ordem
+    de merge.
+
+### 9.41. Consulta dos dados finais em tabela — frontend (Frontend) — **[FEITO e validado contra o backend real, 2026-10-17, `LIZARDS-34`]**
+Repositório `datagis-frontend`, branch `feat/visualizacao-dados-tabela`, a partir da
+`sprint-2`. Segunda metade do ticket cuja parte de backend está na §9.40. **Depende do
+merge do PR de backend:** a tela lê `unidade` e `unidade_simbolo` do catálogo, colunas
+criadas pela `V077`; sem elas o IFC é desenhado em escala percentual.
+
+- **Serviço (`src/services/consultaIndicadoresService.js`):** instância Axios própria com
+  `baseURL: '/api'`, seguindo o padrão do `goldService`, e as duas funções
+  `listarIndicadoresPorMunicipio()` e `listarIndicadoresPorImovel()`. O tratamento de erro
+  propaga a mensagem devolvida pelo backend (`response.data.erro`) e recorre a texto padrão
+  quando ela não existe, de modo que a tela sempre tenha o que exibir.
+- **Duas visões em abas, não duas telas.** `Por município` e `Por imóvel` consomem o mesmo
+  componente e o mesmo conjunto de dados, alternando apenas a origem da listagem. A aba de
+  município é a inicial porque é o recorte que responde à pergunta do desafio; a de imóvel
+  é o detalhamento. Ao trocar de aba o detalhe aberto é fechado, evitando que o acordeão de
+  um município permaneça visível sobre a lista de imóveis.
+- **Faixa de resumo no topo:** municípios publicados, imóveis rurais e área total em
+  hectares. Os três números vêm da própria resposta agregada, sem chamada adicional, e dão
+  ao leitor a escala do recorte antes de ele interpretar qualquer indicador.
+- **Cabeçalho agrupado por dimensão.** As colunas dos 7 indicadores são agrupadas sob
+  CONSERVAÇÃO, TERRITORIAL e AMBIENTAL, e a ordem vem de `ordem_exibicao`. Nada disso está
+  escrito no componente: o agrupamento, a ordem, as faixas e a unidade são lidos do
+  catálogo (`GET /api/indicadores/tipos`). Acrescentar um indicador novo ou mudar um limite
+  não exige alteração de frontend.
+- **Detalhe em acordeão, não em modal.** Clicar na linha abre uma `<tr>` logo abaixo, com
+  `colspan` sobre a largura da tabela, trazendo os 7 indicadores em barras com os limites
+  marcados. Clicar de novo fecha. A escolha pelo acordeão preserva o contexto — o leitor
+  continua vendo as linhas vizinhas, o que importa quando o objetivo é comparar municípios.
+  Todos os detalhes começam fechados.
+- **Barra consciente da unidade.** Indicador percentual usa escala fixa de 0 a 100.
+  Indicador de densidade usa como escala o próprio `limite_atencao`, de modo que a barra
+  cheia corresponde ao limite crítico — não existe "100%" para focos por mil hectares. A
+  marca intermediária é suprimida nos dois casos em que não significa nada: em densidade, e
+  quando `limite_bom` e `limite_atencao` são iguais, como no IRL. Sem isso o IRL exibiria
+  duas marcas sobrepostas no mesmo ponto.
+- **Cor pelo sentido, não pelo valor bruto.** A classificação em `badge-tag--sucesso`,
+  `--alerta` e `--erro` compara o valor com os limites na direção indicada por `sentido`.
+  Indicador sem valor recebe `--neutro` e célula vazia, nunca a faixa crítica. Zero
+  efetivamente calculado recebe `min-width: 0.25rem` na barra preenchida, para permanecer
+  visível em vez de desaparecer e ser confundido com ausência de dado.
+- **Largura da barra arredondada.** A conversão do valor para percentual de largura produzia
+  resultados como `28.939999999999998%` no atributo de estilo. O valor é arredondado em duas
+  casas antes de ir ao DOM — não muda o desenho, mas evita ruído na inspeção e em teste que
+  compare o estilo gerado.
+- **Variáveis de tema do projeto, sem cor fixa.** Todas as cores vêm das variáveis já
+  definidas em `style.css`. A consequência prática é que a LIZARDS-38, que trata do tema
+  escuro, passa a cobrir esta tela sem alteração nenhuma aqui.
+- **Navegação:** item "Indicadores e Resultados" no `Sidebar.vue` e rota `/indicadores` no
+  `router/index.js`, com `meta.permissao: PERMISSOES.INDICADOR_VISUALIZAR` — mesma permissão
+  exigida pelo backend, de modo que o item não aparece para quem não poderia consultar os
+  dados de qualquer forma.
+- **Testes (`src/components/IndicadoresView.test.js`, 26 casos, e
+  `src/services/consultaIndicadoresService.test.js`, 5 casos):** cobrem a montagem a partir
+  do que o serviço devolve, a troca de abas com fechamento do detalhe, o acordeão abrindo e
+  fechando, a classificação de cor nos dois sentidos, a escala da barra em percentual e em
+  densidade, o símbolo exibido ao lado do valor, célula vazia para indicador nulo, zero
+  calculado permanecendo visível, a busca por município e as duas rotas do serviço com o
+  tratamento de erro. `axios` e `vue-router` substituídos por `vi.mock` — a suíte roda **sem
+  backend e sem Oracle**.
+  - Estado em 2026-10-17: 13 arquivos, **101 testes, 100% de sucesso**.
+- **`vi.resetModules()` em teste de serviço custa caro.** O teste que confere a `baseURL`
+  do Axios falhava por tempo, estourando os 5 segundos padrão do Vitest. Não era lentidão
+  do código e sim do `vi.resetModules()`, que descarta o registro de módulos e obriga o
+  Vitest a reprocessar o `axios` inteiro. A garantia de importação limpa que ele comprava já
+  existe de graça, porque o registro de módulos do Vitest é isolado por arquivo de teste.
+  Removido o `resetModules`, o mesmo caso passa em poucos milissegundos, com a asserção
+  intacta. **O `goldService.test.js` tem o mesmo padrão e levou 3,4 s na mesma execução** —
+  passa por pouco hoje e tende a falhar em máquina carregada. Não foi alterado por pertencer
+  a outra entrega; fica o registro para quem cuidar dele.
+- **[EM ABERTO]**
+  - **Zeros que significam ausência de declaração.** A tela distingue nulo de zero e
+    possui estado neutro para indicador sem cálculo, mas depende de a Gold gravar `NULL`.
+    Verificação de 2026-10-19 (§9.40): os zeros vêm da fonte, não de erro de cálculo; para
+    o IAPP, 1.434 imóveis sem APP declarada deveriam chegar como `NULL` e hoje aparecem em
+    vermelho. Quando a procedure for corrigida, a tela passa a exibi-los como célula vazia
+    sem nenhuma alteração no frontend.
+  - **Perfil Operador não vê o item de menu**, pela mesma razão descrita na §9.40: ele não
+    possui `indicador:visualizar`.
+  - **Interseção com a LIZARDS-35 (visualização em mapa).** Ambas as tarefas alteram
+    `Sidebar.vue` e `router/index.js`; convém alinhar a ordem de merge para evitar conflito
+    nesses dois arquivos.
+
+### 9.42. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
+Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
+todas as telas do sistema. A tela de login não entra: ela é do Keycloak, outro container,
+e o CSS do front não a alcança (ver o último item).
+
+- **Regra da entrega: só acrescentar.** Nenhuma variável, classe ou linha existente foi
+  renomeada ou alterada. O tema claro continua idêntico ao que era, e o escuro é uma
+  camada a mais por cima: na branch são 3.945 linhas acrescentadas contra 0 removidas em
+  relação à `sprint-2`.
+- **Mecanismo (`src/tema.js`):** o tema vive no atributo `data-tema` do `<html>`.
+  `iniciarTema()` roda no `main.js` antes de montar o app, para a tela não piscar no tema
+  errado. Vale a escolha salva no `localStorage` (chave `datagis.tema`); sem escolha
+  salva, segue `prefers-color-scheme` do sistema operacional, e o claro é o padrão. Sem
+  `localStorage` (aba anônima, bloqueio do navegador) o tema funciona igual, só não é
+  lembrado ao recarregar.
+- **Paleta (`src/style.css`):** um bloco `:root[data-tema="escuro"]` com os tokens da
+  paleta aprovada (`--cor-fundo`, `--cor-superficie`, `--cor-superficie-elevada`, três
+  níveis de borda, seis níveis de texto, primária com hover/contraste/tênue/borda,
+  `--cor-link`, cinco cores de estado e os `--tenue-*` a 12%). Um segundo bloco aponta as
+  variáveis que já existiam (`--cor-branco`, `--cor-slate-*`, `--status-*`) para essa
+  paleta, mudando só o valor e nunca o nome. Por isso telas que já usavam variáveis, como
+  Indicadores e Gold, escureceram sem alteração nenhuma; a `IndicadoresView` é a única
+  tela sem bloco escuro próprio, porque não tem cor fixa.
+- **Telas com cor fixa:** cada componente ganhou, no fim do `<style scoped>`, um bloco
+  `:root[data-tema="escuro"] .classe { ... }` que repinta só o que o claro define por cor
+  fixa. Mais de mil cores fixas foram mapeadas para os tokens conforme o papel (fundo,
+  borda, texto) e a família da cor. Uma única regra usa `!important`: a linha em edição do
+  Mapeamento de Colunas, porque a regra original do claro (`.linha-ativa`) já usa.
+- **Pegadinha do `<style scoped>`, achada na prática:** escrever
+  `:global(:root[data-tema="escuro"]) .classe` faz o Vue descartar o `.classe`, e a regra
+  vira só `:root`, pintando a página inteira. O certo é escrever
+  `:root[data-tema="escuro"] .classe` direto, e o Vue escopa só a classe. Elementos criados
+  por JavaScript, como os do Leaflet, precisam de `:deep(...)`. Na dúvida, conferir o
+  seletor no CSS gerado pelo `vite build`.
+- **Mapa sem trocar o mapa do projeto:** os tiles do OpenStreetMap continuam os mesmos; no
+  escuro só o `.leaflet-tile-pane` recebe `filter: invert(1) hue-rotate(180deg)
+  brightness(0.95) contrast(0.9)`. Os polígonos, desenhados em outra camada, mantêm as
+  cores originais. Controles, atribuição e popups do Leaflet ganharam cores da paleta via
+  `:deep()`.
+- **Botão de tema na sidebar:** lua no claro e sol no escuro, no rodapé, ao lado do Sair.
+  Com a sidebar recolhida, avatar, tema e Sair ficam empilhados. **O Sair visível com a
+  sidebar recolhida foi combinado com o Benjamin**, autor do recuo (LIZARDS-37): antes, a
+  sidebar recolhida escondia o Sair.
+- **Barra de rolagem da sidebar discreta:** fica invisível e aparece ao passar o mouse. No
+  Chrome, `scrollbar-width`/`scrollbar-color` fazem o `::-webkit-scrollbar` ser ignorado,
+  então os dois jeitos estão escritos.
+- **Campos de formulário sem classe:** uma regra global com `:where(...)` dá fundo e texto
+  escuros a `input`, `select` e `textarea`. O `:where` deixa a prioridade em zero, então
+  ela só preenche o que a tela não definiu e nunca passa por cima de regra de tela.
+- **Menus de seleção modernos, nos dois temas (a pedido, durante a task):** a lista aberta
+  do `<select>` é desenhada pelo navegador e ficava no visual do Windows. Com
+  `appearance: base-select` dentro de `@supports`, ela passa a ter cantos arredondados,
+  sombra, opções arredondadas e ✓ no item escolhido. Funciona no Chrome/Edge 135+; no
+  Firefox e no Safari o `@supports` pula o bloco e o menu fica como antes. A tela de
+  Conjuntos usa `appearance: none` com a seta própria (`.select-chevron`), então ganhou uma
+  regra própria e esconde a seta do navegador (`::picker-icon`).
+- **Defeito anterior que ficou visível no escuro:** na tabela do Mapeamento de Colunas, a
+  célula "Regras Ativas" (`.regras-tags`) usa `display: flex`, o que a tira do alinhamento
+  da linha e desloca a borda dela das outras colunas. No claro a borda é quase branca e o
+  defeito não aparece. Corrigido só no escuro (a célula volta a `table-cell` e o
+  espaçamento passa para as tags), para não alterar o claro.
+- **Testes:**
+  - `src/tema.test.js` (6 casos): preferência do sistema (escuro e claro), escolha salva
+    valendo mais que o sistema, valor salvo desconhecido ignorado, alternância gravando a
+    escolha e funcionamento sem `localStorage`.
+  - `src/components/Sidebar.test.js` (5 casos): botão de tema, alternância, ordem
+    tema/Sair, e sidebar recolhida com tema e Sair, incluindo o clique no Sair.
+  - `src/temaEscuro.test.js` (65 casos): o jsdom não aplica folha de estilo, então este
+    arquivo lê o CSS como texto. Confere cada token da paleta com o valor exato, que o
+    `:root` sem atributo continua sendo o claro, que nenhuma tela usa `:global(:root` nem
+    tem `:root[data-tema="escuro"]` solto, e que as 1.043 `var(--...)` usadas no tema
+    escuro existem no `style.css` (nome de variável digitado errado não dá erro, a cor só
+    some). Validado colocando três erros de propósito numa cópia temporária: cada um
+    derrubou o teste certo.
+  - Estado em 2026-10-21: 20 arquivos, **204 testes, 100% de sucesso**.
+- **[EM ABERTO]**
+  - **Tela de login (Keycloak).** Mudar o visual exige um tema de login do Keycloak (CSS
+    herdando o tema padrão, montado no container e ativado no realm `datagis`), tudo no
+    repositório do backend. O Keycloak não sabe qual tema o usuário escolheu no app, por
+    ser outro endereço: só pode seguir a preferência do sistema ou ter visual fixo.
+    Sugerida como task própria.
+  - **Paleta do gráfico de diagnóstico.** As cores do `DiagnosticoChart` vêm de um array
+    no JavaScript (linha 37) e o CSS não as alcança; o cinza `#475569` fica apagado no
+    escuro.
+  - **401 ao dar F5 em `/conjuntos`.** Já acontecia antes desta branch: o proxy do Vite
+    manda `^/conjuntos($|/)` para o backend, e recarregar a tela nesse endereço cai no
+    backend em vez da SPA.
+  - **Telas novas precisam do bloco escuro.** Tela que use só as variáveis do `style.css`
+    já nasce coberta; tela com cor fixa precisa do seu bloco `:root[data-tema="escuro"]`.
+    O `temaEscuro.test.js` passa a conferir automaticamente as regras acima em qualquer
+    componente novo que tenha tema escuro.
 
 ---
 

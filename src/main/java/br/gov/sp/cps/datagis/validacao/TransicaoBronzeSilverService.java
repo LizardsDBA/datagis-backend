@@ -153,11 +153,16 @@ public class TransicaoBronzeSilverService {
         // REGRA ATÔMICA ALL-OR-NOTHING:
         // Se houver qualquer registro reprovado (>= 1), o lote inteiro é retido e ZERO
         // registros vão para a Silver.
+        int qtdForaDoRecorte = resOrquestracao.totalDescartadosForaDoRecorte();
+        String sufixoRecorte = qtdForaDoRecorte > 0
+                ? " (" + qtdForaDoRecorte + " fora do recorte territorial PR, descartado(s) sem quarentena)"
+                : "";
+
         if (resOrquestracao.temErros()) {
             int qtdErros = resOrquestracao.rejeitados().size();
             log.warn(
-                    "LOTE {} BLOQUEADO: {} inconsistência(s) detectada(s). Regra All-or-Nothing aplicada: 0 registros promovidos para a Silver.",
-                    loteId, qtdErros);
+                    "LOTE {} BLOQUEADO: {} inconsistência(s) detectada(s){}. Regra All-or-Nothing aplicada: 0 registros promovidos para a Silver.",
+                    loteId, qtdErros, sufixoRecorte);
 
             // Persiste inconsistências na Quarentena
             persistidorQuarentenaService.persistirRejeitados(entidadeSilver, resOrquestracao.rejeitados());
@@ -172,14 +177,14 @@ public class TransicaoBronzeSilverService {
                     0,
                     qtdErros,
                     resOrquestracao.descartadosDedup().size(),
-                    "Lote retido na Quarentena com " + qtdErros + " inconsistência(s). 0 registros enviados à Silver.");
+                    "Lote retido na Quarentena com " + qtdErros + " inconsistência(s). 0 registros enviados à Silver." + sufixoRecorte);
         }
 
         // Lote 100% íntegro: promove todos os registros aprovados diretamente para a
         // Silver
         int qtdAprovados = resOrquestracao.aprovados().size();
-        log.info("LOTE {} APROVADO: 100% íntegro. Promovendo {} registro(s) para a Silver ({}.{}).",
-                loteId, qtdAprovados, "SILVER", entidadeSilver);
+        log.info("LOTE {} APROVADO: 100% íntegro. Promovendo {} registro(s) para a Silver ({}.{}){}.",
+                loteId, qtdAprovados, "SILVER", entidadeSilver, sufixoRecorte);
 
         persistidorSilverService.persistirAprovados(entidadeSilver, resOrquestracao.aprovados());
 
@@ -192,17 +197,17 @@ public class TransicaoBronzeSilverService {
                 qtdAprovados,
                 0,
                 resOrquestracao.descartadosDedup().size(),
-                "Lote integralmente aprovado e promovido à Silver.");
+                "Lote integralmente aprovado e promovido à Silver." + sufixoRecorte);
     }
 
     /**
-     * Liberação manual de um lote retido em quarentena após análise/correção pelo
-     * analista.
-     * Promove todos os registros do lote (aprovados, rejeitados
-     * reprocessados/sanitizados e itens da quarentena)
-     * para a camada Silver e atualiza a quarentena.
+     * Liberação de um lote retido em quarentena após análise/correção pelo analista.
+     * Revalida todos os registros do lote novamente através do motor de validação.
+     * Se houver qualquer inconsistência restante, os registros com erro são mantidos
+     * na Quarentena e o lote NÃO é promovido para a Silver.
+     * Somente se 100% dos registros forem válidos (ou descartados), o lote é promovido à Silver.
      */
-    @Transactional
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
     public boolean liberarLoteParaSilver(Long loteId, Long analistaId) {
         LoteIngestao lote = loteIngestaoRepository.findById(loteId).orElse(null);
         if (lote == null) {
@@ -234,56 +239,58 @@ public class TransicaoBronzeSilverService {
         // (mantendo a Bronze bruta original)
         aplicarGeometriasCorrigidasQuarentena(loteId, entidadeSilver, registros);
 
-        List<RegistroAprovadoSilver> todosParaPersistir = new ArrayList<>();
-
-        if (!registros.isEmpty()) {
-            // Executa esteira de validação e deduplicação
-            ResultadoOrquestracao res = orquestradorValidacao.orquestrarLote(
-                    fonteDadoId,
-                    registros,
-                    campoChaveNatural);
-
-            // Adiciona os aprovados
-            todosParaPersistir.addAll(res.aprovados());
-
-            // Para os registros rejeitados: como a ação do analista é LIBERAR O LOTE,
-            // transformamos os rejeitados não-descartados aplicando sanitização de campos e
-            // de geometria
-            // para que subam à Silver sem falhar constraints nem o Oracle Spatial
-            for (RegistroRejeitadoQuarentena rej : res.rejeitados()) {
-                if (rej.registroBruto() != null && !idsDescartados.contains(rej.registroBruto().getId())) {
-                    RegistroAprovadoSilver aprRej = orquestradorValidacao.transformarRegistro(fonteDadoId,
-                            rej.registroBruto());
-                    if (aprRej != null) {
-                        todosParaPersistir.add(aprRej);
-                    }
-                }
-            }
+        if (registros.isEmpty()) {
+            log.warn("Lote {} sem registros brutos a processar ou todos foram descartados.", loteId);
+            throw new IllegalArgumentException("O lote #" + loteId + " não possui registros a serem promovidos.");
         }
 
-        // 3. Inclui eventuais registros da Quarentena que não possuam registro_bruto_id
-        // (ex.: registros simulados/seed)
+        // Executa esteira de revalidação e deduplicação de todos os registros do lote
+        ResultadoOrquestracao res = orquestradorValidacao.orquestrarLote(
+                fonteDadoId,
+                registros,
+                campoChaveNatural);
+
+        // Se houver qualquer registro reprovado na revalidação, NÃO libera o lote
+        if (res.temErros()) {
+            int qtdErros = res.rejeitados().size();
+            log.warn(
+                    "Lote {} revalidado: {} registro(s) ainda contêm erro(s). Liberação para a Silver bloqueada. Registros com erro mantidos na Quarentena.",
+                    loteId, qtdErros);
+
+            // Mantém os que têm erro em quarentena (garante status PENDENTE e atualiza erro atual)
+            sincronizarRejeitadosRevalidacaoQuarentena(loteId, entidadeSilver, res.rejeitados());
+
+            // Atualiza registros que passaram na revalidação para CORRIGIDO_REPROCESSADO
+            sincronizarAprovadosRevalidacaoQuarentena(loteId, entidadeSilver, res.aprovados(), analistaId);
+
+            // Mantém lote com status RETIDO_QUARENTENA
+            lote.setStatus(STATUS_RETIDO_QUARENTENA);
+            loteIngestaoRepository.save(lote);
+
+            throw new IllegalArgumentException(
+                    "O lote #" + loteId + " não pode ser liberado para a Silver: " + qtdErros
+                            + " registro(s) ainda contêm erro(s) após a revalidação. "
+                            + "Os registros com inconsistência foram mantidos na Quarentena.");
+        }
+
+        // Lote 100% aprovado! Promove todos os registros reunidos para a Silver
+        List<RegistroAprovadoSilver> todosParaPersistir = new ArrayList<>(res.aprovados());
+
+        // Inclui eventuais registros da Quarentena sem registro_bruto_id (ex.: seeds)
         List<RegistroAprovadoSilver> itensQuarentenaSemBronze = extrairItensQuarentenaSemBronze(loteId, entidadeSilver,
                 fonteDadoId);
         todosParaPersistir.addAll(itensQuarentenaSemBronze);
 
-        if (todosParaPersistir.isEmpty()) {
-            log.warn("Lote {} sem registros brutos ou de quarentena a promover.", loteId);
-            return false;
-        }
-
-        // 4. Promove todos os registros reunidos para a Silver
         persistidorSilverService.persistirAprovados(entidadeSilver, todosParaPersistir);
 
-        // 5. Atualiza registros da quarentena para CORRIGIDO_REPROCESSADO
-        // (status_analise_id = 3)
+        // Atualiza registros da quarentena para CORRIGIDO_REPROCESSADO (status_analise_id = 3)
         atualizarStatusQuarentenaPorLote(loteId, "CORRIGIDO_REPROCESSADO", analistaId, null);
 
-        // 6. Atualiza status do lote
+        // Atualiza status do lote para PROMOVIDO_SILVER
         lote.setStatus(STATUS_PROMOVIDO_SILVER);
         loteIngestaoRepository.save(lote);
 
-        log.info("Lote {} retido foi liberado pelo analista {} e promovido à Silver ({} registros no total).",
+        log.info("Lote {} revalidado e liberado com sucesso pelo analista {}. {} registros promovidos à Silver.",
                 loteId, analistaId, todosParaPersistir.size());
         return true;
     }
@@ -710,6 +717,68 @@ public class TransicaoBronzeSilverService {
         }
     }
 
+    private void sincronizarRejeitadosRevalidacaoQuarentena(Long loteId, String entidadeSilver,
+            List<RegistroRejeitadoQuarentena> rejeitados) {
+        if (loteId == null || rejeitados == null || rejeitados.isEmpty()) {
+            return;
+        }
+        String tabEspelho = "q_" + normalizarEntidadeSilver(entidadeSilver);
+
+        for (RegistroRejeitadoQuarentena rej : rejeitados) {
+            if (rej.registroBruto() == null || rej.registroBruto().getId() == null) {
+                continue;
+            }
+            Long regId = rej.registroBruto().getId();
+            try {
+                String sql = "UPDATE " + quarentenaSchema + "." + tabEspelho + " SET " +
+                        "status_analise_id = (SELECT id FROM " + quarentenaSchema
+                        + ".status_analise_quarentena WHERE codigo = 'PENDENTE'), " +
+                        "tipo_erro_id = (SELECT id FROM " + quarentenaSchema
+                        + ".tipo_erro_quarentena WHERE codigo = ?), " +
+                        "campo_problema = ?, valor_recebido = ?, motivo_rejeicao = ?, " +
+                        "data_resolucao = NULL " +
+                        "WHERE lote_ingestao_id = ? AND registro_bruto_id = ?";
+                int count = jdbcTemplate.update(sql,
+                        rej.tipoErro(), rej.campoProblema(), rej.valorRecebido(), rej.motivoRejeicao(),
+                        loteId, regId);
+                if (count == 0) {
+                    persistidorQuarentenaService.persistirRejeitados(entidadeSilver, List.of(rej));
+                }
+            } catch (Exception e) {
+                log.debug("Aviso ao sincronizar rejeição na quarentena {}.{}: {}", quarentenaSchema, tabEspelho,
+                        e.getMessage());
+            }
+        }
+    }
+
+    private void sincronizarAprovadosRevalidacaoQuarentena(Long loteId, String entidadeSilver,
+            List<RegistroAprovadoSilver> aprovados, Long analistaId) {
+        if (loteId == null || aprovados == null || aprovados.isEmpty()) {
+            return;
+        }
+        String tabEspelho = "q_" + normalizarEntidadeSilver(entidadeSilver);
+
+        for (RegistroAprovadoSilver apr : aprovados) {
+            if (apr.registroBruto() == null || apr.registroBruto().getId() == null) {
+                continue;
+            }
+            Long regId = apr.registroBruto().getId();
+            try {
+                String sql = "UPDATE " + quarentenaSchema + "." + tabEspelho + " SET " +
+                        "status_analise_id = (SELECT id FROM " + quarentenaSchema
+                        + ".status_analise_quarentena WHERE codigo = 'CORRIGIDO_REPROCESSADO'), " +
+                        "analista_responsavel_id = ?, data_resolucao = SYSTIMESTAMP " +
+                        "WHERE lote_ingestao_id = ? AND registro_bruto_id = ? " +
+                        "AND status_analise_id != (SELECT id FROM " + quarentenaSchema
+                        + ".status_analise_quarentena WHERE codigo = 'DESCARTADO')";
+                jdbcTemplate.update(sql, analistaId, loteId, regId);
+            } catch (Exception e) {
+                log.debug("Aviso ao sincronizar aprovação na quarentena {}.{}: {}", quarentenaSchema, tabEspelho,
+                        e.getMessage());
+            }
+        }
+    }
+
     private Set<Long> buscarIdsDescartadosQuarentena(Long loteId) {
         Set<Long> descartados = new HashSet<>();
         if (loteId == null)
@@ -731,28 +800,32 @@ public class TransicaoBronzeSilverService {
         return descartados;
     }
 
+    /**
+     * Sincroniza payload_original da Quarentena de volta pro Bronze, só pros poucos
+     * registros que o analista realmente editou manualmente. Achado ao vivo tentando
+     * liberar um lote de 333.604 registros (foco_calor): a versão anterior fazia 1
+     * UPDATE por registro via loop Java (333 mil round-trips, cada um reescrevendo o
+     * payload inteiro mesmo quando IDÊNTICO ao que já estava no Bronze - a esmagadora
+     * maioria nunca foi editada) - sessao Oracle presa 21+ minutos em "Allocate PGA
+     * memory from OS", igual ao achado do indice espacial (V049). Trocado por 1 unico
+     * MERGE server-side, com DBMS_LOB.COMPARE pulando linhas onde o payload nao mudou -
+     * mesmo resultado, sem os round-trips desnecessarios.
+     */
     private void sincronizarCorrecoesQuarentenaParaBronze(Long loteId, String entidadeSilver) {
         String tabEspelho = "q_" + normalizarEntidadeSilver(entidadeSilver);
         try {
-            String sql = "SELECT registro_bruto_id, JSON_SERIALIZE(payload_original RETURNING CLOB) AS payload_original "
-                    +
-                    "FROM " + quarentenaSchema + "." + tabEspelho + " " +
-                    "WHERE lote_ingestao_id = ? AND registro_bruto_id IS NOT NULL";
-            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, loteId);
-            for (Map<String, Object> r : rows) {
-                if (r.get("registro_bruto_id") == null)
-                    continue;
-                Long regId = ((Number) r.get("registro_bruto_id")).longValue();
-                String payload = r.get("payload_original") != null ? r.get("payload_original").toString() : null;
-                if (payload != null && !payload.isBlank()) {
-                    try {
-                        jdbcTemplate.update(
-                                "UPDATE " + bronzeSchema + ".registro_bruto SET payload = ? WHERE id = ?",
-                                payload, regId);
-                    } catch (Exception ex) {
-                        log.debug("Aviso ao sincronizar payload no registro_bruto {}: {}", regId, ex.getMessage());
-                    }
-                }
+            String sql = "MERGE INTO " + bronzeSchema + ".registro_bruto br " +
+                    "USING (SELECT registro_bruto_id, JSON_SERIALIZE(payload_original RETURNING CLOB) AS payload_novo " +
+                    "         FROM " + quarentenaSchema + "." + tabEspelho + " " +
+                    "        WHERE lote_ingestao_id = ? AND registro_bruto_id IS NOT NULL " +
+                    "          AND payload_original IS NOT NULL) q " +
+                    "ON (br.id = q.registro_bruto_id) " +
+                    "WHEN MATCHED THEN UPDATE SET br.payload = q.payload_novo " +
+                    "WHERE DBMS_LOB.COMPARE(br.payload, q.payload_novo) != 0";
+            int count = jdbcTemplate.update(sql, loteId);
+            if (count > 0) {
+                log.info("Sincronizados {} payload(s) editado(s) manualmente da quarentena {}.{} pro Bronze (lote {})",
+                        count, quarentenaSchema, tabEspelho, loteId);
             }
         } catch (Exception e) {
             log.debug("Aviso ao sincronizar correções da quarentena {}.{}: {}", quarentenaSchema, tabEspelho,
@@ -851,7 +924,12 @@ public class TransicaoBronzeSilverService {
                 log.info(
                         "Todos os registros do lote {} na quarentena foram resolvidos. Liberando lote completo para a Silver...",
                         loteId);
-                return liberarLoteParaSilver(loteId, analistaId);
+                try {
+                    return liberarLoteParaSilver(loteId, analistaId);
+                } catch (IllegalArgumentException e) {
+                    log.warn("Tentativa de liberação automática do lote {} bloqueada na revalidação: {}", loteId, e.getMessage());
+                    return false;
+                }
             }
         } else {
             log.info(
@@ -888,6 +966,8 @@ public class TransicaoBronzeSilverService {
         String nome = fonte.getNome().toLowerCase(Locale.ROOT);
         if (nome.contains("car") || nome.contains("imóvel") || nome.contains("imovel"))
             return "imovel_rural";
+        if (nome.contains("bioma"))
+            return "bioma";
         if (nome.contains("ibge") || nome.contains("município") || nome.contains("municipio"))
             return "municipio";
         if (nome.contains("embargo"))
@@ -913,6 +993,13 @@ public class TransicaoBronzeSilverService {
             case "embargo_ambiental" -> "numero_termo";
             case "area_protegida" -> "codigo_origem";
             case "desmatamento", "foco_calor" -> "identificador_origem";
+            // reserva_legal/app_declarada/vegetacao_nativa_declarada: identificador_origem
+            // (objectid do ArcGIS), NAO cod_imovel - um imovel pode ter varios poligonos
+            // de RL/APP/vegetacao nao-contiguos, confirmado ao vivo contra o servico real
+            // (docs/tutorial-acesso-fontes-pendentes.md §0-bis). cod_imovel como chave
+            // natural descartaria fragmentos reais como se fossem duplicata.
+            case "reserva_legal", "app_declarada", "vegetacao_nativa_declarada" -> "identificador_origem";
+            case "bioma" -> "CD_BIOMA";
             default -> "id";
         };
     }
