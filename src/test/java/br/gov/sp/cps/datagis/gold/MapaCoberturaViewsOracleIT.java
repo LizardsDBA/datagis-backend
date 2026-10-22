@@ -11,7 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Views do mapa de cobertura (V079) e índice espacial da Gold (V080), contra o Oracle
+ * Views do mapa de cobertura (V080) e índice espacial da Gold (V081), contra o Oracle
  * local real. Cada teste faz rollback - a camada de teste nunca fica gravada.
  */
 @SpringBootTest(properties = {
