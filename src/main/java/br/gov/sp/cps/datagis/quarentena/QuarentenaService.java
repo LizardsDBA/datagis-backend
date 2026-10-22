@@ -83,6 +83,12 @@ public class QuarentenaService {
         return false;
     }
 
+    public void liberarLoteAssincrono(Long loteId, Long analistaId) {
+        if (transicaoService != null) {
+            transicaoService.liberarLoteParaSilverAssincrono(loteId, analistaId);
+        }
+    }
+
     public boolean descartarLote(Long loteId, String motivo, Long analistaId) {
         if (transicaoService != null) {
             return transicaoService.descartarLote(loteId, motivo, analistaId);

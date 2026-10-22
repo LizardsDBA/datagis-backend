@@ -237,6 +237,19 @@ public class GoldPublicacaoService {
     }
 
     /**
+     * Executa a publicação consolidada da camada Gold de forma assíncrona,
+     * desacoplada da thread HTTP.
+     */
+    @org.springframework.scheduling.annotation.Async("datagisTaskExecutor")
+    public void publicarTudoAssincrono() {
+        try {
+            publicarTudo();
+        } catch (Exception e) {
+            log.error("Erro na publicação assíncrona da camada Gold: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
      * Publica 1 camada de mapa (ver javadoc da classe). A versão nova só fica
      * "visível" (status CONCLUIDA em {@code gold.publicacao_camada_mapa}) se
      * processar inteira - cada publicação é uma versão absoluta, nunca pode ficar

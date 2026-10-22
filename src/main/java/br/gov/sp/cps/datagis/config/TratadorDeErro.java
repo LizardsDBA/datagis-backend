@@ -33,6 +33,11 @@ public class TratadorDeErro {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("erro", mensagem));
     }
 
+    @ExceptionHandler(OperacaoEmAndamentoException.class)
+    public ResponseEntity<Map<String, String>> tratarOperacaoEmAndamento(OperacaoEmAndamentoException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("erro", e.getMessage()));
+    }
+
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, String>> tratarFalhaDeIngestao(IllegalStateException e) {
         String mensagem = e.getMessage();

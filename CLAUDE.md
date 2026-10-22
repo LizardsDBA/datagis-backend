@@ -2442,7 +2442,74 @@ Branch: `feat/migracao-gold` (Task: `LIZARDS-29`).
 - Flexibilização da obrigatoriedade: apenas colunas com restrição relacional NOT NULL no schema físico da Silver bloqueiam a ingestão da fonte. Colunas opcionais (ex.: `imovel_rural.situacao_imovel`) não bloqueiam mais a execução.
 - `area_protegida.categoria_area_protegida` mantida como obrigatória no de-para para garantir a resolução da constraint NOT NULL de `tipo_area_protegida_id` na Silver física.
 - Descontinuação da migração por lotes individuais e remoção completa de código legado de recálculo fragmentado por lote no backend e frontend.
-- Implementação da migração consolidada para a Gold via botão único global (`POST /api/gold/publicar`) na interface de Gestão de Lotes, com promoção atômica em massa de lotes `PROMOVIDO_SILVER` para `PROMOVIDO_GOLD` e polling de status em tempo real (`GET /api/gold/publicar/status`).
+### 10.9. Arquitetura de Processamento em Segundo Plano (Assíncrono) e Polling em Tempo Real (2026-10-21)
+Branch: `feat/carregamento-segundo-plano`.
+
+1. **Infraestrutura Assíncrona no Spring Boot (`@EnableAsync` e `AsyncConfig`):**
+   - Configurado o thread pool dedicado `datagisTaskExecutor` (`ThreadPoolTaskExecutor`) com capacidade de 4 a 8 threads simultâneas, fila de 100 tarefas e prefixo de thread `datagis-async-`.
+   - Adicionado `DelegatingSecurityContextAsyncTaskExecutor` para propagar de forma transparente o `SecurityContext` do Spring Security (tokens JWT / Keycloak) para as threads em segundo plano.
+   - Criada a exceção `OperacaoEmAndamentoException` mapeada globalmente em `TratadorDeErro` para responder com `HTTP 409 Conflict`, garantindo bloqueio atômico contra requisições concorrentes sobre o mesmo recurso em processamento.
+
+2. **Ingestão Assíncrona de Fontes (`IngestaoController` e `IngestaoExecucaoService`):**
+   - Endpoints `POST /api/fontes-dados/{id}/executar` e `POST /api/fontes-dados/{id}/upload` agora respondem imediatamente com `HTTP 202 Accepted` e o snapshot de status `ExecucaoResponse`.
+   - Tratamento de upload multipart em background: os bytes do arquivo são persistidos em arquivo temporário no disco (`Files.createTempFile`) antes do retorno da requisição HTTP e excluídos com segurança no bloco `finally` da execução assíncrona.
+   - Consulta contínua via `GET /api/fontes-dados/{id}/progresso` consumindo o `ProgressoExecucaoRegistry`. Se uma execução já estiver em andamento para a fonte, novas tentativas disparam `409 Conflict`.
+   - Frontend (`CadastroFontes.vue`): polling dinâmico de 1s e recuperação automática de fontes em execução no carregamento da tela (`onMounted`).
+
+3. **Transição Bronze→Silver e Quarentena Assíncrona (`LoteIngestaoController` e `QuarentenaController`):**
+   - Criados `ProgressoTransicao`, `ProgressoTransicaoResponse` e o registrador thread-safe `ProgressoTransicaoRegistry` rastreando etapas (`VALIDANDO_QUARENTENA`, `CARREGANDO_BRONZE`, `VALIDANDO_REGRAS`, `PERSISTINDO_SILVER`, `CONCLUIDO`, `RETIDO_QUARENTENA`).
+   - `POST /api/quarentena/lotes/{loteId}/liberar` e `POST /api/lotes/{id}/reprocessar` desacoplados da thread HTTP, respondendo imediatamente com `HTTP 202 Accepted`.
+   - Novo endpoint `GET /api/lotes/{id}/progresso` para acompanhamento de percentual e etapas em tempo real.
+   - Frontend (`LotesView.vue`): substituído o timer simulado por polling real via `obterProgressoLote(loteId)`, atualizando o stepper de 4 etapas e a barra de progresso. Suporte a retomada automática de monitoramento pós-refresh via `sessionStorage` e `verificarLoteLiberandoAtivo()`.
+
+4. **Publicação Consolidada na Camada Gold (`GoldPublicacaoController` e `GoldPublicacaoService`):**
+   - `POST /api/gold/publicar` desacoplado com `HTTP 202 Accepted` e verificação de concorrência com `409 Conflict`.
+   - Monitoramento contínuo no frontend (`LotesView.vue`) via `obterStatusGold()` a cada 2s com retomada automática de estado ao recarregar a tela.
+
+### 10.10. Painel de Monitoramento Global de Ingestões e Migrações em Segundo Plano (2026-10-21)
+Branch: `feat/carregamento-segundo-plano`.
+
+1. **Objetivo e Visão Arquitetural:**
+   - Centralizar o monitoramento de todas as esteiras de processamento assíncrono em segundo plano (Ingestão Bronze, Transição Silver e Publicação Gold) em um painel global persistente no frontend.
+   - Acompanhamento unificado e em tempo real independente da tela/rota em que o analista ou operador esteja navegando.
+   - Acesso fixo no canto inferior direito, com suporte a expansão e minimização em formato de pílula compacta para não obstruir a interface de trabalho.
+
+2. **Backend — Agregação em Memória O(1) e Endpoint Global (`MonitoramentoController` e `MonitoramentoService`):**
+   - **DTOs Canônicos (`br.gov.sp.cps.datagis.controle.monitoramento`):**
+     - `MonitoramentoIngestaoItem`: ID e nome da fonte, formato, fase de execução, total de registros, processados, percentual, data de início e mensagem de erro.
+     - `MonitoramentoSilverItem`: ID do lote, ID e nome da fonte, etapa da transição, total de registros, processados, percentual, data de início e mensagem de erro.
+     - `MonitoramentoGoldItem`: indicador de execução, etapa atual, percentual consolidado, datas, contadores de camadas e indicadores processados e erro.
+     - `MonitoramentoGlobalResponse`: contagem consolidada de tarefas ativas (`totalEmAndamento`) e listas/objetos das três esteiras.
+   - **Exposição nos Registradores em Memória:**
+     - Adicionado método `obterTodos()` em `ProgressoExecucaoRegistry` e `ProgressoTransicaoRegistry`, retornando snapshots thread-safe das execuções ativas e recentes.
+   - **Serviço Agregador (`MonitoramentoService`):**
+     - Cruza em tempo constante os registradores em memória de ingestão, transição e o serviço de publicação Gold (`GoldPublicacaoService.obterProgressoAtual()`).
+     - Calcula dinamicamente o total de operações ativas em andamento.
+   - **Endpoint REST:**
+     - `GET /api/monitoramento/status-global`: expõe o snapshot consolidado para o frontend em uma única chamada HTTP leve.
+   - **Testes Unitários:** `MonitoramentoServiceTest` e `MonitoramentoControllerTest`.
+
+3. **Frontend — Composable Singleton e Polling Adaptativo (`useMonitoramentoGlobal`):**
+   - Centraliza o ciclo de vida do monitoramento com padrão Singleton no composable reativo `src/composables/useMonitoramentoGlobal.js`.
+   - **Polling Inteligente e Eficiente:**
+     - Intervalo curto de 2 segundos quando existem tarefas ativas em andamento (`totalEmAndamento > 0`).
+     - Intervalo ampliado de 8 segundos quando o sistema está ocioso, poupando CPU e largura de banda.
+     - Destruição e limpeza automática dos timers ao desmontar.
+   - **Persistência de Preferência de Interface:**
+     - Estado de minimização/expansão persistido em `localStorage` (`datagis_monitor_minimizado`) para manter a ergonomia escolhida pelo usuário durante a navegação.
+
+4. **Frontend — Componente Visual Glassmorphism (`PainelMonitoramentoGlobal.vue`):**
+   - **Posicionamento e Estados:**
+     - Fixado no canto inferior direito (`bottom-4 right-4 z-50`).
+     - **Estado Minimizado:** Pílula flutuante estilizada com efeito de vidro (Glassmorphism), badge numérico pulsante exibindo a quantidade de tarefas em andamento e botão expansor para puxar o modal de volta.
+     - **Estado Expandido:** Painel com cabeçalho contendo resumo de tarefas ativas, botão de fechar/minimizar e abas dedicadas:
+       - **Aba Todas:** Visão geral rápida com resumo das operações em execução nas três esteiras.
+       - **Aba Ingestão (Bronze):** Cards detalhados de cada fonte em processamento com formato, fase atual, barra de progresso e atalho de navegação para a tela de Fontes.
+       - **Aba Silver (Transição e Quarentena):** Cards de cada lote sendo promovido para a Silver, com identificação da fonte, etapa de validação, barra de progresso e atalho para a tela de Lotes.
+       - **Aba Gold (Publicação Analítica):** Acompanhamento do recálculo consolidado de camadas geoespaciais e indicadores municipais, com percentual e status de conclusão.
+   - **Integração na Raiz (`App.vue`):**
+     - O componente é montado no rodapé global do `App.vue`, persistindo em todas as rotas da aplicação (Dashboard, Fontes, Lotes, Quarentena, Mapas, Indicadores, etc.).
+   - **Testes Unitários Frontend:** `useMonitoramentoGlobal.test.js` e `PainelMonitoramentoGlobal.test.js` integrados na suíte Vitest com 149 testes aprovados.
 
 
 

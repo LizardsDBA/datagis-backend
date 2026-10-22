@@ -39,4 +39,11 @@ class TratadorDeErroTest {
         java.util.Map<String, String> corpo = (java.util.Map<String, String>) resposta.getBody();
         assertThat(corpo.get("erro")).contains("falhou ao buscar página").contains("curl (22): HTTP 500");
     }
+
+    @Test
+    void operacaoEmAndamentoViraQuatrocentosENove() {
+        ResponseEntity<?> resposta = tratador.tratarOperacaoEmAndamento(new OperacaoEmAndamentoException("processo em andamento"));
+        assertThat(resposta.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(resposta.getBody()).isEqualTo(java.util.Map.of("erro", "processo em andamento"));
+    }
 }
