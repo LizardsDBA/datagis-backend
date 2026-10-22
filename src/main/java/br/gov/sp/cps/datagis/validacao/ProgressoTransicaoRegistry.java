@@ -38,6 +38,10 @@ public class ProgressoTransicaoRegistry {
         return Optional.ofNullable(estados.get(loteId));
     }
 
+    public Map<Long, ProgressoTransicao> obterTodos() {
+        return Map.copyOf(estados);
+    }
+
     public boolean isExecutando(Long loteId) {
         return obter(loteId)
                 .map(p -> "EM_PROCESSAMENTO".equals(p.statusFinal())

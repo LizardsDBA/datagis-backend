@@ -47,6 +47,10 @@ public class ProgressoExecucaoRegistry {
         return Optional.ofNullable(estados.get(fonteId));
     }
 
+    public Map<Long, ProgressoExecucao> obterTodos() {
+        return Map.copyOf(estados);
+    }
+
     /** Retorna true se a fonte possui execução ativa em andamento (nem CONCLUIDO nem ERRO). */
     public boolean isExecutando(Long fonteId) {
         return obter(fonteId)
