@@ -6,7 +6,7 @@
 #
 #   workspace "datagis"
 #   datastore "gold"   -> Oracle, schema GOLD, usuario do backend (APP_USER)
-#   7 camadas          -> as views gold.vw_mapa_* (V079), cada uma com o estilo
+#   7 camadas          -> as views gold.vw_mapa_* (V080), cada uma com o estilo
 #                         estilos/<camada>.sld
 #
 # Camada nova no mapa = view nova na Gold + nome na lista CAMADAS + um .sld.
