@@ -44,7 +44,47 @@ class ValidacaoMapeamentoFonteServiceTest {
     }
 
     @Test
-    void deveRetornarIncompletoQuandoFaltamColunasDaTabelaSilver() {
+    void deveRetornarIncompletoQuandoFaltamColunasObrigatoriasDaTabelaSilver() {
+        FonteDado fonte = FonteDado.builder().id(2L).nome("UC Teste").entidadeSilver("area_protegida").build();
+
+        CatalogoSilverService.EsquemaSilverDto esquema = new CatalogoSilverService.EsquemaSilverDto(
+                "area_protegida",
+                "Área Protegida (UC / TI)",
+                "Descrição",
+                List.of(
+                        CatalogoSilverService.ColunaSilverDto.coluna("codigo_origem", "Código", "texto", true),
+                        CatalogoSilverService.ColunaSilverDto.coluna("nome", "Nome", "texto", true),
+                        CatalogoSilverService.ColunaSilverDto.coluna("area_ha", "Área", "numero", false)),
+                Collections.emptyList());
+
+        when(catalogoSilverService.buscarPorId("area_protegida")).thenReturn(esquema);
+
+        // Apenas 'codigo_origem' mapeado; falta a obrigatória 'nome'
+        MapeamentoColuna map1 = MapeamentoColuna.builder()
+                .id(10L)
+                .fonteDadoId(2L)
+                .colunaOrigem("cd_uc")
+                .atributoDestino("codigo_origem")
+                .destinoTipo("COLUNA")
+                .build();
+
+        when(mapeamentoRepository.findByFonteDadoId(2L)).thenReturn(List.of(map1));
+
+        ValidacaoMapeamentoFonteService.StatusMapeamentoFonte status = service.avaliarStatus(fonte);
+
+        assertThat(status.completo()).isFalse();
+        assertThat(status.totalColunasEsperadas()).isEqualTo(2); // 2 obrigatórias
+        assertThat(status.totalColunasMapeadas()).isEqualTo(1);
+        assertThat(status.colunasFaltantes()).containsExactly("nome");
+
+        assertThatThrownBy(() -> service.validarParaIngestao(fonte))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("o mapeamento para a tabela Silver 'Área Protegida (UC / TI)' está incompleto")
+                .hasMessageContaining("Faltam 1 coluna(s) obrigatória(s) (NOT NULL): nome.");
+    }
+
+    @Test
+    void deveAprovarQuandoTodasAsColunasObrigatoriasForemMapeadasMesmoComOpcionaisPendentes() {
         FonteDado fonte = FonteDado.builder().id(2L).nome("CAR SP").entidadeSilver("imovel_rural").build();
 
         CatalogoSilverService.EsquemaSilverDto esquema = new CatalogoSilverService.EsquemaSilverDto(
@@ -53,13 +93,13 @@ class ValidacaoMapeamentoFonteServiceTest {
                 "Descrição",
                 List.of(
                         CatalogoSilverService.ColunaSilverDto.coluna("cod_imovel", "Código", "texto", true),
-                        CatalogoSilverService.ColunaSilverDto.coluna("area_ha", "Área", "numero", false),
-                        CatalogoSilverService.ColunaSilverDto.geometria("geometria", "Geometria")),
+                        CatalogoSilverService.ColunaSilverDto.coluna("situacao_imovel", "Situação", "texto", false),
+                        CatalogoSilverService.ColunaSilverDto.coluna("area_ha", "Área", "numero", false)),
                 Collections.emptyList());
 
         when(catalogoSilverService.buscarPorId("imovel_rural")).thenReturn(esquema);
 
-        // Apenas 'cod_imovel' mapeado
+        // Apenas a obrigatória 'cod_imovel' mapeada; 'situacao_imovel' e 'area_ha' opcionais pendentes
         MapeamentoColuna map1 = MapeamentoColuna.builder()
                 .id(10L)
                 .fonteDadoId(2L)
@@ -72,15 +112,13 @@ class ValidacaoMapeamentoFonteServiceTest {
 
         ValidacaoMapeamentoFonteService.StatusMapeamentoFonte status = service.avaliarStatus(fonte);
 
-        assertThat(status.completo()).isFalse();
-        assertThat(status.totalColunasEsperadas()).isEqualTo(3);
+        assertThat(status.completo()).isTrue();
+        assertThat(status.totalColunasEsperadas()).isEqualTo(1); // 1 obrigatória
         assertThat(status.totalColunasMapeadas()).isEqualTo(1);
-        assertThat(status.colunasFaltantes()).containsExactly("area_ha", "geometria");
+        assertThat(status.colunasFaltantes()).isEmpty();
 
-        assertThatThrownBy(() -> service.validarParaIngestao(fonte))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("o mapeamento para a tabela Silver 'Imóvel Rural (CAR)' está incompleto")
-                .hasMessageContaining("Faltam 2 coluna(s): area_ha, geometria");
+        // Não deve lançar exceção
+        service.validarParaIngestao(fonte);
     }
 
     @Test
@@ -108,7 +146,7 @@ class ValidacaoMapeamentoFonteServiceTest {
         ValidacaoMapeamentoFonteService.StatusMapeamentoFonte status = service.avaliarStatus(fonte);
 
         assertThat(status.completo()).isTrue();
-        assertThat(status.totalColunasEsperadas()).isEqualTo(3);
+        assertThat(status.totalColunasEsperadas()).isEqualTo(2); // 2 obrigatórias
         assertThat(status.totalColunasMapeadas()).isEqualTo(3);
         assertThat(status.colunasFaltantes()).isEmpty();
 
