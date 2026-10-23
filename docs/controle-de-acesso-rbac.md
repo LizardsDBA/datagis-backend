@@ -80,6 +80,10 @@ o quê (ação legível + rota), quando, de onde (IP), quanto tempo levou e o re
 - Endpoint novo que altera dado precisa de uma linha em `DescricaoAcao` — o
   `DescricaoAcaoTest` falha se faltar.
 - Não cobre login/logout: esses eventos ficam no próprio Keycloak (console → Events).
+- **Antes e depois (V082, LIZARDS-56):** as ações de usuário (criar, editar, perfis, senha)
+  gravam em `dados_antes`/`dados_depois` a fotografia do usuário, sem senha. O serviço
+  chama `MudancaAuditada.registrar(antes, depois)` depois de salvar; a tela mostra os dois
+  lados com o que mudou em vermelho. Para outra tela ganhar isso, basta a mesma chamada.
 
 ## O que cada perfil vê nas telas
 

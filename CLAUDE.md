@@ -2788,6 +2788,74 @@ Parte da tela do agendamento cuja parte de backend está na §9.47.
   temporária: o teste correspondente falhou em todos os casos. Suíte do frontend: **329
   testes, 0 falhas**; build ok.
 
+
+### 9.48. Controle de Acesso e antes/depois no Log de Auditoria — backend — **[FEITO e validado contra o Oracle real, 2026-10-23, `LIZARDS-56`]**
+Branch `feat/controle-acesso-auditoria` (backend e frontend), a partir da `sprint-2`. A tela
+está na §9.49.
+
+- **Objetivo:** o Log de Auditoria passa a mostrar o **antes e depois** das alterações de
+  usuário, além de quem fez e quando (§9.39, LIZARDS-48).
+- **`V082__log_auditoria_antes_e_depois.sql`:** colunas `dados_antes` e `dados_depois`
+  (CLOB com `IS JSON`) em `controle.log_auditoria`. A tabela continua somente inserção: o
+  trigger da V075 só dispara em UPDATE/DELETE de linha, `ALTER TABLE` não passa por ele.
+  Null nas duas = ação sem antes/depois (processo, ou registro anterior à V082); antes
+  null = cadastro novo.
+- **`MudancaAuditada` (pacote `auditoria`):** o serviço que altera o dado chama
+  `MudancaAuditada.registrar(antes, depois)` **depois** de salvar com sucesso; o valor vai
+  como JSON num atributo da requisição (`RequestContextHolder`) e o `FiltroAuditoria` grava
+  junto com a linha do log. O filtro continua **sem ler o corpo da requisição** (senha
+  temporária, uploads). Fora de uma requisição (job agendado, teste) a chamada não faz nada.
+- **Coberto hoje:** `UsuarioAdminService` — criar, editar dados (inclui ativar/desativar),
+  definir perfis/permissões e redefinir senha. A "fotografia" (`fotografia(UsuarioResponse)`)
+  tem login, nome, sobrenome, e-mail, ativo, perfis e permissões avulsas; nada derivado
+  (permissões efetivas) nem secreto. Na troca de senha o log registra só que uma nova senha
+  temporária foi definida — **o valor nunca é gravado** (teste trava isso).
+- **API:** `GET /api/auditoria` devolve `dadosAntes` e `dadosDepois` (texto JSON) em cada item.
+- **Para outra tela ganhar antes/depois** (fontes, mapeamento, domínios): ler o registro
+  antes, salvar, e chamar `MudancaAuditada.registrar(...)` no serviço dela.
+- **Testes:** `MudancaAuditadaTest` (3), `UsuarioAdminServiceTest` (+4: antes/depois da
+  edição, cadastro sem senha, senha nunca gravada, falha não registra depois),
+  `LogAuditoriaOracleIT` (+1, vai e volta no Oracle real). Backend sem falhas fora o
+  `DatagisApplicationTests` de sempre (§9.3); `LogAuditoriaOracleIT` 4/4.
+- **Validado ao vivo:** editar um usuário gerou o registro com o sobrenome antes e depois.
+- **[EM ABERTO]** Antes/depois só nas ações de usuário; o Auditor vê o id (não o login) do
+  usuário alterado, porque a lista de usuários exige `usuario:gerenciar` (§9.49).
+
+### 9.49. Controle de Acesso e antes/depois no Log de Auditoria — frontend — **[FEITO e validado no navegador, 2026-10-23, `LIZARDS-56`]**
+Repositório `datagis-frontend`, branch `feat/controle-acesso-auditoria`. Depende da §9.48
+para o antes e depois (sem a V082 o resto funciona, só não aparece antes/depois).
+
+- **Painel `/admin/controle-acesso`** (`ControleAcessoView.vue`): o menu "Usuários e
+  Acessos" virou "Controle de Acesso", com cards Usuários, Perfis e Matriz de Acesso e um
+  número de resumo em cada. O item do menu fica marcado em todas as telas `/admin/`.
+- **Usuários** (`UsuariosView.vue`, reescrita): lista com "Mostrar N", "Procurar",
+  ordenação por coluna, paginação, Ativo com joinha e detalhe expansível (inclui o **ID do
+  Keycloak** com Copiar); formulário de página inteira ("Salvar"/"Voltar à lista"), sem o
+  campo Ativo — ativar/desativar só pelo botão da lista, com **confirmação própria** (foco no
+  Cancelar); perfis e permissões avulsas em seleção múltipla com busca (`SeletorMultiplo.vue`).
+- **Exportar** CSV ou PDF (`usuariosCsv.js`, `usuariosPdf.js`): arquivo
+  `userDatagis_dd-mm-aaaa`, coluna ativo por último; CSV com vírgula, aspas e BOM, valor
+  com `= + - @` no início ganha apóstrofo (fórmula no Excel). PDF com `jspdf` +
+  `jspdf-autotable` (**dependências novas**, carregadas só ao gerar o PDF).
+- **Importação em Massa de Usuário:** modelo CSV para baixar, prévia com o erro de cada
+  linha (campo em branco, login inválido, e-mail, senha < 8, perfil/permissão inexistente,
+  login já cadastrado ou repetido) e cadastro um a um só das válidas.
+- **Perfis** (`PerfisAcessoView.vue`) e **Matriz de Acesso** (`MatrizAcessoView.vue`):
+  **somente consulta** — perfis e permissões são do código e o `KeycloakProvisionador` os
+  reaplica a cada subida (§9.39). A Matriz lista as telas de cada permissão a partir de
+  `meta.permissao` + `meta.titulo` das rotas: tela nova com `meta.titulo` aparece sozinha.
+  Estilo comum em `controleAcesso.css`, só com variáveis do tema (escuro sem bloco próprio).
+- **Logs de Auditoria** (`AuditoriaView.vue`): botão `{ }` por linha (JSON + Copiar), "Ver
+  JSON do filtro" (todas as páginas, até 10.000), "Usuário alterado: login" nas rotas
+  `/api/admin/usuarios/{id}` (só com `usuario:gerenciar`), aviso "N campo(s) alterado(s)" e
+  janela **Antes | Depois** com os campos alterados em vermelho. Texto vindo do registro é
+  escapado antes de colorir.
+- **Testes:** `ControleAcesso.test.js`, `usuariosCsv.test.js`, `usuariosPdf.test.js` (novos);
+  `UsuariosView.test.js` e `AuditoriaView.test.js` ampliados. Suíte **348, 0 falhas**, build ok.
+- **[EM ABERTO]** Descrições das permissões sem acento vêm do enum `Permissao`; CSV com
+  vírgula abre numa coluna só no Excel em padrão brasileiro (`;`) — se incomodar, exportar
+  `.xlsx`.
+
 ---
 
 ## 10. Git — branches, commits e fluxo de PR — **[DECIDIDO, padrão da equipe LizardsDBA]**
