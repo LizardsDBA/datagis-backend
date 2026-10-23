@@ -68,7 +68,28 @@ class LogAuditoriaOracleIT {
         assertThat(segunda.itens()).hasSize(1);
     }
 
-    /** RN025: nem o dono da tabela consegue alterar ou apagar o historico. */
+    /** V082: o antes e depois vai e volta como JSON; acao sem eles continua com null. */
+    @Test
+    void gravaOAntesEDepoisDaAlteracao() {
+        RegistroAuditoria base = registro("PUT", "/api/admin/usuarios/u1", "Editar dados de usuario", 200);
+        repositorio.registrar(new RegistroAuditoria(base.dataHora(), base.usuarioId(), base.usuarioLogin(), base.perfis(),
+                base.metodo(), base.rota(), base.rotaPadrao(), base.parametros(), base.acao(), base.statusHttp(),
+                base.sucesso(), base.duracaoMs(), base.ipOrigem(),
+                "{\"email\":\"a@x.com\",\"ativo\":true}", "{\"email\":\"b@x.com\",\"ativo\":false}"));
+        repositorio.registrar(registro("POST", "/api/fontes/3/executar", "Executar ingestao da fonte", 200));
+
+        PaginaAuditoria pagina = repositorio.buscar(filtro(null, null), 0, 50);
+        assertThat(pagina.itens()).filteredOn(i -> i.metodo().equals("PUT")).singleElement().satisfies(item -> {
+            assertThat(item.dadosAntes()).contains("a@x.com");
+            assertThat(item.dadosDepois()).contains("b@x.com");
+        });
+        assertThat(pagina.itens()).filteredOn(i -> i.metodo().equals("POST")).singleElement().satisfies(item -> {
+            assertThat(item.dadosAntes()).isNull();
+            assertThat(item.dadosDepois()).isNull();
+        });
+    }
+
+        /** RN025: nem o dono da tabela consegue alterar ou apagar o historico. */
     @Test
     void tabelaRecusaUpdateEDelete() {
         repositorio.registrar(registro("POST", "/api/fontes", "Cadastrar fonte de dados", 201));
@@ -89,6 +110,6 @@ class LogAuditoriaOracleIT {
     private static RegistroAuditoria registro(String metodo, String rota, String acao, int status) {
         String molde = DescricaoAcao.identificar(metodo, rota).map(DescricaoAcao.Acao::rotaPadrao).orElse(null);
         return new RegistroAuditoria(Instant.now(), "uuid-teste", LOGIN, "perfil-operador", metodo, rota, molde,
-                null, acao, status, status < 400, 12L, "127.0.0.1");
+                null, acao, status, status < 400, 12L, "127.0.0.1", null, null);
     }
 }
