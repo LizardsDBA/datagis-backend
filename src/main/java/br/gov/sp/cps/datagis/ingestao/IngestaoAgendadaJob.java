@@ -53,7 +53,13 @@ public class IngestaoAgendadaJob implements Job {
                     "Falha ao executar ingestao agendada da fonte " + fonteId, e);
         } finally {
             // Depois da execução, não antes: ela grava a fonte inteira e sobrescreveria a data.
-            agendamentoFonteService.registrarProximaExecucao(fonteId, context.getNextFireTime());
+            // Lê o trigger de agora (pode ter sido desligado ou editado durante a execução) e
+            // nunca deixa uma falha aqui esconder o erro da ingestão, que sai do catch acima.
+            try {
+                agendamentoFonteService.atualizarProximaExecucaoDoTrigger(fonteId);
+            } catch (Exception e) {
+                log.warn("Nao foi possivel gravar a proxima execucao da fonte {}", fonteId, e);
+            }
         }
     }
 }

@@ -14,6 +14,7 @@ import org.quartz.JobDetail;
 import org.quartz.JobKey;
 import org.quartz.Scheduler;
 import org.quartz.SchedulerException;
+import org.quartz.Trigger;
 import org.quartz.TriggerBuilder;
 import org.quartz.TriggerKey;
 import org.slf4j.Logger;
@@ -96,6 +97,17 @@ public class AgendamentoFonteService {
                 : LocalDateTime.ofInstant(proxima.toInstant(), ZoneId.systemDefault());
         fonteDadoRepository.atualizarProximaExecucao(fonteId, proximaNoServidor);
         return proximaNoServidor;
+    }
+
+    /**
+     * Regrava a próxima execução lendo o trigger como ele está agora no Quartz. Usado pelo
+     * job depois de cada disparo: se o agendamento foi desligado ou editado enquanto a
+     * ingestão rodava, vale o que está no scheduler (nulo, se o trigger sumiu), e não o
+     * horário que o job recebeu no começo da execução.
+     */
+    public void atualizarProximaExecucaoDoTrigger(Long fonteId) throws SchedulerException {
+        Trigger trigger = scheduler.getTrigger(TriggerKey.triggerKey("trigger-fonte-" + fonteId, GRUPO));
+        registrarProximaExecucao(fonteId, trigger != null ? trigger.getNextFireTime() : null);
     }
 
     /** Ativo nulo cai no padrao da coluna no banco (DEFAULT 1), que e ativo. */

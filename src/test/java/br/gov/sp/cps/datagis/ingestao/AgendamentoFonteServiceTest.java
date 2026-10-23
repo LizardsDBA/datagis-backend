@@ -155,4 +155,28 @@ class AgendamentoFonteServiceTest {
         verify(fonteDadoRepository).atualizarProximaExecucao(8L, null);
         assertThat(fonte.getProximaExecucaoEm()).isNull();
     }
+
+    @Test
+    void depoisDoDisparoDeveGravarAProximaExecucaoDoTriggerVigente() throws SchedulerException {
+        AgendamentoFonteService service = new AgendamentoFonteService(scheduler, fonteDadoRepository, "America/Sao_Paulo");
+        Date proxima = new Date(1_800_000_000_000L);
+        Trigger trigger = org.mockito.Mockito.mock(Trigger.class);
+        when(trigger.getNextFireTime()).thenReturn(proxima);
+        when(scheduler.getTrigger(TriggerKey.triggerKey("trigger-fonte-9", "ingestao"))).thenReturn(trigger);
+
+        service.atualizarProximaExecucaoDoTrigger(9L);
+
+        verify(fonteDadoRepository).atualizarProximaExecucao(9L,
+                LocalDateTime.ofInstant(proxima.toInstant(), ZoneId.systemDefault()));
+    }
+
+    @Test
+    void depoisDoDisparoNaoDeveRessuscitarADataDeUmAgendamentoDesligadoDuranteAExecucao() throws SchedulerException {
+        AgendamentoFonteService service = new AgendamentoFonteService(scheduler, fonteDadoRepository, "America/Sao_Paulo");
+        when(scheduler.getTrigger(TriggerKey.triggerKey("trigger-fonte-9", "ingestao"))).thenReturn(null);
+
+        service.atualizarProximaExecucaoDoTrigger(9L);
+
+        verify(fonteDadoRepository).atualizarProximaExecucao(9L, null);
+    }
 }
