@@ -90,6 +90,7 @@ class MatrizAcessoTest {
                 Arguments.of("GET", "/api/gold/status", Permissao.INDICADOR_VISUALIZAR),
                 Arguments.of("GET", "/api/gold/imoveis/PR-1", Permissao.INDICADOR_VISUALIZAR),
                 Arguments.of("GET", "/api/indicadores/tipos", Permissao.INDICADOR_VISUALIZAR),
+                Arguments.of("GET", "/api/indicadores/geoserver/wms?REQUEST=GetMap", Permissao.INDICADOR_VISUALIZAR),
                 Arguments.of("POST", "/api/gold/publicar", Permissao.INDICADOR_PUBLICAR),
                 Arguments.of("PUT", "/api/indicadores/tipos/1", Permissao.INDICADOR_PUBLICAR),
                 Arguments.of("GET", "/api/admin/usuarios", Permissao.USUARIO_GERENCIAR),
