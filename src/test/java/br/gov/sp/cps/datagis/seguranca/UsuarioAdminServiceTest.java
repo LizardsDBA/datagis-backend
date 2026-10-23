@@ -184,4 +184,14 @@ class UsuarioAdminServiceTest {
 
         assertThat(MudancaAuditadaAcesso.depois(request)).isNull();
     }
+
+    @Test
+    void salvarPerfisSemMudarNadaNaoGravaAntesEDepois() {
+        when(keycloak.rolesDiretas(anyString())).thenReturn(List.of(ADMIN));
+
+        service.definirRoles("u1", List.of("perfil-administrador"), "outro");
+
+        assertThat(MudancaAuditadaAcesso.antes(request)).isNull();
+        assertThat(MudancaAuditadaAcesso.depois(request)).isNull();
+    }
 }
