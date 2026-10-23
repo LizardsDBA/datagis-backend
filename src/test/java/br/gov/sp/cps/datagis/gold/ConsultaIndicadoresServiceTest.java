@@ -108,6 +108,22 @@ class ConsultaIndicadoresServiceTest {
     }
 
     @Test
+    @DisplayName("Imovel com intersecao = alguma camada de restricao com indicador maior que zero")
+    void contagemDeIntersecaoUsaSoAsCamadasDeRestricao() {
+        String sql = sqlDe(() -> service.listarPorMunicipio());
+
+        assertThat(sql).contains("SUM(CASE WHEN " + ConsultaIndicadoresService.COM_INTERSECAO
+                + " THEN 1 ELSE 0 END) AS qtd_imoveis_com_intersecao");
+        // Qualquer sobreposicao conta: > 0, sem area minima. NVL pra indicador nulo nao contar.
+        for (String coluna : new String[] { "valor_isap", "valor_iae", "valor_idesmat", "valor_ifc" }) {
+            assertThat(ConsultaIndicadoresService.COM_INTERSECAO).contains("NVL(i." + coluna + ", 0) > 0");
+        }
+        // Reserva Legal, APP e vegetacao nao sao restricao: cruzar com elas nao e alerta.
+        assertThat(ConsultaIndicadoresService.COM_INTERSECAO)
+                .doesNotContain("valor_irl").doesNotContain("valor_iapp").doesNotContain("valor_icv");
+    }
+
+    @Test
     @DisplayName("Media por municipio deve ser ponderada pela area, e nao media simples")
     void mediaPorMunicipioDeveSerPonderadaPelaArea() {
         String sql = sqlDe(() -> service.listarPorMunicipio());
@@ -220,6 +236,7 @@ class ConsultaIndicadoresServiceTest {
         when(rs.getLong("cod_ibge")).thenReturn(4119905L);
         when(rs.getString("nome")).thenReturn("Ponta Grossa");
         when(rs.getLong("qtd_imoveis")).thenReturn(2657L);
+        when(rs.getLong("qtd_imoveis_com_intersecao")).thenReturn(812L);
         when(rs.getDouble("area_total_ha")).thenReturn(187029.84);
         when(rs.getDouble("valor_icv")).thenReturn(27.31);
         when(rs.getDouble("valor_iae")).thenReturn(0.23);
@@ -231,6 +248,7 @@ class ConsultaIndicadoresServiceTest {
         assertThat(linha.codIbge()).isEqualTo(4119905L);
         assertThat(linha.nome()).isEqualTo("Ponta Grossa");
         assertThat(linha.qtdImoveis()).isEqualTo(2657L);
+        assertThat(linha.qtdImoveisComIntersecao()).isEqualTo(812L);
         assertThat(linha.areaTotalHa()).isEqualTo(187029.84);
         assertThat(linha.valorIcv()).isEqualTo(27.31);
         assertThat(linha.valorIae()).isEqualTo(0.23);

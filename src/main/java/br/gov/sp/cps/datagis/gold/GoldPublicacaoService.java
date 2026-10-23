@@ -49,7 +49,15 @@ public class GoldPublicacaoService {
 
     /** Camadas semeadas em gold.mapa_camada (V018) — publicadas na mesma ordem fixa. */
     private static final List<String> CODIGOS_MAPA_CAMADA = List.of(
-            "MUNICIPIO", "AREA_PROTEGIDA", "DESMATAMENTO", "EMBARGO", "IMOVEL_RURAL", "FOCO_CALOR");
+            "MUNICIPIO", "LIMITE_PR", "AREA_PROTEGIDA", "DESMATAMENTO", "EMBARGO", "IMOVEL_RURAL", "FOCO_CALOR");
+
+    /** Contorno do Paraná (V080): 1 feature só, a união dos 399 municípios. */
+    private static final String CAMADA_LIMITE_PR = "LIMITE_PR";
+
+    /** ~50 m. A união sai com ~62 mil vértices; nos 5 m padrão ficariam ~26 mil
+     *  (~1 MB pro navegador baixar), nos 50 m ~6,4 mil (medido no Oracle). É só a
+     *  moldura do mapa, a diferença não aparece. */
+    static final double TOLERANCIA_LIMITE_PR_GRAUS = 0.0005;
 
     /** Tabela Silver de origem de cada camada, só pra estimar o total no início (UX de andamento). */
     private static final Map<String, String> TABELA_SILVER_POR_CAMADA = Map.of(
@@ -74,6 +82,17 @@ public class GoldPublicacaoService {
                        SDO_UTIL.TO_WKTGEOMETRY(geometria) AS wkt, fonte_dado_id, lote_ingestao_id
                   FROM silver.municipio WHERE geometria IS NOT NULL
                  ORDER BY id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+                """,
+            // Agregado sem GROUP BY = 1 linha; o OFFSET/FETCH so existe pra seguir o
+            // mesmo laco paginado (a 2a pagina vem vazia e encerra). Sem id de origem:
+            // nao e uma linha da Silver, e a uniao de todas.
+            CAMADA_LIMITE_PR, """
+                SELECT CAST(NULL AS NUMBER) AS id, 'PR' AS cod_natural, 'Paraná' AS rotulo,
+                       CAST(NULL AS NUMBER) AS municipio_cod_ibge,
+                       SDO_UTIL.TO_WKTGEOMETRY(SDO_AGGR_UNION(SDOAGGRTYPE(geometria, 0.05))) AS wkt,
+                       MAX(fonte_dado_id) AS fonte_dado_id, MAX(lote_ingestao_id) AS lote_ingestao_id
+                  FROM silver.municipio WHERE geometria IS NOT NULL
+                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
                 """,
             "AREA_PROTEGIDA", """
                 SELECT id, codigo_origem AS cod_natural, nome AS rotulo, CAST(NULL AS NUMBER) AS municipio_cod_ibge,
@@ -305,7 +324,9 @@ public class GoldPublicacaoService {
                     int pulados = 0;
                     for (LinhaSilver linha : linhas) {
                         try {
-                            String wktSimplificado = simplificador.simplificar(linha.wkt());
+                            String wktSimplificado = CAMADA_LIMITE_PR.equals(codigoCamada)
+                                    ? simplificador.simplificarContornoExterno(linha.wkt(), TOLERANCIA_LIMITE_PR_GRAUS)
+                                    : simplificador.simplificar(linha.wkt());
                             inserirFeaturePublicada(mapaCamadaId, linha, wktSimplificado, novaVersao);
                             publicados++;
                         } catch (Exception e) {
@@ -366,7 +387,11 @@ public class GoldPublicacaoService {
                 clob.setString(1, wktSimplificado);
                 ps.setLong(1, mapaCamadaId);
                 ps.setString(2, linha.codNatural());
-                ps.setLong(3, linha.id());
+                if (linha.id() == null) {
+                    ps.setNull(3, Types.NUMERIC);
+                } else {
+                    ps.setLong(3, linha.id());
+                }
                 ps.setString(4, linha.rotulo());
                 if (linha.municipioCodIbge() == null) {
                     ps.setNull(5, Types.NUMERIC);
@@ -426,6 +451,9 @@ public class GoldPublicacaoService {
     }
 
     private Long contarTotalSilver(String codigoCamada) {
+        if (CAMADA_LIMITE_PR.equals(codigoCamada)) {
+            return 1L;
+        }
         String tabela = TABELA_SILVER_POR_CAMADA.get(codigoCamada);
         if (tabela == null) {
             return null;
@@ -533,11 +561,12 @@ public class GoldPublicacaoService {
     }
 
     private static LinhaSilver mapearLinha(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
+        Number id = (Number) rs.getObject("id");
         Number municipioCodIbge = (Number) rs.getObject("municipio_cod_ibge");
         Number fonteDadoId = (Number) rs.getObject("fonte_dado_id");
         Number loteIngestaoId = (Number) rs.getObject("lote_ingestao_id");
         return new LinhaSilver(
-                rs.getLong("id"),
+                id == null ? null : id.longValue(),
                 rs.getString("cod_natural"),
                 rs.getString("rotulo"),
                 municipioCodIbge == null ? null : municipioCodIbge.longValue(),
@@ -547,7 +576,7 @@ public class GoldPublicacaoService {
     }
 
     private record LinhaSilver(
-            long id,
+            Long id,
             String codNatural,
             String rotulo,
             Long municipioCodIbge,

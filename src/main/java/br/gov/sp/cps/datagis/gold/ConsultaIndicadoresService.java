@@ -26,6 +26,15 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ConsultaIndicadoresService {
 
+    /**
+     * Imovel que cruza alguma camada de restricao do mapa de cobertura (LIZARDS-35):
+     * area protegida (ISAP), embargo (IAE), desmatamento (IDESMAT) ou foco de calor
+     * (IFC). Qualquer sobreposicao conta, por menor que seja - decisao da task. IRL,
+     * IAPP e ICV ficam de fora: cruzar Reserva Legal, APP ou vegetacao nao e alerta.
+     */
+    static final String COM_INTERSECAO = "(NVL(i.valor_isap, 0) > 0 OR NVL(i.valor_iae, 0) > 0 "
+            + "OR NVL(i.valor_idesmat, 0) > 0 OR NVL(i.valor_ifc, 0) > 0)";
+
     private final JdbcTemplate jdbcTemplate;
     private final String goldSchema;
     private final String silverSchema;
@@ -76,6 +85,7 @@ public class ConsultaIndicadoresService {
     public List<ConsultaMunicipioResponse> listarPorMunicipio() {
         String sql = "SELECT i.municipio_cod_ibge AS cod_ibge, MAX(m.nome) AS nome, "
                 + "COUNT(*) AS qtd_imoveis, "
+                + "SUM(CASE WHEN " + COM_INTERSECAO + " THEN 1 ELSE 0 END) AS qtd_imoveis_com_intersecao, "
                 + "ROUND(SUM(NVL(i.area_ha, 0)), 2) AS area_total_ha, "
                 + mediaPonderada("valor_icv") + ", "
                 + mediaPonderada("valor_irl") + ", "
@@ -94,6 +104,7 @@ public class ConsultaIndicadoresService {
                 lerLong(rs, "cod_ibge"),
                 rs.getString("nome"),
                 rs.getLong("qtd_imoveis"),
+                rs.getLong("qtd_imoveis_com_intersecao"),
                 lerDouble(rs, "area_total_ha"),
                 lerDouble(rs, "valor_icv"),
                 lerDouble(rs, "valor_irl"),

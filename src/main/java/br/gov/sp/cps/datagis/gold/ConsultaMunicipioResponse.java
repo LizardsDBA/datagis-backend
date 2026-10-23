@@ -19,11 +19,18 @@ package br.gov.sp.cps.datagis.gold;
  * permite desconfiar do numero. Municipio com 2 imoveis e 60 mil hectares
  * avisa, sozinho,
  * que uma propriedade esta mandando na media.
+ *
+ * <p>
+ * {@code qtdImoveisComIntersecao} (mapa de cobertura, LIZARDS-35): imoveis do municipio
+ * que cruzam alguma camada de restricao - ISAP, IAE, IDESMAT ou IFC maior que zero.
+ * Vem dos indicadores, calculados sobre a geometria completa da Silver, e nao do
+ * desenho do mapa, que e simplificado (~5 m) e erraria nas sobreposicoes pequenas.
  */
 public record ConsultaMunicipioResponse(
         Long codIbge,
         String nome,
         Long qtdImoveis,
+        Long qtdImoveisComIntersecao,
         Double areaTotalHa,
         Double valorIcv,
         Double valorIrl,
