@@ -2297,6 +2297,101 @@ Branch `feat/migracao-gold` (backend e frontend). Finaliza a esteira de migraç�
   - 176 testes unitários no backend aprovados (`GoldPublicacaoServiceTest`, `MatrizAcessoTest`, etc.).
   - 140 testes unitários no frontend aprovados (`npm test` no Vitest, cobrindo `LotesView.test.js` e `goldService.test.js`).
 
+### 9.44. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
+Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
+todas as telas do sistema. A tela de login não entra: ela é do Keycloak, outro container,
+e o CSS do front não a alcança (ver o último item).
+
+- **Regra da entrega: só acrescentar.** Nenhuma variável, classe ou linha existente foi
+  renomeada ou alterada. O tema claro continua idêntico ao que era, e o escuro é uma
+  camada a mais por cima: na branch são 3.945 linhas acrescentadas contra 0 removidas em
+  relação à `sprint-2`.
+- **Mecanismo (`src/tema.js`):** o tema vive no atributo `data-tema` do `<html>`.
+  `iniciarTema()` roda no `main.js` antes de montar o app, para a tela não piscar no tema
+  errado. Vale a escolha salva no `localStorage` (chave `datagis.tema`); sem escolha
+  salva, segue `prefers-color-scheme` do sistema operacional, e o claro é o padrão. Sem
+  `localStorage` (aba anônima, bloqueio do navegador) o tema funciona igual, só não é
+  lembrado ao recarregar.
+- **Paleta (`src/style.css`):** um bloco `:root[data-tema="escuro"]` com os tokens da
+  paleta aprovada (`--cor-fundo`, `--cor-superficie`, `--cor-superficie-elevada`, três
+  níveis de borda, seis níveis de texto, primária com hover/contraste/tênue/borda,
+  `--cor-link`, cinco cores de estado e os `--tenue-*` a 12%). Um segundo bloco aponta as
+  variáveis que já existiam (`--cor-branco`, `--cor-slate-*`, `--status-*`) para essa
+  paleta, mudando só o valor e nunca o nome. Por isso telas que já usavam variáveis, como
+  Indicadores e Gold, escureceram sem alteração nenhuma; a `IndicadoresView` é a única
+  tela sem bloco escuro próprio, porque não tem cor fixa.
+- **Telas com cor fixa:** cada componente ganhou, no fim do `<style scoped>`, um bloco
+  `:root[data-tema="escuro"] .classe { ... }` que repinta só o que o claro define por cor
+  fixa. Mais de mil cores fixas foram mapeadas para os tokens conforme o papel (fundo,
+  borda, texto) e a família da cor. Uma única regra usa `!important`: a linha em edição do
+  Mapeamento de Colunas, porque a regra original do claro (`.linha-ativa`) já usa.
+- **Pegadinha do `<style scoped>`, achada na prática:** escrever
+  `:global(:root[data-tema="escuro"]) .classe` faz o Vue descartar o `.classe`, e a regra
+  vira só `:root`, pintando a página inteira. O certo é escrever
+  `:root[data-tema="escuro"] .classe` direto, e o Vue escopa só a classe. Elementos criados
+  por JavaScript, como os do Leaflet, precisam de `:deep(...)`. Na dúvida, conferir o
+  seletor no CSS gerado pelo `vite build`.
+- **Mapa sem trocar o mapa do projeto:** os tiles do OpenStreetMap continuam os mesmos; no
+  escuro só o `.leaflet-tile-pane` recebe `filter: invert(1) hue-rotate(180deg)
+  brightness(0.95) contrast(0.9)`. Os polígonos, desenhados em outra camada, mantêm as
+  cores originais. Controles, atribuição e popups do Leaflet ganharam cores da paleta via
+  `:deep()`. **[ATUALIZADO na §9.46]:** na tela Conjuntos (mapa de cobertura, LIZARDS-35)
+  o fundo do OpenStreetMap passou a um painel próprio (`.leaflet-fundo-pane`) e o filtro
+  vale só para ele, para as camadas do GeoServer manterem as cores da legenda.
+- **Botão de tema na sidebar:** lua no claro e sol no escuro, no rodapé, ao lado do Sair.
+  Com a sidebar recolhida, avatar, tema e Sair ficam empilhados. **O Sair visível com a
+  sidebar recolhida foi combinado com o Benjamin**, autor do recuo (LIZARDS-37): antes, a
+  sidebar recolhida escondia o Sair.
+- **Barra de rolagem da sidebar discreta:** fica invisível e aparece ao passar o mouse. No
+  Chrome, `scrollbar-width`/`scrollbar-color` fazem o `::-webkit-scrollbar` ser ignorado,
+  então os dois jeitos estão escritos.
+- **Campos de formulário sem classe:** uma regra global com `:where(...)` dá fundo e texto
+  escuros a `input`, `select` e `textarea`. O `:where` deixa a prioridade em zero, então
+  ela só preenche o que a tela não definiu e nunca passa por cima de regra de tela.
+- **Menus de seleção modernos, nos dois temas (a pedido, durante a task):** a lista aberta
+  do `<select>` é desenhada pelo navegador e ficava no visual do Windows. Com
+  `appearance: base-select` dentro de `@supports`, ela passa a ter cantos arredondados,
+  sombra, opções arredondadas e ✓ no item escolhido. Funciona no Chrome/Edge 135+; no
+  Firefox e no Safari o `@supports` pula o bloco e o menu fica como antes. A tela de
+  Conjuntos usa `appearance: none` com a seta própria (`.select-chevron`), então ganhou uma
+  regra própria e esconde a seta do navegador (`::picker-icon`).
+- **Defeito anterior que ficou visível no escuro:** na tabela do Mapeamento de Colunas, a
+  célula "Regras Ativas" (`.regras-tags`) usa `display: flex`, o que a tira do alinhamento
+  da linha e desloca a borda dela das outras colunas. No claro a borda é quase branca e o
+  defeito não aparece. Corrigido só no escuro (a célula volta a `table-cell` e o
+  espaçamento passa para as tags), para não alterar o claro.
+- **Testes:**
+  - `src/tema.test.js` (6 casos): preferência do sistema (escuro e claro), escolha salva
+    valendo mais que o sistema, valor salvo desconhecido ignorado, alternância gravando a
+    escolha e funcionamento sem `localStorage`.
+  - `src/components/Sidebar.test.js` (5 casos): botão de tema, alternância, ordem
+    tema/Sair, e sidebar recolhida com tema e Sair, incluindo o clique no Sair.
+  - `src/temaEscuro.test.js` (65 casos): o jsdom não aplica folha de estilo, então este
+    arquivo lê o CSS como texto. Confere cada token da paleta com o valor exato, que o
+    `:root` sem atributo continua sendo o claro, que nenhuma tela usa `:global(:root` nem
+    tem `:root[data-tema="escuro"]` solto, e que as 1.043 `var(--...)` usadas no tema
+    escuro existem no `style.css` (nome de variável digitado errado não dá erro, a cor só
+    some). Validado colocando três erros de propósito numa cópia temporária: cada um
+    derrubou o teste certo.
+  - Estado em 2026-10-21: 20 arquivos, **204 testes, 100% de sucesso**.
+- **[EM ABERTO]**
+  - **Tela de login (Keycloak).** Mudar o visual exige um tema de login do Keycloak (CSS
+    herdando o tema padrão, montado no container e ativado no realm `datagis`), tudo no
+    repositório do backend. O Keycloak não sabe qual tema o usuário escolheu no app, por
+    ser outro endereço: só pode seguir a preferência do sistema ou ter visual fixo.
+    Sugerida como task própria.
+  - **Paleta do gráfico de diagnóstico.** As cores do `DiagnosticoChart` vêm de um array
+    no JavaScript (linha 37) e o CSS não as alcança; o cinza `#475569` fica apagado no
+    escuro.
+  - **401 ao dar F5 em `/conjuntos`.** Já acontecia antes desta branch: o proxy do Vite
+    manda `^/conjuntos($|/)` para o backend, e recarregar a tela nesse endereço cai no
+    backend em vez da SPA. **[RESOLVIDO na §9.46]:** corrigido no `vite.config.js` pela
+    LIZARDS-35.
+  - **Telas novas precisam do bloco escuro.** Tela que use só as variáveis do `style.css`
+    já nasce coberta; tela com cor fixa precisa do seu bloco `:root[data-tema="escuro"]`.
+    O `temaEscuro.test.js` passa a conferir automaticamente as regras acima em qualquer
+    componente novo que tenha tema escuro.
+
 ### 9.45. Mapa de cobertura — backend (banco, GeoServer e proxy) — **[FEITO e validado contra o Oracle real, 2026-10-20, `LIZARDS-35`]**
 Branch `feat/mapa-cobertura`, a partir da `sprint-2`. A tela está na §9.46.
 
