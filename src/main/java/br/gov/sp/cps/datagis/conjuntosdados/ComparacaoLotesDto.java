@@ -17,6 +17,8 @@ public record ComparacaoLotesDto(
         LocalDateTime dataLoteAnterior,
         Long fonteDadoId,
         String fonteDadoNome,
+        /** Campo do payload usado para parear os registros (ex.: {@code cod_imovel}). */
+        String campoChave,
         boolean loteAnteriorEncontrado,
         String mensagem,
         ResumoLotes resumo,
@@ -40,6 +42,8 @@ public record ComparacaoLotesDto(
     }
 
     public record DiferencaRegistro(
+            /** Valor da chave natural do registro (ex.: o código CAR); nulo se o payload não tiver. */
+            String chave,
             Long registroBrutoIdAtual,
             Long registroBrutoIdAnterior,
             Integer numeroLinhaAtual,
@@ -57,7 +61,7 @@ public record ComparacaoLotesDto(
             Long loteAtualId, LocalDateTime dataAtual, Long fonteDadoId, String fonteDadoNome) {
         return new ComparacaoLotesDto(
                 loteAtualId, dataAtual, null, null, fonteDadoId, fonteDadoNome,
-                false,
+                null, false,
                 "Este é o primeiro lote da fonte — não há lote anterior para comparar.",
                 new ResumoLotes(0, 0, 0, 0, 0, 0),
                 List.of(), 0, 0, 0);
