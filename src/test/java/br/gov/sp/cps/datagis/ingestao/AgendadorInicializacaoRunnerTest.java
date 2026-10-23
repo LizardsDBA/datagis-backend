@@ -40,7 +40,7 @@ class AgendadorInicializacaoRunnerTest {
     @Test
     void deveCriarTriggerQuandoAindaNaoExiste() throws SchedulerException {
         AgendadorInicializacaoRunner runner = new AgendadorInicializacaoRunner(fonteDadoRepository,
-                new AgendamentoFonteService(scheduler));
+                new AgendamentoFonteService(scheduler, fonteDadoRepository, "America/Sao_Paulo"));
         FonteDado fonte = FonteDado.builder().id(1L).nome("CAR").cronExpressao("0 0 4 1 * ?").build();
         when(fonteDadoRepository.findByAtivoTrueAndCronExpressaoIsNotNull()).thenReturn(List.of(fonte));
         when(scheduler.checkExists(any(TriggerKey.class))).thenReturn(false);
@@ -60,7 +60,7 @@ class AgendadorInicializacaoRunnerTest {
     @Test
     void deveAtualizarTriggerQuandoJaExiste() throws SchedulerException {
         AgendadorInicializacaoRunner runner = new AgendadorInicializacaoRunner(fonteDadoRepository,
-                new AgendamentoFonteService(scheduler));
+                new AgendamentoFonteService(scheduler, fonteDadoRepository, "America/Sao_Paulo"));
         FonteDado fonte = FonteDado.builder().id(2L).nome("IBAMA").cronExpressao("0 0 3 ? * MON").build();
         when(fonteDadoRepository.findByAtivoTrueAndCronExpressaoIsNotNull()).thenReturn(List.of(fonte));
         when(scheduler.checkExists(any(TriggerKey.class))).thenReturn(true);
@@ -74,7 +74,7 @@ class AgendadorInicializacaoRunnerTest {
     @Test
     void naoDeveAgendarNadaQuandoNaoHaFontesAgendaveis() throws SchedulerException {
         AgendadorInicializacaoRunner runner = new AgendadorInicializacaoRunner(fonteDadoRepository,
-                new AgendamentoFonteService(scheduler));
+                new AgendamentoFonteService(scheduler, fonteDadoRepository, "America/Sao_Paulo"));
         when(fonteDadoRepository.findByAtivoTrueAndCronExpressaoIsNotNull()).thenReturn(List.of());
 
         runner.run(args);
@@ -86,7 +86,7 @@ class AgendadorInicializacaoRunnerTest {
     @Test
     void deveAgendarVariasFontesNaMesmaExecucao() throws SchedulerException {
         AgendadorInicializacaoRunner runner = new AgendadorInicializacaoRunner(fonteDadoRepository,
-                new AgendamentoFonteService(scheduler));
+                new AgendamentoFonteService(scheduler, fonteDadoRepository, "America/Sao_Paulo"));
         FonteDado fonteA = FonteDado.builder().id(1L).nome("CAR").cronExpressao("0 0 4 1 * ?").build();
         FonteDado fonteB = FonteDado.builder().id(2L).nome("IBAMA").cronExpressao("0 0 3 ? * MON").build();
         when(fonteDadoRepository.findByAtivoTrueAndCronExpressaoIsNotNull()).thenReturn(List.of(fonteA, fonteB));
@@ -100,7 +100,7 @@ class AgendadorInicializacaoRunnerTest {
     @Test
     void devePropagarSchedulerExceptionAoFalharAgendamento() throws SchedulerException {
         AgendadorInicializacaoRunner runner = new AgendadorInicializacaoRunner(fonteDadoRepository,
-                new AgendamentoFonteService(scheduler));
+                new AgendamentoFonteService(scheduler, fonteDadoRepository, "America/Sao_Paulo"));
         FonteDado fonte = FonteDado.builder().id(3L).nome("INPE").cronExpressao("0 0 2 * * ?").build();
         when(fonteDadoRepository.findByAtivoTrueAndCronExpressaoIsNotNull()).thenReturn(List.of(fonte));
         when(scheduler.checkExists(any(TriggerKey.class))).thenThrow(new SchedulerException("falha simulada"));

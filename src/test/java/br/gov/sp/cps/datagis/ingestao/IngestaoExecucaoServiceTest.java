@@ -127,4 +127,30 @@ class IngestaoExecucaoServiceTest {
 
         org.mockito.Mockito.verifyNoInteractions(executor);
     }
+
+    /**
+     * LIZARDS-54: na execução agendada (ou em segundo plano) não há tela esperando a
+     * exceção - o motivo do bloqueio tem que ficar gravado na fonte, e ela não pode
+     * continuar marcada como "em andamento", senão nenhuma execução nova é aceita.
+     */
+    @Test
+    void deveRegistrarErroELiberarAFonteQuandoOMapeamentoBarrarAExecucao() {
+        FonteDado fonte = FonteDado.builder().id(6L).nome("Fonte Barrada").build();
+        when(fonteDadoRepository.findById(6L)).thenReturn(Optional.of(fonte));
+        when(fonteDadoRepository.save(any(FonteDado.class))).thenAnswer(chamada -> chamada.getArgument(0));
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("nenhuma tabela Silver foi configurada"))
+                .when(validacaoMapeamentoService).validarParaIngestao(fonte);
+        ProgressoExecucaoRegistry progresso = new ProgressoExecucaoRegistry();
+
+        IngestaoExecucaoService service =
+                new IngestaoExecucaoService(fonteDadoRepository, List.of(executor), armazenamento, progresso, validacaoMapeamentoService);
+
+        assertThatThrownBy(() -> service.executar(6L)).isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(fonte.getUltimoStatusExecucao()).isEqualTo("ERRO");
+        assertThat(fonte.getUltimoErroMensagem())
+                .isEqualTo("IllegalArgumentException: nenhuma tabela Silver foi configurada");
+        assertThat(progresso.isExecutando(6L)).isFalse();
+        org.mockito.Mockito.verifyNoInteractions(executor);
+    }
 }
