@@ -12,6 +12,9 @@ import tools.jackson.databind.ObjectMapper;
  * passando a "fotografia" do registro antes e depois (mapa simples, sem senha nem segredo).
  * O valor fica na propria requisicao HTTP e o {@link FiltroAuditoria} grava junto com a
  * linha do log. Fora de uma requisicao (job agendado, teste) a chamada nao faz nada.
+ *
+ * <p>Antes e depois iguais (ex.: salvou os perfis sem mudar nenhum) nao sao gravados: a acao
+ * continua no log, so sem o antes/depois, para nao aparecer "Nenhum campo mudou".
  */
 public final class MudancaAuditada {
 
@@ -32,10 +35,13 @@ public final class MudancaAuditada {
         if (atributos == null) {
             return;
         }
-        atributos.setAttribute(ATRIBUTO_ANTES, antes == null ? null : JSON.writeValueAsString(antes),
-                RequestAttributes.SCOPE_REQUEST);
-        atributos.setAttribute(ATRIBUTO_DEPOIS, depois == null ? null : JSON.writeValueAsString(depois),
-                RequestAttributes.SCOPE_REQUEST);
+        String antesJson = antes == null ? null : JSON.writeValueAsString(antes);
+        String depoisJson = depois == null ? null : JSON.writeValueAsString(depois);
+        if (antesJson != null && antesJson.equals(depoisJson)) {
+            return;
+        }
+        atributos.setAttribute(ATRIBUTO_ANTES, antesJson, RequestAttributes.SCOPE_REQUEST);
+        atributos.setAttribute(ATRIBUTO_DEPOIS, depoisJson, RequestAttributes.SCOPE_REQUEST);
     }
 
     static String antes(HttpServletRequest request) {
