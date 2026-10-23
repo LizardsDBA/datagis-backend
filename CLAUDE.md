@@ -1434,7 +1434,7 @@ Branch `feat/servico-de-ingestao`. Liga de verdade a decisão do §3.2. Resumo:
   desativada ou perde o cron — foram corrigidos pelo `fix<LIZARDS-10>`.
 - **[EM ABERTO]**
   - `proxima_execucao_em` ainda não é preenchida (dá pra obter de
-    `trigger.getNextFireTime()`).
+    `trigger.getNextFireTime()`). **[RESOLVIDO na §9.47]**
 
 ### 9.29. Cadastro de Fontes em Modal e Exibição do Agendamento na Listagem (Frontend) — [FEITO, 2026-09-23, `LIZARDS-11`]
 Repositório `datagis-frontend`, branch `feat/tela-upload-status` (nome herdado do título
@@ -1473,7 +1473,7 @@ disparar.
 - **Validação ao vivo (2026-09-23):** com o backend de pé, editar o cron da fonte 5 pela tela gerou `Trigger atualizado para a fonte 5 (IAT/PR - Embargos IBAMA), cron = 0 0 5 ? * MON` na thread `nio-8080-exec-2` — ou seja, dentro da requisição HTTP, quase dois minutos depois da subida. Antes deste fix, salvar pela tela não produzia log nenhum do agendador.
 - **[EM ABERTO]**
   - O `sincronizar` roda fora de transação com o `save`. Se a gravação for desfeita depois, o trigger continua lá. Não acontece hoje (o `FonteDadoService` não é `@Transactional`, cada `save` commita sozinho), mas vira problema se alguém envolver o cadastro numa transação maior.
-  - `proxima_execucao_em` continua sem ser preenchida (§9.28).
+  - `proxima_execucao_em` continua sem ser preenchida (§9.28). **[RESOLVIDO na §9.47]**
 
 ### 10.4-bis. Estado atual (2026-09-14)
 - **Branch de trabalho corrente:** `feat/regras-para-vallidacao` (backend) e `sprint-1` (frontend).
@@ -2568,6 +2568,63 @@ Depende da §9.45.
     tela — é o problema de zero × não declarado da §9.40.
   - **Um alerta falso de IAE** (`PR-4119905-97E4…`) por geometria inválida na Silver —
     ver §9.45. A tela mostra o que o indicador diz; a correção é no cálculo.
+
+### 9.47. Agendamento automático das fontes de volta ao funcionamento — backend — **[FEITO e validado contra o Oracle real, 2026-10-23, `LIZARDS-54`]**
+Branch `feat/agendamento-fontes`, a partir da `sprint-2`. A parte da tela (ligar/desligar a
+atualização automática) é a LIZARDS-55.
+
+- **"Restaurar" quer dizer o agendamento funcionando, não horários fixos.** Nenhuma
+  migration devolve os crons da antiga `V035`: as fontes continuam nascendo "Somente
+  manual" (decisão da §9.35) e a frequência de cada uma é escolhida na tela, que sempre foi
+  o desenho (§3.2, §9.30). Quem quiser a fonte atualizando sozinha liga pela tela.
+- **Teste do Quartz consertado (`IngestaoAgendadaOracleIT`).** Quebrou com o bloqueio de
+  mapeamento da LIZARDS-49: a fonte falsa do teste não tinha tabela Silver nem colunas
+  mapeadas e era barrada antes de rodar. Ganhou `entidade_silver = foco_calor` e o
+  mapeamento mínimo (`id` → `identificador_origem` e a geometria), igual aos focos do INPE
+  na `V079`. Não era a ingestão em segundo plano da LIZARDS-29: o job do Quartz chama o
+  `executar` síncrono, que continua o mesmo.
+- **Fonte barrada grava o erro e não fica travada.** Em `IngestaoExecucaoService.executar`
+  a validação do mapeamento e a escolha do executor passaram para dentro do `try`. Antes,
+  o bloqueio era lançado antes de qualquer registro: na execução agendada o motivo ficava
+  só no log, e na execução manual em segundo plano (o botão chama `progresso.iniciar` e
+  depois `executarAssincrono`) o progresso nunca terminava — a fonte ficava "em andamento"
+  para sempre e todo clique seguinte recebia "já está com uma execução em andamento", até
+  reiniciar o backend. Agora fica `ERRO` com a mensagem do bloqueio na "Última execução".
+- **Fuso de Brasília no agendamento.** O container do backend roda em UTC e o
+  `CronTrigger` era criado sem fuso: "todo dia às 3:00" disparava às 3:00 UTC, meia-noite
+  em Brasília. `AgendamentoFonteService` aplica `inTimeZone` com
+  `app.agendamento.fuso=America/Sao_Paulo` (configurável). Os triggers são recriados na
+  subida pelo `AgendadorInicializacaoRunner`, então um agendamento antigo passa a valer no
+  fuso novo sem intervenção.
+- **Próxima execução preenchida.** `fonte_dado.proxima_execucao_em` existia desde a
+  `V001`, mas nunca era gravada (pendência da §9.28 e da §9.30). Agora é gravada ao
+  agendar (data devolvida pelo `scheduleJob`/`rescheduleJob`), limpa ao remover o
+  agendamento e atualizada depois de cada disparo. A API de fontes devolve
+  `proximaExecucaoEm`, inclusive na resposta do próprio salvar. A gravação é um `UPDATE`
+  só dessa coluna (`FonteDadoRepository.atualizarProximaExecucao`), e não um `save` da
+  fonte inteira, para não sobrescrever o resultado que a execução acabou de gravar.
+- **Datas no fuso do servidor (UTC).** Os containers (backend, Oracle e frontend) rodam em
+  UTC e todas as datas gravadas pelo sistema (`ultima_execucao_em`, `data_add`, lotes,
+  auditoria...) ficam em UTC sem indicar o fuso; a tela as exibe como se fossem de
+  Brasília, ou seja, 3 horas adiantadas. A `proxima_execucao_em` segue o mesmo padrão, de
+  propósito, para a tela não misturar dois fusos: com "todo dia às 03:00" a fonte roda às
+  3:00 de Brasília, mas a próxima execução aparece como 06:00, como as outras datas. Ajustar
+  o fuso dos containers (variável `TZ` no compose e na JVM, mais o histórico já gravado em
+  UTC) fica para um fix próprio.
+- **Uma execução por fonte de cada vez.** `IngestaoAgendadaJob` ganhou
+  `@DisallowConcurrentExecution` (o job é um por fonte, então o disparo seguinte espera o
+  anterior) e pula o disparo quando a mesma fonte já está rodando por outro caminho
+  (`ProgressoExecucaoRegistry.isExecutando`, o mesmo controle do botão da tela). Sem isso,
+  um horário que coincidisse com uma execução manual, ou uma fonte lenta como o CAR com
+  intervalo curto, gravava lotes em dobro.
+- **Testes:** `IngestaoAgendadaOracleIT` (Oracle real) passa e agora também confere que o
+  trigger dispara às 3:00 de Brasília e que a próxima execução fica gravada na fonte;
+  `AgendamentoFonteServiceTest` +3 (fuso, próxima execução gravada, limpa ao remover);
+  `IngestaoExecucaoServiceTest` +1 (fonte barrada grava o erro e sai do "em andamento"); `IngestaoAgendadaJobTest` novo (4:
+  executa e grava a próxima, pula se já está rodando, grava a próxima mesmo com falha, não
+  roda em paralelo). As 10 chamadas do construtor do `AgendamentoFonteService` nos testes
+  ganharam os 2 parâmetros novos. Suíte completa: **752 testes, 0 falhas**, só o erro
+  conhecido do `DatagisApplicationTests` (§9.3).
 
 ---
 
