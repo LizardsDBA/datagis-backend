@@ -260,7 +260,7 @@ Validar na fatia de cálculo.
 > desenha); **(3)** detalhe congelado por imóvel (`imovel_publicado` + `sobreposicao_
 > publicada`, com `geometria_intersecao` em precisão total — artefato de auditoria).
 > **O portal lê só a Gold, nunca a Silver.** O mapa lê as camadas pelas views
-> `gold.vw_mapa_*` (V080), que já filtram a última publicação concluída (§9.43).
+> `gold.vw_mapa_*` (V080), que já filtram a última publicação concluída (§9.45).
 
 **`hash_versao` — [RESOLVIDO, 2026-10-04]:** implementado em `pkg_gold_publicacao.
 registrar_resultado` exatamente como proposto em `docs/gold-procedures-calculo-
@@ -527,7 +527,7 @@ Dev roda **3 containers via `docker compose`**: `oracle` + `backend` + `frontend
 **Desde 2026-10-12 são 4**: entrou o `keycloak` (login/RBAC, porta 8180 — §9.39).
 **Desde 2026-10-20 são 5** (+ 1 que roda e termina): entrou o `geoserver` (mapa de
 cobertura, painel em `127.0.0.1:8085`) e o `geoserver-config`, que configura o GeoServer
-pela API REST e sai (§9.43).
+pela API REST e sai (§9.45).
 Testado em 2026-09-02 no WSL: os 3 sobem, Oracle fica `healthy`, backend conecta e
 migra Flyway em `CONTROLE`, `curl localhost:8080/actuator/health` → `200 UP`, Vite serve
 em `localhost:5173` e o proxy `/api` alcança o backend pela rede Docker.
@@ -2243,13 +2243,62 @@ criadas pela `V077`; sem elas o IFC é desenhado em escala percentual.
     possui `indicador:visualizar`.
   - **Interseção com a LIZARDS-35 (visualização em mapa).** Ambas as tarefas alteram
     `Sidebar.vue` e `router/index.js`; convém alinhar a ordem de merge para evitar conflito
-    nesses dois arquivos. **[RESOLVIDO na §9.44]:** o mapa entrou dentro da tela
+    nesses dois arquivos. **[RESOLVIDO na §9.46]:** o mapa entrou dentro da tela
     Conjuntos e Cobertura e não mexe no `router/index.js`. Em 2026-10-22 a LIZARDS-35
     passou a mexer no `Sidebar.vue`: o item "Indicadores e Resultados" saiu do menu (a
-    tela abre pela Conjuntos e Cobertura, ver §9.44).
+    tela abre pela Conjuntos e Cobertura, ver §9.46).
 
-### 9.43. Mapa de cobertura — backend (banco, GeoServer e proxy) — **[FEITO e validado contra o Oracle real, 2026-10-20, `LIZARDS-35`]**
-Branch `feat/mapa-cobertura`, a partir da `sprint-2`. A tela está na §9.44.
+### 9.42. Mapeamento guiado por tabela Silver, bloqueio preventivo de ingestão e revalidação estrita em Quarentena — **[FEITO, 2026-10-18, `LIZARDS-49`]**
+Branch `feat/mapeamento-quarentena` (backend e frontend). Evolui a governança de mapeamento de colunas, previne a execução de ingestões sem configuração prévia e fecha brechas no fluxo de liberação de lotes retidos na Quarentena.
+
+- **Catálogo guiado por tabela Silver (`CatalogoSilverService`):**
+  - O endpoint `GET /api/fontes/{id}/catalogo-silver` expõe a lista de colunas canônicas da tabela Silver correspondente à fonte (`fonte.entidadeSilver`), orientando o usuário sobre os atributos disponíveis.
+  - Elimina a poluição de campos de tabelas não correlacionadas no modal de mapeamento e restringe o cadastro ao domínio de persistência da fonte.
+  - Campos autogerados pelo sistema (`orgao`, `tipo_area_protegida`, `unidade_federativa`) foram removidos do catálogo e do select de destino, pois sua resolução é gerenciada internamente pela esteira de persistência.
+  - No frontend (`ModalMapeamentoColunas.vue`), a interface foi aprimorada com filtros, busca textual, badges de obrigatoriedade e contador dinâmico de preenchimento.
+- **Filtro contextual de domínios de referência:**
+  - O seletor de tabela de referência (`tabelaReferencia` para `ValidadorDominio`) passou a listar apenas domínios compatíveis com a entidade mapeada, prevenindo que colunas de áreas protegidas apontassem para domínios de imóveis rurais (ex.: `situacao_imovel`).
+- **Bloqueio preventivo de ingestão por mapeamento incompleto:**
+  - O serviço de execução de ingestão (`IngestaoExecucaoService`) passou a validar preventivamente se a fonte possui todas as colunas obrigatórias mapeadas antes de iniciar a extração (seja por requisição manual `POST /api/fontes/{id}/executar` ou pelo Quartz via `IngestaoAgendadaJob`).
+  - Fontes sem mapeamento das colunas obrigatórias da entidade Silver são imediatamente barradas com `MapeamentoIncompletoException` (HTTP 422), impedindo o desperdício de recursos e a geração de lotes destinados ao descarte imediato.
+- **Revalidação estrita All-or-Nothing ao liberar lote em Quarentena:**
+  - O endpoint de liberação de lote (`POST /api/quarentena/lotes/{id}/liberar`) foi refatorado em `TransicaoBronzeSilverService`: em vez de promover cegamente os registros não descartados, o método revalida o lote contra as regras vigentes do motor de validação.
+  - Caso ainda existam inconsistências não resolvidas pelo analista, a transição é bloqueada, o lote é mantido no status `RETIDO_QUARENTENA` e é retornada mensagem informativa ao usuário.
+- **Correção da migração dinâmica por coluna:**
+  - Ajustada a leitura de colunas dinâmicas em tempo de execução: o de-para agora respeita com precisão o tipo de destino configurado (`COLUNA`, `JSON` ou `GEOMETRIA`), eliminando gaps onde colunas canônicas mapeadas eram desconsideradas na montagem das entidades da camada Silver.
+- **Testes e cobertura:**
+  - Novos testes adicionados para `CatalogoSilverServiceTest`, `IngestaoExecucaoServiceTest` (cenários com bloqueio e liberação de mapeamento), e cenários de revalidação no `TransicaoBronzeSilverServiceTest`. Backend 100% aprovado; testes unitários do frontend (`ModalMapeamentoColunas.test.js`) atualizados.
+
+### 9.43. Seeds canônicas, flexibilização do bloqueio Silver (apenas NOT NULL) e migração Gold via botão único — **[FEITO, 2026-10-20, `LIZARDS-29`]**
+Branch `feat/migracao-gold` (backend e frontend). Finaliza a esteira de migração de dados consolidada para a camada Gold, automatiza o catálogo de de-para para todas as fontes e refina o bloqueio de ingestão para alinhar-se à nulabilidade física da camada Silver.
+
+- **Seeds canônicas de mapeamento para as 18 fontes (`V078`):**
+  - Migration `V078__seed_mapeamentos_completos_todas_fontes.sql` popula o de-para completo de todas as 18 fontes ativas do DataGIS em `controle.mapeamento_coluna`, com base no inventário canônico de `docs/estudo_mapeamento_fontes_silver.md`.
+  - Garante que, na inicialização do sistema, nenhuma das 18 fontes padrão caia no bloqueio preventivo de ingestão por ausência de mapeamento.
+- **Flexibilização do bloqueio preventivo (apenas colunas NOT NULL):**
+  - Revisão da regra de obrigatoriedade no `CatalogoSilverService` e `IngestaoExecucaoService`: o bloqueio prévio de ingestão restringe-se exclusivamente a colunas que possuam restrição relacional `NOT NULL` no schema físico da camada Silver (`coluna.obrigatorio = true`).
+  - Colunas opcionais na Silver (por exemplo `situacao_imovel` em `imovel_rural`, `area_km2` em `municipio`, etc.) não bloqueiam mais a ingestão caso não estejam mapeadas.
+  - Em `area_protegida`, `categoria_area_protegida` permanece com obrigatoriedade estrita (`Sim`), pois a coluna `tipo_area_protegida_id` na Silver é `NOT NULL` e é derivada da categoria.
+  - Campos autogerados (`orgao`, `tipo_area_protegida`, `unidade_federativa`) mantêm-se excluídos da seleção manual de mapeamento e não afetam o cálculo de pendências.
+- **Arquitetura de publicação Gold: Botão Único Global vs. Migração por Lote:**
+  - A publicação para a camada Gold é, por definição arquitetural, uma operação global, versionada e *set-based*. Migrar por lote individual gerava inconsistências parciais nos recortes de mapa e concorrência sobre as camadas cartográficas compartilhadas.
+  - Remoção de todo o código legado de migração por lote (`POST /api/gold/lotes/{id}/publicar` e recálculo fragmentado por lote em `LoteDto.java`, `GoldPublicacaoController.java` e `GoldPublicacaoService.java`).
+  - A publicação é disparada exclusivamente pelo botão global "Migrar para Gold" na tela de Gestão de Lotes (`LotesView.vue`), chamando `POST /api/gold/publicar` (sem parâmetros de lote).
+  - O fluxo orquestrado pelo `GoldPublicacaoService`:
+    1. Lê todos os imóveis da Silver (`SELECT cod_imovel FROM silver.imovel_rural`);
+    2. Executa em lote as procedures PL/SQL para recálculo dos 7 indicadores (`pkg_calculo_territorial`, `pkg_calculo_ambiental`, `pkg_calculo_conservacao`) e publica o detalhe congelado em `gold.imovel_publicado`;
+    3. Publica as 6 camadas cartográficas unificadas no bloco de mapas da Gold (`gold.publicacao_camada_mapa`);
+    4. Atualiza atomicamente todos os lotes que estavam com status `PROMOVIDO_SILVER` para `PROMOVIDO_GOLD` (`UPDATE controle.lote_ingestao SET status = 'PROMOVIDO_GOLD' WHERE status = 'PROMOVIDO_SILVER'`).
+- **Feedback em tempo real e resiliência no Frontend:**
+  - Endpoint `GET /api/gold/publicar/status` fornece monitoramento de status assíncrono.
+  - O componente `LotesView.vue` exibe modal com barra de progresso animada e stepper de 4 etapas durante a migração, com polling a cada 2s até a finalização.
+  - Tratamento de erro resiliente: falhas parciais em geometrias pontuais são registradas sem abortar o processamento do restante do conjunto de dados.
+- **Suíte de testes:**
+  - 176 testes unitários no backend aprovados (`GoldPublicacaoServiceTest`, `MatrizAcessoTest`, etc.).
+  - 140 testes unitários no frontend aprovados (`npm test` no Vitest, cobrindo `LotesView.test.js` e `goldService.test.js`).
+
+### 9.45. Mapa de cobertura — backend (banco, GeoServer e proxy) — **[FEITO e validado contra o Oracle real, 2026-10-20, `LIZARDS-35`]**
+Branch `feat/mapa-cobertura`, a partir da `sprint-2`. A tela está na §9.46.
 
 - **Objetivo:** mostrar no mapa a situação de um município ou imóvel do Paraná — os 7
   indicadores e o aviso de interseção com as camadas de alerta. Decisões do usuário: o mapa
@@ -2355,9 +2404,9 @@ Branch `feat/mapa-cobertura`, a partir da `sprint-2`. A tela está na §9.44.
     `configurar.sh`, um `.sld`, e preencher `camada` em `CAMADAS_INDICADOR` da tela. O aviso
     desses 3 indicadores já funciona sem a camada, porque vem do valor.
 
-### 9.44. Mapa de cobertura — frontend — **[FEITO e validado no navegador, 2026-10-20, `LIZARDS-35`]**
+### 9.46. Mapa de cobertura — frontend — **[FEITO e validado no navegador, 2026-10-20, `LIZARDS-35`]**
 Repositório `datagis-frontend`, branch `feat/mapa-cobertura`, a partir da `sprint-2`.
-Depende da §9.43.
+Depende da §9.45.
 
 - **Tela Conjuntos e Cobertura (`ConjuntosView.vue`) reescrita como o mapa.** A lista de
   conjuntos e o formulário "Novo Conjunto" saíram (decisão do usuário; o `POST /conjuntos`
@@ -2377,7 +2426,7 @@ Depende da §9.43.
   dado aqui; a classificação por faixa fica na tela Indicadores e Resultados). Geral = média ponderada pela área (mesma conta do backend).
   **Interseções:** geral e município = `qtdImoveisComIntersecao` do backend; imóvel = quantas
   camadas de alerta ele cruza. O título mostra a data da última publicação dos indicadores.
-- **Aviso de interseção vem do valor do indicador** (decisão da §9.43): restrição (ISAP,
+- **Aviso de interseção vem do valor do indicador** (decisão da §9.45): restrição (ISAP,
   IAE, IDESMAT, IFC) alerta se > 0; IRL alerta se = 0 (sem Reserva Legal declarada); IAPP e
   ICV são informativos. Indicador nulo aparece como "Indicador não calculado", nunca como
   alerta. O GeoServer só destaca no mapa as feições que cruzam (`INTERSECTS` +
@@ -2518,56 +2567,7 @@ Depende da §9.43.
     Vegetação Nativa: o aviso diz "4.611 imóveis sem Reserva Legal declarada". Não é erro da
     tela — é o problema de zero × não declarado da §9.40.
   - **Um alerta falso de IAE** (`PR-4119905-97E4…`) por geometria inválida na Silver —
-    ver §9.43. A tela mostra o que o indicador diz; a correção é no cálculo.
-
-### 9.42. Mapeamento guiado por tabela Silver, bloqueio preventivo de ingestão e revalidação estrita em Quarentena — **[FEITO, 2026-10-18, `LIZARDS-49`]**
-Branch `feat/mapeamento-quarentena` (backend e frontend). Evolui a governança de mapeamento de colunas, previne a execução de ingestões sem configuração prévia e fecha brechas no fluxo de liberação de lotes retidos na Quarentena.
-
-- **Catálogo guiado por tabela Silver (`CatalogoSilverService`):**
-  - O endpoint `GET /api/fontes/{id}/catalogo-silver` expõe a lista de colunas canônicas da tabela Silver correspondente à fonte (`fonte.entidadeSilver`), orientando o usuário sobre os atributos disponíveis.
-  - Elimina a poluição de campos de tabelas não correlacionadas no modal de mapeamento e restringe o cadastro ao domínio de persistência da fonte.
-  - Campos autogerados pelo sistema (`orgao`, `tipo_area_protegida`, `unidade_federativa`) foram removidos do catálogo e do select de destino, pois sua resolução é gerenciada internamente pela esteira de persistência.
-  - No frontend (`ModalMapeamentoColunas.vue`), a interface foi aprimorada com filtros, busca textual, badges de obrigatoriedade e contador dinâmico de preenchimento.
-- **Filtro contextual de domínios de referência:**
-  - O seletor de tabela de referência (`tabelaReferencia` para `ValidadorDominio`) passou a listar apenas domínios compatíveis com a entidade mapeada, prevenindo que colunas de áreas protegidas apontassem para domínios de imóveis rurais (ex.: `situacao_imovel`).
-- **Bloqueio preventivo de ingestão por mapeamento incompleto:**
-  - O serviço de execução de ingestão (`IngestaoExecucaoService`) passou a validar preventivamente se a fonte possui todas as colunas obrigatórias mapeadas antes de iniciar a extração (seja por requisição manual `POST /api/fontes/{id}/executar` ou pelo Quartz via `IngestaoAgendadaJob`).
-  - Fontes sem mapeamento das colunas obrigatórias da entidade Silver são imediatamente barradas com `MapeamentoIncompletoException` (HTTP 422), impedindo o desperdício de recursos e a geração de lotes destinados ao descarte imediato.
-- **Revalidação estrita All-or-Nothing ao liberar lote em Quarentena:**
-  - O endpoint de liberação de lote (`POST /api/quarentena/lotes/{id}/liberar`) foi refatorado em `TransicaoBronzeSilverService`: em vez de promover cegamente os registros não descartados, o método revalida o lote contra as regras vigentes do motor de validação.
-  - Caso ainda existam inconsistências não resolvidas pelo analista, a transição é bloqueada, o lote é mantido no status `RETIDO_QUARENTENA` e é retornada mensagem informativa ao usuário.
-- **Correção da migração dinâmica por coluna:**
-  - Ajustada a leitura de colunas dinâmicas em tempo de execução: o de-para agora respeita com precisão o tipo de destino configurado (`COLUNA`, `JSON` ou `GEOMETRIA`), eliminando gaps onde colunas canônicas mapeadas eram desconsideradas na montagem das entidades da camada Silver.
-- **Testes e cobertura:**
-  - Novos testes adicionados para `CatalogoSilverServiceTest`, `IngestaoExecucaoServiceTest` (cenários com bloqueio e liberação de mapeamento), e cenários de revalidação no `TransicaoBronzeSilverServiceTest`. Backend 100% aprovado; testes unitários do frontend (`ModalMapeamentoColunas.test.js`) atualizados.
-
-### 9.43. Seeds canônicas, flexibilização do bloqueio Silver (apenas NOT NULL) e migração Gold via botão único — **[FEITO, 2026-10-20, `LIZARDS-29`]**
-Branch `feat/migracao-gold` (backend e frontend). Finaliza a esteira de migração de dados consolidada para a camada Gold, automatiza o catálogo de de-para para todas as fontes e refina o bloqueio de ingestão para alinhar-se à nulabilidade física da camada Silver.
-
-- **Seeds canônicas de mapeamento para as 18 fontes (`V078`):**
-  - Migration `V078__seed_mapeamentos_completos_todas_fontes.sql` popula o de-para completo de todas as 18 fontes ativas do DataGIS em `controle.mapeamento_coluna`, com base no inventário canônico de `docs/estudo_mapeamento_fontes_silver.md`.
-  - Garante que, na inicialização do sistema, nenhuma das 18 fontes padrão caia no bloqueio preventivo de ingestão por ausência de mapeamento.
-- **Flexibilização do bloqueio preventivo (apenas colunas NOT NULL):**
-  - Revisão da regra de obrigatoriedade no `CatalogoSilverService` e `IngestaoExecucaoService`: o bloqueio prévio de ingestão restringe-se exclusivamente a colunas que possuam restrição relacional `NOT NULL` no schema físico da camada Silver (`coluna.obrigatorio = true`).
-  - Colunas opcionais na Silver (por exemplo `situacao_imovel` em `imovel_rural`, `area_km2` em `municipio`, etc.) não bloqueiam mais a ingestão caso não estejam mapeadas.
-  - Em `area_protegida`, `categoria_area_protegida` permanece com obrigatoriedade estrita (`Sim`), pois a coluna `tipo_area_protegida_id` na Silver é `NOT NULL` e é derivada da categoria.
-  - Campos autogerados (`orgao`, `tipo_area_protegida`, `unidade_federativa`) mantêm-se excluídos da seleção manual de mapeamento e não afetam o cálculo de pendências.
-- **Arquitetura de publicação Gold: Botão Único Global vs. Migração por Lote:**
-  - A publicação para a camada Gold é, por definição arquitetural, uma operação global, versionada e *set-based*. Migrar por lote individual gerava inconsistências parciais nos recortes de mapa e concorrência sobre as camadas cartográficas compartilhadas.
-  - Remoção de todo o código legado de migração por lote (`POST /api/gold/lotes/{id}/publicar` e recálculo fragmentado por lote em `LoteDto.java`, `GoldPublicacaoController.java` e `GoldPublicacaoService.java`).
-  - A publicação é disparada exclusivamente pelo botão global "Migrar para Gold" na tela de Gestão de Lotes (`LotesView.vue`), chamando `POST /api/gold/publicar` (sem parâmetros de lote).
-  - O fluxo orquestrado pelo `GoldPublicacaoService`:
-    1. Lê todos os imóveis da Silver (`SELECT cod_imovel FROM silver.imovel_rural`);
-    2. Executa em lote as procedures PL/SQL para recálculo dos 7 indicadores (`pkg_calculo_territorial`, `pkg_calculo_ambiental`, `pkg_calculo_conservacao`) e publica o detalhe congelado em `gold.imovel_publicado`;
-    3. Publica as 6 camadas cartográficas unificadas no bloco de mapas da Gold (`gold.publicacao_camada_mapa`);
-    4. Atualiza atomicamente todos os lotes que estavam com status `PROMOVIDO_SILVER` para `PROMOVIDO_GOLD` (`UPDATE controle.lote_ingestao SET status = 'PROMOVIDO_GOLD' WHERE status = 'PROMOVIDO_SILVER'`).
-- **Feedback em tempo real e resiliência no Frontend:**
-  - Endpoint `GET /api/gold/publicar/status` fornece monitoramento de status assíncrono.
-  - O componente `LotesView.vue` exibe modal com barra de progresso animada e stepper de 4 etapas durante a migração, com polling a cada 2s até a finalização.
-  - Tratamento de erro resiliente: falhas parciais em geometrias pontuais são registradas sem abortar o processamento do restante do conjunto de dados.
-- **Suíte de testes:**
-  - 176 testes unitários no backend aprovados (`GoldPublicacaoServiceTest`, `MatrizAcessoTest`, etc.).
-  - 140 testes unitários no frontend aprovados (`npm test` no Vitest, cobrindo `LotesView.test.js` e `goldService.test.js`).
+    ver §9.45. A tela mostra o que o indicador diz; a correção é no cálculo.
 
 ---
 
