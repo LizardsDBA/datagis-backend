@@ -52,17 +52,21 @@ public class IngestaoExecucaoService {
     public LoteIngestao executar(Long fonteId) {
         FonteDado fonte = buscarFonte(fonteId);
 
-        validacaoMapeamentoService.validarParaIngestao(fonte);
-
-        IngestaoExecutor executor = executores.stream()
-                .filter(e -> e.suportar(fonte))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Ainda não existe ingestão implementada para a fonte \"" + fonte.getNome() + "\""));
-
         progresso.iniciar(fonte.getId());
         long inicio = System.currentTimeMillis();
         try {
+            // Validação e escolha do executor dentro do try (LIZARDS-54): fonte barrada
+            // (mapeamento incompleto, formato sem executor) também grava o erro na fonte e
+            // encerra o progresso. Antes, na execução agendada ou em segundo plano o motivo
+            // ficava só no log e a fonte continuava marcada como "em andamento".
+            validacaoMapeamentoService.validarParaIngestao(fonte);
+
+            IngestaoExecutor executor = executores.stream()
+                    .filter(e -> e.suportar(fonte))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Ainda não existe ingestão implementada para a fonte \"" + fonte.getNome() + "\""));
+
             LoteIngestao lote = executor.executar(fonte);
             registrarExecucao(fonte, inicio, "SUCESSO", null);
             progresso.finalizar(fonte.getId(), FaseExecucao.CONCLUIDO);

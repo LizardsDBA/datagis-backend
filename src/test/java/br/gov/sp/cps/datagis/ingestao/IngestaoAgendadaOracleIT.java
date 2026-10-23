@@ -56,10 +56,10 @@ class IngestaoAgendadaOracleIT {
     private static final long TEMPO_MAXIMO_MS = 30_000;
 
     private static final String CSV_FALSO = """
-            latitude,longitude,municipio,data_hora
-            -25.4284,-49.2733,Curitiba,2026-09-01 10:00:00
-            -23.3045,-51.1696,Londrina,2026-09-01 11:30:00
-            -25.0916,-50.1668,Ponta Grossa,2026-09-01 14:15:00
+            id,latitude,longitude,municipio,data_hora
+            IT-1,-25.4284,-49.2733,Curitiba,2026-09-01 10:00:00
+            IT-2,-23.3045,-51.1696,Londrina,2026-09-01 11:30:00
+            IT-3,-25.0916,-50.1668,Ponta Grossa,2026-09-01 14:15:00
             """;
 
     @Autowired
@@ -90,6 +90,7 @@ class IngestaoAgendadaOracleIT {
             jdbc.update("DELETE FROM SILVER.foco_calor WHERE fonte_dado_id = ?", fonteId);
             jdbc.update("DELETE FROM BRONZE.registro_bruto WHERE fonte_dado_id = ?", fonteId);
             jdbc.update("DELETE FROM CONTROLE.lote_ingestao WHERE fonte_dado_id = ?", fonteId);
+            jdbc.update("DELETE FROM CONTROLE.mapeamento_coluna WHERE fonte_dado_id = ?", fonteId);
             jdbc.update("DELETE FROM CONTROLE.fonte_dado WHERE id = ?", fonteId);
         }
     }
@@ -108,9 +109,15 @@ class IngestaoAgendadaOracleIT {
                 .formatoEsperado("CSV")
                 .campoGeometriaLat("latitude")
                 .campoGeometriaLon("longitude")
+                .entidadeSilver("foco_calor")
                 .dataAdd(LocalDateTime.now())
                 .build());
         fonteId = fonte.getId();
+
+        // Desde a LIZARDS-49 a ingestão é barrada sem tabela Silver e sem as colunas
+        // obrigatórias mapeadas. Mapeamento mínimo, igual ao dos focos do INPE na V079.
+        mapear("id", "identificador_origem", "COLUNA", "texto", 1, 0);
+        mapear("geometry", "geometria", "GEOMETRIA", "wkt", 0, 1);
 
         JobKey jobKey = JobKey.jobKey("ingestao-fonte-" + fonteId, GRUPO);
         TriggerKey triggerKey = TriggerKey.triggerKey("trigger-fonte-" + fonteId, GRUPO);
@@ -130,6 +137,15 @@ class IngestaoAgendadaOracleIT {
         Trigger trigger = scheduler.getTrigger(triggerKey);
         assertThat(trigger).isInstanceOf(CronTrigger.class);
         assertThat(((CronTrigger) trigger).getCronExpression()).isEqualTo(CRON_TESTE);
+
+        // LIZARDS-54: dispara às 3:00 de Brasília, e a próxima execução fica gravada na
+        // fonte no fuso do servidor, como as outras datas dela
+        assertThat(((CronTrigger) trigger).getTimeZone().getID()).isEqualTo("America/Sao_Paulo");
+        java.time.ZonedDateTime disparo = trigger.getNextFireTime().toInstant()
+                .atZone(java.time.ZoneId.of("America/Sao_Paulo"));
+        assertThat(disparo.toLocalTime()).isEqualTo(java.time.LocalTime.of(3, 0));
+        assertThat(fonteDadoRepository.findById(fonteId).orElseThrow().getProximaExecucaoEm())
+                .isEqualTo(LocalDateTime.ofInstant(trigger.getNextFireTime().toInstant(), java.time.ZoneId.systemDefault()));
 
         // 2) Dispara agora, pelo próprio Quartz (mesmo caminho do cron, sem esperar o
         // horário).
@@ -154,6 +170,16 @@ class IngestaoAgendadaOracleIT {
         // 5) Silver: a esteira de validação promove os 3 focos pra SILVER.foco_calor.
         assertThat(aguardarContagem("SELECT COUNT(*) FROM SILVER.foco_calor WHERE fonte_dado_id = ?", 3))
                 .isEqualTo(3);
+    }
+
+    private void mapear(String origem, String destino, String destinoTipo, String tipoDado,
+            int obrigatorio, int validarGeometria) {
+        jdbc.update("""
+                INSERT INTO CONTROLE.mapeamento_coluna
+                    (fonte_dado_id, tabela_destino, coluna_origem, atributo_destino, destino_tipo,
+                     tipo_dado, obrigatorio, validar_geometria)
+                VALUES (?, 'foco_calor', ?, ?, ?, ?, ?, ?)
+                """, fonteId, origem, destino, destinoTipo, tipoDado, obrigatorio, validarGeometria);
     }
 
     private int contar(String sql) {
