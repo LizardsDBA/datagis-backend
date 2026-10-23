@@ -1448,7 +1448,7 @@ do card no board, que não descreve o escopo real acordado com o time).
   - Alerta de sucesso movido para fora do formulário, acima da listagem, com autodesaparecimento em 4s (`mostrarSucesso()` + `clearTimeout` no `onUnmounted`) — dentro do modal ele ficava invisível, já que o modal fecha ao salvar.
 - **Coluna "Agendamento" na listagem (`CadastroFontes.vue`):**
   - `descreverCron(expressao)` traduz para linguagem natural os três formatos gerados pelo `ConstrutorCron.vue`: diário (`0 m H * * ?` → "Todo dia às HH:MM"), semanal (`0 m H ? * DOW` → "Toda segunda-feira às HH:MM") e mensal (`0 m H D * ?` → "Todo dia D às HH:MM").
-  - Expressões fora desses padrões são exibidas na forma original, sem tradução; fontes sem `cron_expressao` aparecem como "Somente manual".
+  - Expressões fora desses padrões são exibidas na forma original, sem tradução; fontes sem `cron_expressao` aparecem como "Somente manual". **[ATUALIZADO na §9.48]:** "Sem agendamento" ou "Por envio de arquivo" (upload manual).
   - A expressão original é mantida visível abaixo da descrição, em fonte monoespaçada, para conferência pelo operador.
   - Comentário desatualizado em `ConstrutorCron.vue` corrigido para apontar o consumo real do valor (`controle.fonte_dado.cron_expressao` → `AgendadorInicializacaoRunner`, §9.28).
 - **Testes automatizados do frontend (`src/components/CadastroFontes.test.js`):**
@@ -2671,7 +2671,8 @@ atualização automática) é a LIZARDS-55.
 - **"Restaurar" quer dizer o agendamento funcionando, não horários fixos.** Nenhuma
   migration devolve os crons da antiga `V035`: as fontes continuam nascendo "Somente
   manual" (decisão da §9.35) e a frequência de cada uma é escolhida na tela, que sempre foi
-  o desenho (§3.2, §9.30). Quem quiser a fonte atualizando sozinha liga pela tela.
+  o desenho (§3.2, §9.30). Quem quiser a fonte atualizando sozinha liga pela tela
+  (interruptor da §9.48).
 - **Teste do Quartz consertado (`IngestaoAgendadaOracleIT`).** Quebrou com o bloqueio de
   mapeamento da LIZARDS-49: a fonte falsa do teste não tinha tabela Silver nem colunas
   mapeadas e era barrada antes de rodar. Ganhou `entidade_silver = foco_calor` e o
@@ -2720,6 +2721,72 @@ atualização automática) é a LIZARDS-55.
   roda em paralelo). As 10 chamadas do construtor do `AgendamentoFonteService` nos testes
   ganharam os 2 parâmetros novos. Suíte completa: **752 testes, 0 falhas**, só o erro
   conhecido do `DatagisApplicationTests` (§9.3).
+- **Complemento depois do merge (commit `b036565`, Matheus, 2026-10-23):** dois ajustes no
+  `finally` do `IngestaoAgendadaJob`, que grava a próxima execução depois do disparo:
+  - **A próxima execução é lida do trigger atual.** Antes vinha de
+    `context.getNextFireTime()`, lido no começo da execução: se o agendamento fosse
+    desligado ou editado pela tela enquanto a ingestão rodava, o horário antigo era
+    regravado. Agora `AgendamentoFonteService.atualizarProximaExecucaoDoTrigger` consulta
+    o trigger no Quartz naquele momento (nulo se ele foi removido).
+  - **Falha ao gravar a próxima execução não esconde o erro da ingestão.** Uma exceção
+    nesse `finally` (ex.: banco fora do ar) substituía a da ingestão; agora vira só um
+    `log.warn`, e o erro real continua saindo do `catch`.
+  - Testes: +2 no `AgendamentoFonteServiceTest` e +1 no `IngestaoAgendadaJobTest`. Suíte
+    completa: **755 testes, 0 falhas**, e o `IngestaoAgendadaOracleIT` continua passando.
+
+### 9.48. Ligar e desligar a atualização automática das fontes — frontend — **[FEITO e validado na tela, 2026-10-23, `LIZARDS-55`]**
+Repositório `datagis-frontend`, branch `feat/agendamento-fontes`, a partir da `sprint-2`.
+Parte da tela do agendamento cuja parte de backend está na §9.47.
+
+- **Interruptor "Atualização automática" (`ConstrutorCron.vue`).** Desligado, a fonte fica
+  só com execução manual: nenhuma frequência marcada, Hora e Minuto com "–", e a expressão
+  aparece como `– – – – (sem agendamento)`. O valor enviado é **vazio**, que o backend já
+  entende como "remover o agendamento" (§9.30). Nunca é enviado `* * * * * ?`, que no Quartz
+  dispararia a cada segundo.
+- **Ligado, a escolha começa do zero.** Nada vem preenchido: a pessoa escolhe a frequência
+  (todo dia, toda semana, todo mês ou personalizado) e o horário. Enquanto falta algo, a
+  caixa avisa e o **Salvar fica bloqueado**; hora fora de 0–23, minuto fora de 0–59 ou dia
+  do mês fora de 1–31 também bloqueiam. Desligar e religar começa do zero de novo. O
+  construtor avisa o formulário pelo evento `update:completo`.
+- **Bug da LIZARDS-11 corrigido — fonte sem horário gravava "Todo dia, 3:00" sozinha.** O
+  construtor abria nesse modo mesmo sem cron e emitia o valor; salvar a fonte por qualquer
+  outro motivo ligava o agendamento sem ninguém escolher. Agora fonte sem horário abre
+  desligada.
+- **Editar abre no modo certo.** O construtor reconhece os 3 formatos que ele mesmo gera
+  (diário, semanal, mensal) e preenche os campos; qualquer outra expressão, ou uma com valor
+  fora do intervalo (ex.: hora 25), abre em "Personalizado" com o texto.
+- **Bug da LIZARDS-49 corrigido — editar a fonte apagava a tabela Silver dela
+  (`CadastroFontes.vue`).** O `PUT /api/fontes/{id}` grava a `entidadeSilver` que vem no
+  corpo, mas o formulário nunca enviava esse campo: qualquer edição pela tela deixava a
+  fonte "Sem Tabela Silver" e bloqueava a ingestão. O formulário passou a devolver a tabela
+  que a fonte já tinha. No backend o `PUT` continua gravando o que vier no corpo (quem
+  chamar a API direto sem o campo ainda apaga); a proteção no backend ficou para a próxima
+  sprint. Banco que já perdeu a tabela por esse caminho se corrige com
+  `PATCH /api/fontes/{id}/entidade-silver` ou pelo Mapeamento de Colunas.
+- **Clicar no texto da caixa desligava o agendamento.** A caixa ficava dentro de um
+  `<label>`, e o clique em qualquer texto dela acionava o interruptor. Passou a `<div>`, sem
+  mudança visual.
+- **Upload manual não agenda.** Fonte `UPLOAD_MANUAL` não tem de onde buscar dado novo:
+  agendar só reingeriria o último arquivo (lotes "sem mudança") ou daria erro. Com essa
+  modalidade o interruptor fica travado, com o motivo escrito; trocar para upload manual
+  desliga e limpa o horário (props `bloqueado` e `motivoBloqueio`).
+- **Coluna "Agendamento" da lista** (atualiza a §9.29): com horário, a descrição de antes
+  ("Todo dia às 03:00"); API ou download sem horário, **"Sem agendamento"**; upload manual,
+  **"Por envio de arquivo"** (antes as duas eram "Somente manual"); fonte inativa com
+  horário ganha **"Pausado: fonte inativa"**, porque o backend não agenda fonte inativa. O
+  título da caixa no formulário perdeu o "(Quartz Cron)".
+- **A próxima execução não aparece na tela.** O backend já devolve `proximaExecucaoEm`, mas
+  ela está em UTC como as outras datas (§9.47) e apareceria 3 horas adiantada.
+- **Tema escuro:** interruptor, avisos e "Pausado" com bloco `:root[data-tema="escuro"]`
+  próprio, pelas regras da §9.44.
+- **Testes:** `ConstrutorCron.test.js` novo (20: abre desligado sem gravar horário, abre no
+  modo certo, cada modo só completa com tudo preenchido e dentro do intervalo, desligar
+  limpa, religar começa do zero, nunca emite `* * * * * ?`, e 4 do bloqueio) e
+  `CadastroFontes.test.js` +7 (tabela Silver devolvida no `PUT`, Salvar bloqueado com o
+  agendamento incompleto, clique no texto não desliga, upload manual trava, inativa aparece
+  pausada e os dois textos novos). Conferido desfazendo cada correção numa cópia
+  temporária: o teste correspondente falhou em todos os casos. Suíte do frontend: **329
+  testes, 0 falhas**; build ok.
 
 ---
 
