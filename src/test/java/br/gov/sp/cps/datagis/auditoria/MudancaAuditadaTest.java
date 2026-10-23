@@ -44,6 +44,17 @@ class MudancaAuditadaTest {
     }
 
     @Test
+    void antesEDepoisIguaisNaoSaoGravados() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+
+        MudancaAuditada.registrar(Map.of("perfis", List.of("perfil-auditor")), Map.of("perfis", List.of("perfil-auditor")));
+
+        assertThat(MudancaAuditada.antes(request)).isNull();
+        assertThat(MudancaAuditada.depois(request)).isNull();
+    }
+
+    @Test
     void foraDeUmaRequisicaoNaoFazNada() {
         MudancaAuditada.registrar(Map.of("a", 1), Map.of("a", 2));
         // sem excecao: job agendado ou teste sem requisicao HTTP
