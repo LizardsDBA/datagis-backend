@@ -1,0 +1,34 @@
+# Proxy de entrada do ambiente publicado (docker-compose.prod.yml). Unico servico com
+# porta aberta pra fora (80/443); o Caddy emite e renova o certificado HTTPS sozinho
+# (Let's Encrypt) assim que o DNS de datagis.com.br aponta pra este servidor.
+#
+#   /auth/*      -> Keycloak (KC_HTTP_RELATIVE_PATH=/auth)
+#   /api/*       -> backend
+#   /conjuntos   -> backend (endpoint legado sem prefixo /api - mesma regra do vite.config.js)
+#   resto        -> frontend ja compilado (npm run build), com fallback pro index.html (SPA)
+datagis.com.br {
+	encode gzip
+
+	handle /auth* {
+		reverse_proxy keycloak:8080
+	}
+
+	handle /api/* {
+		reverse_proxy backend:8080
+	}
+
+	@conjuntosLegado path /conjuntos /conjuntos/*
+	handle @conjuntosLegado {
+		reverse_proxy backend:8080
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+www.datagis.com.br {
+	redir https://datagis.com.br{uri} permanent
+}
