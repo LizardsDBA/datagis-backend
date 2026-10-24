@@ -58,7 +58,6 @@ public class ValidadorGeometria implements ValidadorCampo {
             return false;
         }
         return contexto.validarGeometria()
-                || contexto.validarRecortePr()
                 || "GEOMETRIA".equalsIgnoreCase(contexto.destinoTipo())
                 || "wkt".equalsIgnoreCase(contexto.tipoDado())
                 || "geojson".equalsIgnoreCase(contexto.tipoDado());
@@ -147,21 +146,7 @@ public class ValidadorGeometria implements ValidadorCampo {
             );
         }
 
-        // 5. Validação de Recorte Territorial do Paraná
-        if (contexto != null && contexto.validarRecortePr()) {
-            Envelope envGeom = geometria.getEnvelopeInternal();
-            if (!ENVELOPE_PARANA.intersects(envGeom)) {
-                return ResultadoValidacao.erro(
-                        ERRO_FORA_RECORTE_PR,
-                        nomeCampo,
-                        valorOriginal,
-                        "Geometria localizada fora dos limites territoriais do Paraná (Envelope: "
-                                + envGeom + ", Limites PR: " + ENVELOPE_PARANA + ")"
-                );
-            }
-        }
-
-        // 6. Sucesso — retorna WKT padronizado
+        // 5. Sucesso — retorna WKT padronizado
         return ResultadoValidacao.sucesso(wktWriter.write(geometria));
     }
 

@@ -73,6 +73,7 @@ public class MapeamentoColunaController {
 
         for (MapeamentoColuna m : mapeamentos) {
             m.setFonteDadoId(fonteId);
+            m.setValidarRecortePr(false);
             if (m.getTabelaDestino() == null || m.getTabelaDestino().isBlank()) {
                 m.setTabelaDestino(fonte.getEntidadeSilver());
             }

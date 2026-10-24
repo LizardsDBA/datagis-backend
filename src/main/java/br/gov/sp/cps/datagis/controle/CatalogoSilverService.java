@@ -35,7 +35,7 @@ public class CatalogoSilverService {
         }
 
         public static ColunaSilverDto geometria(String nome, String label) {
-            return new ColunaSilverDto(nome, label, "wkt", "GEOMETRIA", false, null, null, true, false, true);
+            return new ColunaSilverDto(nome, label, "wkt", "GEOMETRIA", false, null, null, true, false, false);
         }
 
         public static ColunaSilverDto cpfCnpj(String nome, String label, boolean obrigatorio) {
