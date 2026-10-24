@@ -177,11 +177,11 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 
 | Coluna Origem (Bruto) | Coluna Destino (Silver) | Destino Tipo | Tipo de Dado | Obrigatório | Validações / Regras |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `cd_cnuc` | `codigo_origem` | COLUNA | texto | Sim | Chave natural CNUC |
+| `cd_cnuc`, `codigo_uc` | `codigo_origem` | COLUNA | texto | Sim | Chave natural CNUC |
 | `nome_uc` | `nome` | COLUNA | texto | Sim |  |
 | `ha_total` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
 | `categoria` | `categoria_area_protegida` | COLUNA | texto | Sim | Domínio: `categoria_area_protegida` |
-| `cria_ato` | `ato_legal` | COLUNA | texto | Não |  |
+| `cria_ato`, `ato_criaca` | `ato_legal` | COLUNA | texto | Não |  |
 | `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
 
 ---

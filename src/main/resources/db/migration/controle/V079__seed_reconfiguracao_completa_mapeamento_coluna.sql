@@ -223,16 +223,22 @@ UNION ALL
 SELECT f.id, 'area_protegida', 'cd_cnuc', 'codigo_origem', 'COLUNA', 'texto', 1, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
 UNION ALL
+SELECT f.id, 'area_protegida', 'codigo_uc', 'codigo_origem', 'COLUNA', 'texto', 1, NULL, NULL, NULL, 0, 0, 0, 1
+FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
+UNION ALL
 SELECT f.id, 'area_protegida', 'nome_uc', 'nome', 'COLUNA', 'texto', 1, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
 UNION ALL
 SELECT f.id, 'area_protegida', 'ha_total', 'area_ha', 'COLUNA', 'numero', 0, 0.0, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
 UNION ALL
-SELECT f.id, 'area_protegida', 'categoria', 'categoria_area_protegida', 'COLUNA', 'texto', 0, NULL, 'categoria_area_protegida', NULL, 0, 0, 0, 1
+SELECT f.id, 'area_protegida', 'categoria', 'categoria_area_protegida', 'COLUNA', 'texto', 1, NULL, 'categoria_area_protegida', NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
 UNION ALL
 SELECT f.id, 'area_protegida', 'cria_ato', 'ato_legal', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 1
+FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
+UNION ALL
+SELECT f.id, 'area_protegida', 'ato_criaca', 'ato_legal', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
 UNION ALL
 SELECT f.id, 'area_protegida', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
