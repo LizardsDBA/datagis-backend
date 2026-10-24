@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,6 +93,7 @@ public class OrquestradorValidacao {
         List<MapeamentoColuna> mapeamentos = mapeamentoRepository != null && fonteDadoId != null
                 ? mapeamentoRepository.findByFonteDadoId(fonteDadoId)
                 : Collections.emptyList();
+        Map<String, List<MapeamentoColuna>> mapeamentosAgrupados = agruparMapeamentosPorDestino(mapeamentos);
 
         List<RegistroAprovadoSilver> aprovados = new ArrayList<>();
         List<RegistroRejeitadoQuarentena> rejeitados = new ArrayList<>();
@@ -134,112 +136,80 @@ public class OrquestradorValidacao {
                     }
                 }
             } else {
-                for (MapeamentoColuna mapCol : mapeamentos) {
-                String nomeColunaOrigem = mapCol.getColunaOrigem();
-                String atributoDestino = mapCol.getAtributoDestino();
-                Object valorBruto = extrairValor(payloadNode, reg, mapCol);
-                Object valorAnterior = snapshotAnterior != null ? snapshotAnterior.get(atributoDestino) : null;
+                for (List<MapeamentoColuna> grupo : mapeamentosAgrupados.values()) {
+                    ResolucaoValorCampo resolucao = resolverValorDoGrupo(payloadNode, reg, grupo);
+                    MapeamentoColuna mapCol = resolucao.mapeamentoUtilizado();
+                    Object valorBruto = resolucao.valor();
+                    String atributoDestino = mapCol.getAtributoDestino();
+                    Object valorAnterior = snapshotAnterior != null && atributoDestino != null
+                            ? snapshotAnterior.get(atributoDestino)
+                            : null;
 
-                ContextoValidacaoCampo contexto = mapCol.toContextoValidacao(valorAnterior);
+                    ContextoValidacaoCampo contexto = prepararContexto(mapCol, valorAnterior);
 
-                // Defesa contra mapeamentos legados: municipio e auto_infracao pertencem a integridade cruzada Silver, nao a dominio
-                if (contexto.tabelaReferencia() != null && !contexto.tabelaReferencia().isBlank()) {
-                    String tabNorm = contexto.tabelaReferencia().trim().toLowerCase(java.util.Locale.ROOT);
-                    if (tabNorm.contains(".")) {
-                        tabNorm = tabNorm.substring(tabNorm.lastIndexOf('.') + 1);
-                    }
-                    if ("municipio".equals(tabNorm) || "auto_infracao".equals(tabNorm)) {
-                        String refSilver = (contexto.referenciaEntidadeSilver() != null && !contexto.referenciaEntidadeSilver().isBlank())
-                                ? contexto.referenciaEntidadeSilver()
-                                : tabNorm;
-                        contexto = contexto.toBuilder()
-                                .tabelaReferencia(null)
-                                .referenciaEntidadeSilver(refSilver)
-                                .build();
-                    } else if ("tipo_area_protegida".equals(tabNorm)) {
-                        contexto = contexto.toBuilder()
-                                .tabelaReferencia(null)
-                                .build();
-                    }
-                }
-
-                if (contexto.tabelaReferencia() == null || contexto.tabelaReferencia().isBlank()) {
-                    String tabInferida = inferirTabelaReferenciaCanonico(atributoDestino);
-                    if (tabInferida != null) {
-                        contexto = contexto.toBuilder().tabelaReferencia(tabInferida).build();
-                    }
-                }
-
-                if (contexto.referenciaEntidadeSilver() == null || contexto.referenciaEntidadeSilver().isBlank()) {
-                    String refSilverInferida = inferirReferenciaEntidadeSilverCanonico(atributoDestino);
-                    if (refSilverInferida != null) {
-                        contexto = contexto.toBuilder().referenciaEntidadeSilver(refSilverInferida).build();
-                    }
-                }
-
-                // Executa sempre a sanitização de entrada primeiro
-                ResultadoValidacao resSanitizacao = sanitizador.validar(valorBruto, contexto);
-                if (!resSanitizacao.valido()) {
-                    rejeitados.add(new RegistroRejeitadoQuarentena(
-                            reg,
-                            resSanitizacao.tipoErro(),
-                            resSanitizacao.campoProblema(),
-                            resSanitizacao.valorRecebido(),
-                            resSanitizacao.motivoRejeicao()
-                    ));
-                    falhou = true;
-                    break;
-                }
-
-                Object valorCorrente = resSanitizacao.valorTransformado();
-
-                // Executa a cadeia de validadores especializados
-                for (ValidadorCampo validador : validadores) {
-                    if (validador == sanitizador) {
-                        continue; // Sanitizador já executou
+                    // Executa sempre a sanitização de entrada primeiro
+                    ResultadoValidacao resSanitizacao = sanitizador.validar(valorBruto, contexto);
+                    if (!resSanitizacao.valido()) {
+                        rejeitados.add(new RegistroRejeitadoQuarentena(
+                                reg,
+                                resSanitizacao.tipoErro(),
+                                resSanitizacao.campoProblema(),
+                                resSanitizacao.valorRecebido(),
+                                resSanitizacao.motivoRejeicao()
+                        ));
+                        falhou = true;
+                        break;
                     }
 
-                    if (validador.suporta(contexto)) {
-                        ResultadoValidacao resVal = validador.validar(valorCorrente, contexto);
-                        if (!resVal.valido()) {
-                            RegistroRejeitadoQuarentena descartado = new RegistroRejeitadoQuarentena(
-                                    reg,
-                                    resVal.tipoErro(),
-                                    resVal.campoProblema(),
-                                    resVal.valorRecebido(),
-                                    resVal.motivoRejeicao()
-                            );
-                            if (ValidadorGeometria.ERRO_FORA_RECORTE_PR.equals(resVal.tipoErro())) {
-                                // Nao e inconsistencia de dado - a fonte e nacional/sem filtro
-                                // geografico (ex.: INPE Queimadas Brasil). Descarta sem ir pra
-                                // quarentena e sem bloquear o lote pela regra All-or-Nothing.
-                                descartadosForaDoRecorte.add(descartado);
-                            } else {
-                                rejeitados.add(descartado);
+                    Object valorCorrente = resSanitizacao.valorTransformado();
+
+                    // Executa a cadeia de validadores especializados
+                    for (ValidadorCampo validador : validadores) {
+                        if (validador == sanitizador) {
+                            continue; // Sanitizador já executou
+                        }
+
+                        if (validador.suporta(contexto)) {
+                            ResultadoValidacao resVal = validador.validar(valorCorrente, contexto);
+                            if (!resVal.valido()) {
+                                RegistroRejeitadoQuarentena descartado = new RegistroRejeitadoQuarentena(
+                                        reg,
+                                        resVal.tipoErro(),
+                                        resVal.campoProblema(),
+                                        resVal.valorRecebido(),
+                                        resVal.motivoRejeicao()
+                                );
+                                if (ValidadorGeometria.ERRO_FORA_RECORTE_PR.equals(resVal.tipoErro())) {
+                                    // Nao e inconsistencia de dado - a fonte e nacional/sem filtro
+                                    // geografico (ex.: INPE Queimadas Brasil). Descarta sem ir pra
+                                    // quarentena e sem bloquear o lote pela regra All-or-Nothing.
+                                    descartadosForaDoRecorte.add(descartado);
+                                } else {
+                                    rejeitados.add(descartado);
+                                }
+                                falhou = true;
+                                break;
                             }
-                            falhou = true;
-                            break;
-                        }
-                        if (resVal.valorTransformado() != null) {
-                            valorCorrente = resVal.valorTransformado();
+                            if (resVal.valorTransformado() != null) {
+                                valorCorrente = resVal.valorTransformado();
+                            }
                         }
                     }
-                }
 
-                if (falhou) {
-                    break;
-                }
-
-                // Se for mapeamento geométrico, atualiza a geometria canônica
-                if ("GEOMETRIA".equalsIgnoreCase(mapCol.getDestinoTipo())) {
-                    if (valorCorrente != null) {
-                        geometriaWktFinal = valorCorrente.toString();
+                    if (falhou) {
+                        break;
                     }
-                } else {
-                    atributosTransformados.put(atributoDestino, valorCorrente);
+
+                    // Se for mapeamento geométrico, atualiza a geometria canônica
+                    if ("GEOMETRIA".equalsIgnoreCase(mapCol.getDestinoTipo())) {
+                        if (valorCorrente != null) {
+                            geometriaWktFinal = valorCorrente.toString();
+                        }
+                    } else if (atributoDestino != null) {
+                        atributosTransformados.put(atributoDestino, valorCorrente);
+                    }
                 }
             }
-        }
 
             if (!falhou) {
                 aprovados.add(new RegistroAprovadoSilver(reg, atributosTransformados, geometriaWktFinal));
@@ -412,45 +382,14 @@ public class OrquestradorValidacao {
                 } catch (Exception ignored) {}
             }
         } else {
-            for (MapeamentoColuna mapCol : mapeamentos) {
+            Map<String, List<MapeamentoColuna>> mapeamentosAgrupados = agruparMapeamentosPorDestino(mapeamentos);
+            for (List<MapeamentoColuna> grupo : mapeamentosAgrupados.values()) {
+                ResolucaoValorCampo resolucao = resolverValorDoGrupo(payloadNode, reg, grupo);
+                MapeamentoColuna mapCol = resolucao.mapeamentoUtilizado();
+                Object valorBruto = resolucao.valor();
                 String atributoDestino = mapCol.getAtributoDestino();
-                Object valorBruto = extrairValor(payloadNode, reg, mapCol);
-                ContextoValidacaoCampo contexto = mapCol.toContextoValidacao(null);
+                ContextoValidacaoCampo contexto = prepararContexto(mapCol, null);
 
-                // Defesa contra mapeamentos legados: municipio e auto_infracao pertencem a integridade cruzada Silver, nao a dominio
-                if (contexto.tabelaReferencia() != null && !contexto.tabelaReferencia().isBlank()) {
-                    String tabNorm = contexto.tabelaReferencia().trim().toLowerCase(java.util.Locale.ROOT);
-                    if (tabNorm.contains(".")) {
-                        tabNorm = tabNorm.substring(tabNorm.lastIndexOf('.') + 1);
-                    }
-                    if ("municipio".equals(tabNorm) || "auto_infracao".equals(tabNorm)) {
-                        String refSilver = (contexto.referenciaEntidadeSilver() != null && !contexto.referenciaEntidadeSilver().isBlank())
-                                ? contexto.referenciaEntidadeSilver()
-                                : tabNorm;
-                        contexto = contexto.toBuilder()
-                                .tabelaReferencia(null)
-                                .referenciaEntidadeSilver(refSilver)
-                                .build();
-                    } else if ("tipo_area_protegida".equals(tabNorm)) {
-                        contexto = contexto.toBuilder()
-                                .tabelaReferencia(null)
-                                .build();
-                    }
-                }
-
-                if (contexto.tabelaReferencia() == null || contexto.tabelaReferencia().isBlank()) {
-                    String tabInferida = inferirTabelaReferenciaCanonico(atributoDestino);
-                    if (tabInferida != null) {
-                        contexto = contexto.toBuilder().tabelaReferencia(tabInferida).build();
-                    }
-                }
-
-                if (contexto.referenciaEntidadeSilver() == null || contexto.referenciaEntidadeSilver().isBlank()) {
-                    String refSilverInferida = inferirReferenciaEntidadeSilverCanonico(atributoDestino);
-                    if (refSilverInferida != null) {
-                        contexto = contexto.toBuilder().referenciaEntidadeSilver(refSilverInferida).build();
-                    }
-                }
                 ResultadoValidacao resSanitizacao = sanitizador.validar(valorBruto, contexto);
                 Object valorFinal = resSanitizacao.valorTransformado() != null ? resSanitizacao.valorTransformado() : valorBruto;
 
@@ -468,7 +407,7 @@ public class OrquestradorValidacao {
                     if (valorFinal != null) {
                         geometriaWktFinal = valorFinal.toString();
                     }
-                } else {
+                } else if (atributoDestino != null) {
                     atributosTransformados.put(atributoDestino, valorFinal);
                 }
             }
@@ -562,5 +501,86 @@ public class OrquestradorValidacao {
             return null;
         }
     }
+
+    private record ResolucaoValorCampo(Object valor, MapeamentoColuna mapeamentoUtilizado) {}
+
+    private Map<String, List<MapeamentoColuna>> agruparMapeamentosPorDestino(List<MapeamentoColuna> mapeamentos) {
+        if (mapeamentos == null || mapeamentos.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, List<MapeamentoColuna>> grupos = new LinkedHashMap<>();
+        int jsonIndex = 0;
+        for (MapeamentoColuna mapCol : mapeamentos) {
+            String chaveGrupo;
+            if ("JSON".equalsIgnoreCase(mapCol.getDestinoTipo())) {
+                chaveGrupo = "json:" + (mapCol.getColunaOrigem() != null ? mapCol.getColunaOrigem().toLowerCase(Locale.ROOT) : (jsonIndex++));
+            } else if (mapCol.getAtributoDestino() != null && !mapCol.getAtributoDestino().isBlank()) {
+                chaveGrupo = mapCol.getAtributoDestino().trim().toLowerCase(Locale.ROOT);
+            } else {
+                chaveGrupo = "origem:" + (mapCol.getColunaOrigem() != null ? mapCol.getColunaOrigem().toLowerCase(Locale.ROOT) : (jsonIndex++));
+            }
+            grupos.computeIfAbsent(chaveGrupo, k -> new ArrayList<>()).add(mapCol);
+        }
+        return grupos;
+    }
+
+    private ResolucaoValorCampo resolverValorDoGrupo(JsonNode payloadNode, RegistroBruto reg, List<MapeamentoColuna> grupo) {
+        MapeamentoColuna primeiro = grupo.get(0);
+        for (MapeamentoColuna mapCol : grupo) {
+            Object v = extrairValor(payloadNode, reg, mapCol);
+            if (v != null) {
+                if (v instanceof String s) {
+                    if (!s.trim().isEmpty()) {
+                        return new ResolucaoValorCampo(v, mapCol);
+                    }
+                } else {
+                    return new ResolucaoValorCampo(v, mapCol);
+                }
+            }
+        }
+        return new ResolucaoValorCampo(null, primeiro);
+    }
+
+    private ContextoValidacaoCampo prepararContexto(MapeamentoColuna mapCol, Object valorAnterior) {
+        ContextoValidacaoCampo contexto = mapCol.toContextoValidacao(valorAnterior);
+
+        // Defesa contra mapeamentos legados: municipio e auto_infracao pertencem a integridade cruzada Silver, nao a dominio
+        if (contexto.tabelaReferencia() != null && !contexto.tabelaReferencia().isBlank()) {
+            String tabNorm = contexto.tabelaReferencia().trim().toLowerCase(Locale.ROOT);
+            if (tabNorm.contains(".")) {
+                tabNorm = tabNorm.substring(tabNorm.lastIndexOf('.') + 1);
+            }
+            if ("municipio".equals(tabNorm) || "auto_infracao".equals(tabNorm)) {
+                String refSilver = (contexto.referenciaEntidadeSilver() != null && !contexto.referenciaEntidadeSilver().isBlank())
+                        ? contexto.referenciaEntidadeSilver()
+                        : tabNorm;
+                contexto = contexto.toBuilder()
+                        .tabelaReferencia(null)
+                        .referenciaEntidadeSilver(refSilver)
+                        .build();
+            } else if ("tipo_area_protegida".equals(tabNorm)) {
+                contexto = contexto.toBuilder()
+                        .tabelaReferencia(null)
+                        .build();
+            }
+        }
+
+        if (contexto.tabelaReferencia() == null || contexto.tabelaReferencia().isBlank()) {
+            String tabInferida = inferirTabelaReferenciaCanonico(contexto.atributoDestino());
+            if (tabInferida != null) {
+                contexto = contexto.toBuilder().tabelaReferencia(tabInferida).build();
+            }
+        }
+
+        if (contexto.referenciaEntidadeSilver() == null || contexto.referenciaEntidadeSilver().isBlank()) {
+            String refSilverInferida = inferirReferenciaEntidadeSilverCanonico(contexto.atributoDestino());
+            if (refSilverInferida != null) {
+                contexto = contexto.toBuilder().referenciaEntidadeSilver(refSilverInferida).build();
+            }
+        }
+
+        return contexto;
+    }
 }
+
 

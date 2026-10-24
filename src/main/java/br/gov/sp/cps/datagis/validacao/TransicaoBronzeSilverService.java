@@ -23,7 +23,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Serviço central de Transição Automática Bronze -> Silver / Quarentena.
@@ -65,6 +67,17 @@ public class TransicaoBronzeSilverService {
     private final String quarentenaSchema;
     private final String bronzeSchema;
     private final ProgressoTransicaoRegistry progressoTransicaoRegistry;
+    private TransactionTemplate transactionTemplate;
+
+    /**
+     * Necessario porque os metodos assincronos chamam metodos transacionais do
+     * proprio bean (self-invocation), o que ignora o proxy do @Transactional e
+     * deixaria a execucao sem sessao do Hibernate (LazyInitializationException).
+     */
+    @Autowired(required = false)
+    public void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+    }
 
     @Autowired
     public TransicaoBronzeSilverService(
@@ -351,7 +364,11 @@ public class TransicaoBronzeSilverService {
     @org.springframework.scheduling.annotation.Async("datagisTaskExecutor")
     public void processarLoteAssincrono(Long loteId) {
         try {
-            processarLote(loteId);
+            if (transactionTemplate != null) {
+                transactionTemplate.executeWithoutResult(status -> processarLote(loteId));
+            } else {
+                processarLote(loteId);
+            }
         } catch (Exception e) {
             log.error("Erro no processamento assíncrono do lote {}: {}", loteId, e.getMessage(), e);
             if (progressoTransicaoRegistry != null) {
@@ -366,7 +383,24 @@ public class TransicaoBronzeSilverService {
     @org.springframework.scheduling.annotation.Async("datagisTaskExecutor")
     public void liberarLoteParaSilverAssincrono(Long loteId, Long analistaId) {
         try {
-            liberarLoteParaSilver(loteId, analistaId);
+            if (transactionTemplate != null) {
+                // Mantem a semantica de noRollbackFor = IllegalArgumentException: a excecao e
+                // capturada dentro da transacao para que as alteracoes (ex.: quarentena
+                // atualizada) sejam commitadas, e relancada depois.
+                java.util.concurrent.atomic.AtomicReference<IllegalArgumentException> barrada = new java.util.concurrent.atomic.AtomicReference<>();
+                transactionTemplate.executeWithoutResult(status -> {
+                    try {
+                        liberarLoteParaSilver(loteId, analistaId);
+                    } catch (IllegalArgumentException ex) {
+                        barrada.set(ex);
+                    }
+                });
+                if (barrada.get() != null) {
+                    throw barrada.get();
+                }
+            } else {
+                liberarLoteParaSilver(loteId, analistaId);
+            }
         } catch (IllegalArgumentException e) {
             log.warn("Liberação assíncrona do lote {} barrada por validação: {}", loteId, e.getMessage());
         } catch (Exception e) {
