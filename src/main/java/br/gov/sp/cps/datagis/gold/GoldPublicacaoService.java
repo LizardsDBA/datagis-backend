@@ -5,10 +5,16 @@ import java.sql.Connection;
 import java.sql.Types;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -135,12 +141,15 @@ public class GoldPublicacaoService {
 
     private final JdbcTemplate jdbcTemplate;
     private final SimplificadorGeometriaMapa simplificador;
+    private final int paralelismo;
 
     public GoldPublicacaoService(
             JdbcTemplate jdbcTemplate,
-            SimplificadorGeometriaMapa simplificador) {
+            SimplificadorGeometriaMapa simplificador,
+            @Value("${app.gold.paralelismo:1}") int paralelismo) {
         this.jdbcTemplate = jdbcTemplate;
         this.simplificador = simplificador;
+        this.paralelismo = paralelismo;
     }
 
     /**
@@ -176,34 +185,10 @@ public class GoldPublicacaoService {
 
         long publicacaoIndicadoresId = inserirControlePublicacaoIndicadores(codigosImovel.size());
 
-        int sucesso = 0;
-        List<String> falhas = new ArrayList<>();
+        AtomicInteger sucesso = new AtomicInteger();
+        List<String> falhas = Collections.synchronizedList(new ArrayList<>());
         try {
-            int processadosDesdeUltimaAtualizacao = 0;
-            for (String codImovel : codigosImovel) {
-                try {
-                    recalcularImovel(codImovel);
-                    sucesso++;
-                } catch (Exception e) {
-                    log.warn("publicarTudo: falhou pro imóvel {}: {}", codImovel, e.getMessage());
-                    falhas.add(codImovel);
-                    jdbcTemplate.update(
-                            """
-                            INSERT INTO gold.publicacao_indicadores_erro
-                                (publicacao_indicadores_id, cod_imovel, motivo)
-                            VALUES (?, ?, ?)
-                            """,
-                            publicacaoIndicadoresId, codImovel, truncar(e.getMessage(), 500));
-                }
-                processadosDesdeUltimaAtualizacao++;
-                if (processadosDesdeUltimaAtualizacao >= LOTE_PROGRESSO_INDICADORES) {
-                    atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucesso, falhas.size());
-                    processadosDesdeUltimaAtualizacao = 0;
-                }
-            }
-            if (processadosDesdeUltimaAtualizacao > 0) {
-                atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucesso, falhas.size());
-            }
+            calcularIndicadoresEmParalelo(codigosImovel, publicacaoIndicadoresId, sucesso, falhas);
 
             jdbcTemplate.update(
                     """
@@ -214,7 +199,8 @@ public class GoldPublicacaoService {
                     publicacaoIndicadoresId);
         } catch (Exception e) {
             // So chega aqui por falha de infraestrutura (ex.: conexao caiu) - falha
-            // de 1 imovel especifico ja e tratada acima e nao propaga ate aqui.
+            // de 1 imovel especifico ja e tratada dentro de calcularIndicadoresEmParalelo
+            // e nao propaga ate aqui.
             log.warn("publicarTudo: recalculo de indicadores falhou de vez", e);
             jdbcTemplate.update(
                     """
@@ -245,7 +231,72 @@ public class GoldPublicacaoService {
         }
 
         return new ResultadoPublicacaoTudo(
-                codigosImovel.size(), sucesso, falhas, camadasPublicadas, camadasComFalha);
+                codigosImovel.size(), sucesso.get(), new ArrayList<>(falhas), camadasPublicadas, camadasComFalha);
+    }
+
+    /**
+     * Calcula os indicadores de cada imóvel em {@link #paralelismo} threads
+     * (docs/publicacao-gold-paralela.md). Cada imóvel é independente nas procedures
+     * (§4 do doc - sem UPDATE de linha compartilhada, sem LOCK), então dividir a lista
+     * sem repetição é suficiente pra não haver disputa entre as threads. Com
+     * {@code paralelismo = 1} o {@link Executors#newFixedThreadPool} processa a fila
+     * em ordem de chegada - mesmo comportamento de hoje, só trocando de forma.
+     *
+     * <p>Progresso: {@code processadosTotal} é um contador atômico único pra todas as
+     * threads - como cada chamada de {@code incrementAndGet()} devolve um valor
+     * diferente, só uma thread vê cada múltiplo exato de {@link #LOTE_PROGRESSO_INDICADORES},
+     * então o UPDATE em {@code gold.publicacao_indicadores} dispara exatamente 1 vez a
+     * cada N processados, não importa a ordem de chegada das threads. O resto (menos
+     * que N desde o último múltiplo) é gravado depois que todas as tarefas terminam.
+     */
+    private void calcularIndicadoresEmParalelo(
+            List<String> codigosImovel, long publicacaoIndicadoresId, AtomicInteger sucesso, List<String> falhas) {
+        AtomicInteger processadosTotal = new AtomicInteger();
+        ExecutorService executor = Executors.newFixedThreadPool(
+                paralelismo, Thread.ofPlatform().name("gold-calculo-", 1).factory());
+        try {
+            List<Future<?>> tarefas = codigosImovel.stream()
+                    .<Future<?>>map(codImovel -> executor.submit(() -> {
+                        try {
+                            recalcularImovel(codImovel);
+                            sucesso.incrementAndGet();
+                        } catch (Exception e) {
+                            log.warn("publicarTudo: falhou pro imóvel {}: {}", codImovel, e.getMessage());
+                            falhas.add(codImovel);
+                            jdbcTemplate.update(
+                                    """
+                                    INSERT INTO gold.publicacao_indicadores_erro
+                                        (publicacao_indicadores_id, cod_imovel, motivo)
+                                    VALUES (?, ?, ?)
+                                    """,
+                                    publicacaoIndicadoresId, codImovel, truncar(e.getMessage(), 500));
+                        }
+                        if (processadosTotal.incrementAndGet() % LOTE_PROGRESSO_INDICADORES == 0) {
+                            atualizarProgressoIndicadores(
+                                    publicacaoIndicadoresId, LOTE_PROGRESSO_INDICADORES, sucesso.get(), falhas.size());
+                        }
+                    }))
+                    .toList();
+
+            for (Future<?> tarefa : tarefas) {
+                try {
+                    tarefa.get();
+                } catch (Exception e) {
+                    // Falha de infraestrutura real (falha de 1 imovel ja foi tratada
+                    // dentro da tarefa acima e nunca chega aqui) - cancela o resto e
+                    // deixa o chamador marcar a publicacao como FALHOU.
+                    tarefas.forEach(t -> t.cancel(true));
+                    throw new IllegalStateException("Falha processando imóveis em paralelo", e);
+                }
+            }
+        } finally {
+            executor.shutdown();
+        }
+
+        int restante = processadosTotal.get() % LOTE_PROGRESSO_INDICADORES;
+        if (restante > 0) {
+            atualizarProgressoIndicadores(publicacaoIndicadoresId, restante, sucesso.get(), falhas.size());
+        }
     }
 
     /**
