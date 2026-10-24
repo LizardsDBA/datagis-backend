@@ -205,7 +205,7 @@ CREATE TABLE controle.mapeamento_coluna (
     referencia_entidade_silver VARCHAR2(60),              -- integridade relacional cruzada (ex: 'municipio')
     validar_cpf_cnpj           NUMBER(1) DEFAULT 0 NOT NULL, -- validacao algoritmica modulo 11
     validar_geometria          NUMBER(1) DEFAULT 0 NOT NULL, -- validade topologica e tipo primitivo
-    validar_recorte_pr         NUMBER(1) DEFAULT 0 NOT NULL, -- coordenadas/poligono dentro do Parana
+    validar_recorte_pr         NUMBER(1) DEFAULT 0 NOT NULL, -- (descontinuado no motor ativo) mantido no schema por compatibilidade
     impedir_regressao          NUMBER(1) DEFAULT 1 NOT NULL, -- campo preenchido nao pode regredir pra nulo
     regras_extras              JSON,                      -- regras customizadas de fontes desconhecidas
     data_add                   TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
@@ -215,6 +215,13 @@ CREATE TABLE controle.mapeamento_coluna (
 O pipeline Bronze→Silver lê essa tabela em runtime para saber como interpretar/converter
 cada coluna e quais validações aplicar para desviar inconsistências para a Quarentena. Isola
 a variação de schema e regras na tabela de mapeamento; a Silver continua com colunas fixas e tipadas.
+
+A tabela suporta mapeamento **1:N** (múltiplas colunas de origem para uma mesma coluna Silver): cada
+variação de nome de campo presente no payload bruto (ex.: `cd_cnuc` e `codigo_uc` apontando para `codigo_origem`, ou `cria_ato` e `ato_criaca` para `ato_legal`)
+é armazenada como uma linha distinta em `controle.mapeamento_coluna` compartilhando o mesmo
+`atributo_destino` e regras de validação. O motor de validação (`OrquestradorValidacao`) agrupa os mapeamentos
+por atributo de destino (`agruparMapeamentosPorDestino`) e seleciona o primeiro candidato não-nulo e não-vazio do payload (`resolverValorDoGrupo`).
+Para governança desses mapeamentos, o `MapeamentoColunaController` fornece sincronização atômica por atributo via `PUT /api/fontes/{id}/mapeamentos/atributo/{atributoDestino}` e remoção via `DELETE /api/fontes/{id}/mapeamentos/atributo/{atributoDestino}`.
 
 ### 2.4. Quarentena
 ```sql
@@ -1211,7 +1218,7 @@ a regras de validação por coluna diretamente na tabela `controle.mapeamento_co
 - `referencia_entidade_silver` (VARCHAR2(60)): integridade relacional cruzada com Silver (ex.: `municipio`).
 - `validar_cpf_cnpj` (NUMBER(1)): flag para validação algorítmica de CPF/CNPJ (módulo 11).
 - `validar_geometria` (NUMBER(1)): flag para validação topológica (`isValid`) e tipo primitivo.
-- `validar_recorte_pr` (NUMBER(1)): flag para checagem de coordenadas dentro dos limites do Paraná.
+- `validar_recorte_pr` (NUMBER(1)): flag para checagem de coordenadas dentro dos limites do Paraná (descontinuada no motor ativo em `LIZARDS-49`).
 - `impedir_regressao` (NUMBER(1)): flag para checar se o campo existia preenchido e regrediu pra nulo.
 - `regras_extras` (JSON): campo flexível para fontes futuras desconhecidas.
 
@@ -1279,17 +1286,17 @@ Implementado `ValidadorFaixaMinima` no pacote `br.gov.sp.cps.datagis.validacao`:
 - Se o valor for menor que o piso configurado, gera erro `VALOR_ABAIXO_DO_MINIMO`.
 - Testes: 23 cenários em `ValidadorFaixaMinimaTest` cobrindo aprovações, limites exatos, conversões tolerantes, erros de tipo, rejeições abaixo do piso e casos de borda (nulos e vazios).
 
-### 9.20. Validador de Geometria e Recorte PR — [FEITO, 2026-09-13, Fase 2.6]
+### 9.20. Validador de Geometria — [FEITO, 2026-09-13, Fase 2.6 | EVOLUÍDO 2026-10-24, LIZARDS-49]
 Implementado `ValidadorGeometria` no pacote `br.gov.sp.cps.datagis.validacao`:
 - Validação completa de atributos espaciais utilizando a biblioteca JTS Topology Suite (`org.locationtech.jts`).
 - Suporta entradas em formato WKT e GeoJSON (via `ObjectMapper`).
 - Validação sintática: erros de formatação geram `GEOMETRIA_MALFORMADA`.
 - Validação topológica com `IsValidOp`: auto-interseções, anéis desconexos e laços geram `GEOMETRIA_INVALIDA` com o motivo e as coordenadas exatas da quebra topológica.
 - Validação de primitivo: garante que o tipo (ex.: `Polygon`, `MultiPolygon`, `Point`) respeite a configuração de `regras_extras` ou `tipo_dado`, gerando `GEOMETRIA_TIPO_INCOMPATIVEL` se divergente.
-- Validação de recorte territorial do Paraná (`validar_recorte_pr = 1`): verifica interseção com os limites oficiais do Paraná (SRID 4674: lon `[-55.00, -47.50]`, lat `[-27.20, -22.00]`), gerando `FORA_DO_RECORTE_TERRITORIAL` se fora.
+- **Descontinuação do Recorte PR (`LIZARDS-49`):** A restrição de recorte territorial do Paraná (`validar_recorte_pr = 1` e erro `FORA_DO_RECORTE_TERRITORIAL`) foi desativada do motor. Geometrias válidas espacialmente não são mais rejeitadas por estarem fora do bounding box estadual.
 - Geometrias nulas obrigatórias geram `GEOMETRIA_NULA`.
 - Sucesso retorna WKT padronizado gerado por `WKTWriter`.
-- Testes: 29 cenários em `ValidadorGeometriaTest` cobrindo WKT, GeoJSON, auto-interseções, primitivos incompatíveis, recorte Paraná e nulidade.
+- Testes: cenários em `ValidadorGeometriaTest` cobrindo WKT, GeoJSON, auto-interseções, primitivos incompatíveis e nulidade.
 
 ### 9.21. Validador de Regressão de Valor — [FEITO, 2026-09-13, Fase 2.7]
 Implementado `ValidadorRegressao` no pacote `br.gov.sp.cps.datagis.validacao`:
@@ -1357,7 +1364,7 @@ Implementado `OrquestradorValidacao` no pacote `br.gov.sp.cps.datagis.validacao`
     - Para lotes em `RETIDO_QUARENTENA`: "Inspecionar Erros" (navega direto para a Quarentena com filtro pré-aplicado), "Liberar para Silver" e "Descartar" (com modal de justificativa obrigatória).
 - **Modal de Mapeamento de Colunas (`ModalMapeamentoColunas.vue`):**
   - Permite visualizar o de-para de campos configurados para qualquer fonte de dados (`/api/fontes/{id}/mapeamentos`).
-  - Permite aos analistas cadastrar novos mapeamentos para fontes com estruturas desconhecidas, configurando destino (`COLUNA`, `JSON`, `GEOMETRIA`), tipo de dado e flags de validação (`obrigatorio`, `validarGeometria`, `validarCpfCnpj`, `validarRecortePr`, `impedirRegressao`).
+  - Permite aos analistas cadastrar novos mapeamentos para fontes com estruturas desconhecidas, configurando destino (`COLUNA`, `JSON`, `GEOMETRIA`), tipo de dado e flags de validação (`obrigatorio`, `validarGeometria`, `validarCpfCnpj`, `impedirRegressao`), além de mapear múltiplas colunas de origem candidatas para o mesmo atributo de destino (1:N).
 - **Integração na Tela de Cadastro de Fontes (`CadastroFontes.vue`):**
   - Novo botão de ação em cada linha para abrir o modal de mapeamento de colunas.
   - Linha de resultado após execução/upload atualizada para refletir a semântica de pipeline:
@@ -2941,6 +2948,28 @@ Branch: `feat/carregamento-segundo-plano`.
    - **Integração na Raiz (`App.vue`):**
      - O componente é montado no rodapé global do `App.vue`, persistindo em todas as rotas da aplicação (Dashboard, Fontes, Lotes, Quarentena, Mapas, Indicadores, etc.).
    - **Testes Unitários Frontend:** `useMonitoramentoGlobal.test.js` e `PainelMonitoramentoGlobal.test.js` integrados na suíte Vitest com 149 testes aprovados.
+
+### 10.11. Múltiplas Colunas de Origem no Mapeamento (1:N) e Remoção da Validação Territorial PR (2026-10-24)
+Commits: `951fcfd`, `c8da8ac`, `364a9bc` (`feat<LIZARDS-49>`).
+
+1. **Remoção da Restrição de Recorte Territorial do Paraná (`ValidadorGeometria`):**
+   - Removida a checagem por bounding box do Paraná (`ENVELOPE_PARANA`) no `ValidadorGeometria.java`.
+   - O método `suporta(contexto)` não é mais ativado unicamente pela flag `validarRecortePr`, e o erro `FORA_DO_RECORTE_TERRITORIAL` foi desativado do motor ativo (preservado apenas no catálogo `quarentena.tipo_erro_quarentena` para integridade histórica de logs/migrações passadas).
+   - O controlador `MapeamentoColunaController` e as migrações/seeds (`V031`, `V053`, `V079`) forçam/refletem `validarRecortePr = false / 0`. Geometrias válidas espacialmente não são mais rejeitadas caso ultrapassem o envelope geográfico do PR.
+   - Atualizados testes em `ValidadorGeometriaTest` cobrindo a aceitação de geometrias fora do Paraná.
+
+2. **Suporte a Múltiplas Colunas de Origem no Mapeamento (1:N):**
+   - **Modelo e Integridade:** Permite cadastrar múltiplos mapeamentos de origem apontando para o mesmo `atributoDestino` na camada Silver (ex.: `cd_cnuc` e `codigo_uc` mapeando para `codigo_origem`, ou `cria_ato` e `ato_criaca` para `ato_legal` em `area_protegida`).
+   - A integridade do de-para impede duplicidade do par exato `(coluna_origem, atributo_destino)` e impede que a mesma coluna de origem aponte para atributos Silver distintos (conflito de chave), preservando a unicidade da interpretação.
+   - **Orquestrador de Validação (`OrquestradorValidacao`):**
+     - Mapeamentos são agrupados por atributo de destino (`agruparMapeamentosPorDestino`).
+     - Para cada grupo, `resolverValorDoGrupo` avalia as colunas candidatas no payload bruto e seleciona a primeira que apresentar valor preenchido (não-nulo e não-vazio).
+     - O contexto de validação (`prepararContexto`) é configurado a partir do mapeamento vencedor; caso nenhuma coluna esteja presente no payload, o primeiro mapeamento do grupo atua como sentinela de validação (ex.: disparo de obrigatoriedade).
+   - **APIs REST de Governança (`MapeamentoColunaController`):**
+     - `PUT /api/fontes/{fonteId}/mapeamentos/atributo/{atributoDestino}`: Sincroniza atômica e integralmente todos os mapeamentos vinculados a um atributo Silver, realizando inclusões, atualizações e exclusões dos pares omitidos.
+     - `DELETE /api/fontes/{fonteId}/mapeamentos/atributo/{atributoDestino}`: Remove todos os mapeamentos vinculados àquele atributo específico da fonte.
+   - **Resiliência Transacional Assíncrona (`TransicaoBronzeSilverService`):**
+     - Injeção de `TransactionTemplate` para assegurar o isolamento de sessão em invocações assíncronas internas (`processarLoteAssincrono` e `liberarLoteParaSilverAssincrono`), eliminando riscos de `LazyInitializationException` e garantindo o commit de estados da Quarentena em cenários All-or-Nothing.
 
 
 
