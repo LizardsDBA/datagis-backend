@@ -21,6 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -65,6 +66,18 @@ public class TransicaoBronzeSilverService {
     private final String quarentenaSchema;
     private final String bronzeSchema;
     private final ProgressoTransicaoRegistry progressoTransicaoRegistry;
+
+    /**
+     * Referência ao próprio bean via proxy do Spring, injetada tardiamente (evita ciclo
+     * na construção). Necessária porque {@code processarLoteAssincrono}/
+     * {@code liberarLoteParaSilverAssincrono} chamam um método {@code @Transactional}
+     * desta mesma classe: uma chamada direta via {@code this} (auto-invocação) não passa
+     * pelo proxy AOP, então nenhuma transação/sessão Hibernate é aberta e o acesso a uma
+     * associação lazy (ex.: {@code lote.getFonteDado()}) falha com "no session".
+     */
+    @Autowired
+    @Lazy
+    private TransicaoBronzeSilverService self;
 
     @Autowired
     public TransicaoBronzeSilverService(
@@ -351,7 +364,7 @@ public class TransicaoBronzeSilverService {
     @org.springframework.scheduling.annotation.Async("datagisTaskExecutor")
     public void processarLoteAssincrono(Long loteId) {
         try {
-            processarLote(loteId);
+            self.processarLote(loteId);
         } catch (Exception e) {
             log.error("Erro no processamento assíncrono do lote {}: {}", loteId, e.getMessage(), e);
             if (progressoTransicaoRegistry != null) {
@@ -366,7 +379,7 @@ public class TransicaoBronzeSilverService {
     @org.springframework.scheduling.annotation.Async("datagisTaskExecutor")
     public void liberarLoteParaSilverAssincrono(Long loteId, Long analistaId) {
         try {
-            liberarLoteParaSilver(loteId, analistaId);
+            self.liberarLoteParaSilver(loteId, analistaId);
         } catch (IllegalArgumentException e) {
             log.warn("Liberação assíncrona do lote {} barrada por validação: {}", loteId, e.getMessage());
         } catch (Exception e) {
