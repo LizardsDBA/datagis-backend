@@ -171,6 +171,23 @@ public class ValidadorDominio implements ValidadorCampo {
         cod = dominio.get(alnum);
         if (cod != null) return cod;
 
+        // 4.5. Valores compostos "A / B" (achado real no SFB/CNFP — área sobreposta a
+        // 2 categorias, ex.: "TI / PA", "PA / RVS"): resolve pelo primeiro componente
+        // que bater no domínio, reusando a cadeia inteira de normalização acima (a
+        // chamada recursiva nunca repete, já que a parte dividida não contém mais "/").
+        if (valorStr.contains("/")) {
+            for (String parte : valorStr.split("/")) {
+                String parteTrim = parte.trim();
+                if (parteTrim.isEmpty()) {
+                    continue;
+                }
+                String codParte = resolverCodigoCanonico(parteTrim, nomeTabela, dominio);
+                if (codParte != null) {
+                    return codParte;
+                }
+            }
+        }
+
         // 5. Resolução Semântica de Sinônimos e Sub-estados de órgãos oficiais (apenas se existir no domínio)
         String sinonimo = resolverSinonimosConhecidos(norm, nomeTabela);
         if (sinonimo != null && !dominio.isEmpty()) {
