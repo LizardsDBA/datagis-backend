@@ -873,3 +873,77 @@ justifica tratamento especial.
   durante toda a publicação (ex.: `(cod_natural, mapa_camada_id, versao_publicacao)`)
   — reduziria a hipótese de contenção de "crescimento à direita" do índice, se for
   essa mesma a causa real.
+
+---
+
+## 14. Auditoria das 7 fórmulas oficiais (pág. 6 do PDF) e déficit/passivo do IRL/IAPP (2026-10-25)
+
+> Pedido do usuário depois do §12/§13: "como podemos ter a certeza de que todos os
+> cálculos estão corretos e estão 100% de acordo com o solicitado no slide?". O
+> usuário colou o conteúdo completo do PDF oficial
+> (`Desafio_API_4BD_2026-2_GeoRural_DataHub_Apresentacao_v1.pdf`) e uma captura da
+> página 6 — até aqui, as fórmulas só tinham sido confirmadas por paráfrase/
+> interpretação em `docs/gold-procedures-calculo-publicacao.md`, nunca pelo texto
+> literal da página.
+
+### 14.1. Metodologia
+
+Leitura literal de cada uma das 7 fórmulas da pág. 6 (não a paráfrase existente),
+comparada linha a linha contra `pkg_calculo_territorial`, `pkg_calculo_ambiental` e
+`pkg_calculo_conservacao`.
+
+### 14.2. Gaps encontrados
+
+| Indicador | Gap | Status |
+|---|---|---|
+| IRL | fórmula pede também "déficit ou excedente em hectares"; só o percentual era publicado | **corrigido nesta sessão, §14.3** |
+| IAPP | fórmula pede também "passivo a recuperar em hectares"; só o percentual era publicado | **corrigido nesta sessão, §14.3** |
+| ISAP | fórmula soma sobreposição com UC + terra indígena + quilombola; `silver.area_protegida` tem UC, mas terra indígena está cadastrada com 0 registros ingeridos e quilombola não tem fonte cadastrada | **em aberto, §14.4** |
+| IDESMAT | usa `accumulated_deforestation_2000` (acumulado desde 2000) do PRODES; a fórmula oficial pede desmatamento **posterior** a um corte temporal (2008/2019/2020, conforme o indicador de referência) — nenhum dos 3 cortes é usado hoje | **em aberto, §14.4** |
+
+As outras 3 (ICV, IAE, IFC) bateram exatas contra a fórmula literal, sem gap.
+
+### 14.3. IRL (déficit/excedente) e IAPP (passivo) — implementados
+
+- `V086` adiciona `valor_secundario_ha` em `gold.indicador_resultado` e as 2 colunas
+  espelho em `gold.imovel_publicado` (`valor_irl_deficit_ha`, `valor_iapp_passivo_ha`).
+- `V087` estende `pkg_gold_publicacao.registrar_resultado` com um parâmetro opcional
+  no fim da lista (`DEFAULT NULL`), sem tocar nos 5 call sites que não precisam dele
+  (ISAP/IAE/IDESMAT/IFC/ICV), e inclui o valor novo no `hash_versao` — mudar só ele
+  ainda cria versão nova (idempotência preservada).
+- `V088` calcula em `pkg_calculo_territorial`:
+  - **IRL:** `déficit/excedente = SUM(reserva_legal.area_ha) − (área do imóvel × 20%)`
+    — 20% é o mínimo de Reserva Legal da Mata Atlântica (`c_percentual_minimo_
+    mata_atlantica`, já fixado na V072, §9.37 do `CLAUDE.md`). Negativo = déficit,
+    positivo/zero = excedente.
+  - **IAPP:** `passivo = área de APP declarada − área sobreposta com vegetação
+    nativa` (mesma interseção já usada pro percentual do IAPP).
+- Validado manualmente contra um imóvel real
+  (`PR-4119905-D0759104DB88431FBF3AB1240859D53A`): `61,949 − (324,4685×0,20) =
+  -2,9447 ha` (déficit) e `37,9301 − 0 = 37,9301 ha` (passivo), ambos batendo exato
+  com o que a procedure devolveu.
+- Exposto na API de consulta (`ConsultaImovelResponse`/`ConsultaMunicipioResponse`/
+  `ConsultaIndicadoresService`) — por imóvel é passagem direta; por município usa
+  `SUM()`, não a média ponderada por área dos demais indicadores, porque são
+  hectares absolutos, não percentual.
+- Exibido no frontend dentro dos cards/barras já existentes do IRL e do IAPP (mapa
+  `ConjuntosView.vue` e tabela `IndicadoresView.vue`), sem card novo.
+- Suíte completa depois da mudança: 773 testes, 0 falhas (mesmo erro conhecido do
+  `DatagisApplicationTests`).
+
+### 14.4. Em aberto
+
+- **ISAP — terras indígenas e quilombolas:** `silver.area_indigena` (ou equivalente)
+  está cadastrada como fonte, mas ingeriu 0 registros até agora (precisa
+  investigar por quê — URL mudou, filtro do circuito excluiu tudo, ou a fonte
+  nunca rodou). Quilombolas não tem fonte cadastrada — precisa achar uma (INCRA,
+  provavelmente) antes de somar essa sobreposição ao ISAP. Decisão explícita do
+  usuário nesta sessão: priorizar IRL/IAPP primeiro; isso continua sem fazer.
+- **IDESMAT — camada errada do PRODES:** o cálculo usa o acumulado desde 2000
+  (`accumulated_deforestation_2000`), não o desmatamento recortado por um dos 3
+  cortes temporais que a fórmula oficial pede (2008, 2019 ou 2020, dependendo de
+  qual versão do indicador está sendo seguida). Precisa decidir qual corte usar e
+  trocar a fonte/filtro antes de recalcular — não feito nesta sessão.
+- Nenhuma das 2 pendências acima foi tocada: são gaps de **dado/fonte**, não de
+  fórmula PL/SQL, e exigem decisão de produto (qual corte temporal, qual fonte pra
+  quilombola) antes de qualquer código.
