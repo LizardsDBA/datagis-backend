@@ -1,5 +1,7 @@
 package br.gov.sp.cps.datagis.gold;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.locationtech.jts.algorithm.Orientation;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
@@ -77,8 +79,16 @@ public class SimplificadorGeometriaMapa {
      * corrige: achado ao publicar o mapa de cobertura, 2.101 dos 4.611 imóveis da Gold
      * estavam com o anel invertido (o CAR manda no sentido horário). Ponto e linha
      * passam direto.
+     *
+     * <p><b>Reusado fora da publicação de mapa</b> — {@code ValidadorGeometria}
+     * (pacote {@code validacao}) chama este método na gravação Bronze→Silver, achado
+     * na investigação do ISAP=0% (docs/publicacao-gold-paralela.md §12): o JTS não
+     * considera anel invertido uma invalidade (por isso passava batido pelo
+     * {@code IsValidOp} da validação), só o Oracle rejeita — e sem lançar erro,
+     * {@code SDO_GEOM.SDO_INTERSECTION} contra essa geometria calcula uma área
+     * "lixo" (perto de zero) em vez de falhar, zerando o indicador silenciosamente.
      */
-    static Geometry orientarParaOracle(Geometry geometria) {
+    public static Geometry orientarParaOracle(Geometry geometria) {
         GeometryFactory fabrica = geometria.getFactory();
         if (geometria instanceof Polygon poligono) {
             return orientar(poligono, fabrica);
@@ -107,6 +117,39 @@ public class SimplificadorGeometriaMapa {
             buracos[i] = Orientation.isCCW(buraco.getCoordinateSequence()) ? buraco.reverse() : buraco;
         }
         return fabrica.createPolygon(externo, buracos);
+    }
+
+    /**
+     * Decompõe um {@code MultiPolygon} em polígonos individuais e simplifica cada um
+     * separadamente — pra uso de cálculo (não de mapa), onde o problema não é só
+     * vértice-por-polígono, mas a geometria inteira ser indexada como 1 feição só.
+     * Achado ao vivo (docs/publicacao-gold-paralela.md §3.2): 1 polígono do PRODES
+     * (ano 2000, manchas de desmatamento acumuladas) é um MultiPolygon fragmentado com
+     * MBR de ~180×130 km — maior que o município de Maringá inteiro. Como índice
+     * espacial é por feição (não por sub-elemento), toda consulta
+     * {@code SDO_RELATE} contra QUALQUER imóvel cujo bounding box caia dentro desse
+     * MBR gigante precisa do check exato contra a geometria inteira (123 mil vértices,
+     * mesmo simplificada) pra só então descobrir que não intersecciona de verdade —
+     * caro mesmo sem erro, sem geometria inválida, só por desenho de índice. Separar
+     * em features pequenas, cada uma com seu próprio MBR apertado, devolve a seletividade
+     * real ao índice: a maioria dos imóveis nem chega a pedir o check exato.
+     */
+    public List<String> decomporEsimplificar(String wkt, double toleranciaGraus) {
+        Geometry geometria = ler(wkt);
+        List<String> partes = new ArrayList<>();
+        int n = geometria.getNumGeometries();
+        for (int i = 0; i < n; i++) {
+            Geometry parte = geometria.getGeometryN(i);
+            if (parte.isEmpty()) {
+                continue;
+            }
+            Geometry simplificada = TopologyPreservingSimplifier.simplify(parte, toleranciaGraus);
+            if (simplificada.isEmpty()) {
+                continue;
+            }
+            partes.add(wktWriter.write(orientarParaOracle(simplificada)));
+        }
+        return partes;
     }
 
     private Geometry ler(String wkt) {
