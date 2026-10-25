@@ -129,12 +129,20 @@ services:
       APP_KEYCLOAK_PROVISIONAR: "true"
       APP_KEYCLOAK_USUARIOS_DEV: "true"
       JAVA_TOOL_OPTIONS: "-Xmx8g"
-      # Otimizacao da publicacao Gold (docs/publicacao-gold-paralela.md, secao 3.1):
-      # paralelismo=8 foi o pico medido (5,6x sobre sequencial, PGA ajustado); o pool
-      # do Hikari precisa de folga sobre o paralelismo (paralelismo + margem pra outras
-      # requisicoes HTTP concorrentes), senao thread do calculo fica esperando conexao.
-      APP_GOLD_PARALELISMO: "8"
-      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "16"
+      # Otimizacao da publicacao Gold (docs/publicacao-gold-paralela.md, secao 5.2).
+      # A decisao original da equipe era deixar o ambiente local em 1 (sequencial,
+      # igual sempre foi). Default ajustado pra 2 a pedido do time - ganho pequeno,
+      # mas ainda seguro (2 sessoes somam bem menos PGA que o teto de 8G ja
+      # persistido em infra/oracle-init - o ajuste pra 16G, secao 5.3, so e
+      # necessario pro paralelismo=6 do servidor).
+      # O valor calibrado pro servidor (6, medido contra o shape real da OCI - 4
+      # OCPU/8 vCPU, 31 GB, secao 2.1) entra so pelo docker-compose.prod.yml, nunca
+      # aqui - esse arquivo e compartilhado por todo o time em dev.
+      # Quem quiser testar com paralelismo maior na propria maquina sobrescreve sem
+      # editar este arquivo: `APP_GOLD_PARALELISMO=4 docker compose up -d backend`
+      # (ou exportar a variavel antes, permanente so naquela maquina).
+      APP_GOLD_PARALELISMO: "${APP_GOLD_PARALELISMO:-2}"
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "${APP_GOLD_HIKARI_MAXIMUM_POOL_SIZE:-10}"
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     volumes:

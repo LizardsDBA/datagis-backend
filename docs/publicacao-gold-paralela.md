@@ -947,3 +947,58 @@ As outras 3 (ICV, IAE, IFC) bateram exatas contra a fórmula literal, sem gap.
 - Nenhuma das 2 pendências acima foi tocada: são gaps de **dado/fonte**, não de
   fórmula PL/SQL, e exigem decisão de produto (qual corte temporal, qual fonte pra
   quilombola) antes de qualquer código.
+
+---
+
+## 15. Configuração de paralelismo separada por ambiente — dev vs. produção (2026-10-25)
+
+> Achado numa revisão de "tem algum problema em enviar assim?" antes do push: o
+> `APP_GOLD_PARALELISMO`/pool do Hikari estavam fixos em `8`/`16` direto no
+> `docker-compose.yml` **base** — arquivo compartilhado por todo o time em dev **e**
+> herdado pela produção, já que `docker-compose.prod.yml` não tinha override nenhum
+> pra essas 2 variáveis. O `8` nunca foi um valor acordado — era só o pico medido na
+> máquina que fez a investigação do §11 (Ryzen 5 5600, 12 threads), bem diferente do
+> `6` que a §5.2 já tinha calibrado pro servidor real, **antes** desta sessão.
+
+### 15.1. Correção
+
+- **`docker-compose.yml`** (dev, compartilhado pelo time): default `2`/`10` —
+  sobrescrevível por variável de ambiente do shell (`APP_GOLD_PARALELISMO=4 docker
+  compose up -d backend`), sem precisar editar o arquivo rastreado.
+- **`docker-compose.prod.yml`** (override só da instância OCI): `6`/`16`, explícito,
+  igual a §5.2 já pedia.
+
+### 15.2. Especificação real do servidor, confirmada por `htop` ao vivo
+
+| | Documentado (§2.1, antes desta sessão) | Confirmado ao vivo (2026-10-25) |
+|---|---|---|
+| vCPU | 8 (4 OCPU) | 8 |
+| RAM total | 31 GB | 31,3 GB |
+| RAM em uso | — | 7,86 GB (bastante folga: ~23 GB livres) |
+| Swap | — | 36K / 8,00G (praticamente ocioso) |
+| Load average | — | 0,13 / 0,14 / 0,09 |
+
+Confirma que `6`/`16` tem folga generosa nessa máquina.
+
+### 15.3. Pré-requisito de PGA — aplicado em produção
+
+`PGA_AGGREGATE_LIMIT` do Oracle de produção subido de `8G` pra `16G` (mesmo padrão de
+`infra/oracle-init/01-criar-schemas.sh`: `ALTER SYSTEM` como `SYS`, `CDB$ROOT` antes
+do PDB), **executado ao vivo no servidor em 2026-10-25** pelo usuário via SSH:
+
+```sql
+ALTER SYSTEM SET PGA_AGGREGATE_LIMIT = 16G SCOPE = BOTH;   -- CDB$ROOT
+ALTER SESSION SET CONTAINER = FREEPDB1;
+ALTER SYSTEM SET PGA_AGGREGATE_LIMIT = 16G SCOPE = BOTH;
+```
+
+`System altered` / `Session altered` / `System altered` — sem erro. É um ajuste no
+banco real (sobrevive a redeploy de container, mora no volume do Oracle), não em
+arquivo deste repositório — comentário deixado em `docker-compose.prod.yml` avisando
+que precisa ser repetido só se o volume do Oracle de produção for recriado do zero
+(o que normalmente não deveria acontecer).
+
+### 15.4. Status
+
+Com isso, não há mais pré-requisito pendente pro deploy do paralelismo (indicadores +
+camadas de mapa) em produção.

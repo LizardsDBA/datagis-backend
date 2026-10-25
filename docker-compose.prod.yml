@@ -33,6 +33,22 @@ services:
       KEYCLOAK_URL_INTERNA: http://keycloak:8080/auth
       KEYCLOAK_URL_PUBLICA: https://datagis.com.br/auth
       APP_KEYCLOAK_USUARIOS_DEV: "false"
+      # Otimizacao da publicacao Gold (docs/publicacao-gold-paralela.md, secao 5.2) -
+      # valor calibrado contra o shape real desta instancia (8 vCPU, 31,3 GB, 7,86 GB
+      # em uso no momento da medicao via htop - secao 2.1/14). docker-compose.yml
+      # (base, compartilhado pelo time em dev) fica em 2 (seguro) de proposito - so
+      # aqui, no override de producao, sobe pra 6.
+      # PRE-REQUISITO pro paralelismo=6 nao estourar PGA (ORA-04036, secao 5.3) - teto
+      # subido pra 16G no servidor real, 2026-10-25 (ALTER SYSTEM como SYS, CDB$ROOT
+      # depois FREEPDB1, mesmo padrao de infra/oracle-init/01-criar-schemas.sh):
+      # ALTER SYSTEM SET PGA_AGGREGATE_LIMIT = 16G SCOPE = BOTH;  -- ja aplicado
+      # Isso e um ajuste no banco real, nao em arquivo deste repositorio - sobrevive
+      # a redeploy de container (dado persistido no volume do Oracle), mas NAO
+      # sobrevive a um volume novo (`docker compose down -v` em produção, que nunca
+      # deveria rodar sem motivo grave) - se isso acontecer, repetir o comando acima
+      # antes de religar o backend com paralelismo=6.
+      APP_GOLD_PARALELISMO: "6"
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "16"
     ports: !reset []
 
   frontend:
