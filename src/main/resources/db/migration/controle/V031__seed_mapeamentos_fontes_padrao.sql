@@ -56,7 +56,7 @@ UNION ALL
 SELECT f.id, 'cod_municipio_ibge', 'municipio', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.id IN (3, 18)
 UNION ALL
-SELECT f.id, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1
+SELECT f.id, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.id IN (3, 18);
 
 -- 3. Semear mapeamentos para Fonte 2 (ICMBio UCs - WFS INDE) -> area_protegida
@@ -107,7 +107,7 @@ INSERT INTO ${controleSchema}.mapeamento_coluna (
     valor_minimo, tabela_referencia, referencia_entidade_silver, validar_cpf_cnpj,
     validar_geometria, validar_recorte_pr, impedir_regressao
 )
-VALUES (7, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1);
+VALUES (7, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1);
 
 -- 4. Semear mapeamentos para Fonte 3 (INPE PRODES Desmatamento) -> desmatamento
 INSERT INTO ${controleSchema}.mapeamento_coluna (
@@ -150,7 +150,7 @@ INSERT INTO ${controleSchema}.mapeamento_coluna (
     valor_minimo, tabela_referencia, referencia_entidade_silver, validar_cpf_cnpj,
     validar_geometria, validar_recorte_pr, impedir_regressao
 )
-VALUES (15, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1);
+VALUES (15, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1);
 
 -- 5. Semear mapeamentos para Fonte 4 (IAT/PR Focos de Calor) -> foco_calor
 INSERT INTO ${controleSchema}.mapeamento_coluna (
@@ -214,7 +214,7 @@ INSERT INTO ${controleSchema}.mapeamento_coluna (
     valor_minimo, tabela_referencia, referencia_entidade_silver, validar_cpf_cnpj,
     validar_geometria, validar_recorte_pr, impedir_regressao
 )
-VALUES (16, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1);
+VALUES (16, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1);
 
 -- 6. Semear mapeamentos para Fonte 5 (IAT/PR Embargos IBAMA) -> embargo_ambiental
 INSERT INTO ${controleSchema}.mapeamento_coluna (
@@ -285,7 +285,7 @@ INSERT INTO ${controleSchema}.mapeamento_coluna (
     valor_minimo, tabela_referencia, referencia_entidade_silver, validar_cpf_cnpj,
     validar_geometria, validar_recorte_pr, impedir_regressao
 )
-VALUES (11, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1);
+VALUES (11, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1);
 
 -- 7. Semear mapeamentos para Fonte 6 (INPE Queimadas CSV) -> foco_calor
 INSERT INTO ${controleSchema}.mapeamento_coluna (
@@ -342,7 +342,7 @@ INSERT INTO ${controleSchema}.mapeamento_coluna (
     valor_minimo, tabela_referencia, referencia_entidade_silver, validar_cpf_cnpj,
     validar_geometria, validar_recorte_pr, impedir_regressao
 )
-VALUES (17, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1);
+VALUES (17, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1);
 
 -- 8. Semear mapeamentos para Fonte 7 (IBGE Municípios) -> municipio
 INSERT INTO ${controleSchema}.mapeamento_coluna (
@@ -371,7 +371,7 @@ INSERT INTO ${controleSchema}.mapeamento_coluna (
     valor_minimo, tabela_referencia, referencia_entidade_silver, validar_cpf_cnpj,
     validar_geometria, validar_recorte_pr, impedir_regressao
 )
-VALUES (1, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1);
+VALUES (1, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1);
 
 -- 9. Semear mapeamentos para Fonte 8 (IAT/PR Terras Indígenas FUNAI) -> area_protegida
 INSERT INTO ${controleSchema}.mapeamento_coluna (
@@ -414,7 +414,7 @@ INSERT INTO ${controleSchema}.mapeamento_coluna (
     valor_minimo, tabela_referencia, referencia_entidade_silver, validar_cpf_cnpj,
     validar_geometria, validar_recorte_pr, impedir_regressao
 )
-VALUES (8, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1);
+VALUES (8, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1);
 
 -- 10. Semear mapeamentos para Fonte 9 (IAT/PR Embargos ICMBio) -> embargo_ambiental
 INSERT INTO ${controleSchema}.mapeamento_coluna (
@@ -485,7 +485,7 @@ INSERT INTO ${controleSchema}.mapeamento_coluna (
     valor_minimo, tabela_referencia, referencia_entidade_silver, validar_cpf_cnpj,
     validar_geometria, validar_recorte_pr, impedir_regressao
 )
-VALUES (12, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1);
+VALUES (12, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1);
 
 -- 11. Semear mapeamentos para Fonte 10 (IAT/PR Autos IBAMA) -> auto_infracao
 INSERT INTO ${controleSchema}.mapeamento_coluna (
@@ -556,7 +556,7 @@ INSERT INTO ${controleSchema}.mapeamento_coluna (
     valor_minimo, tabela_referencia, referencia_entidade_silver, validar_cpf_cnpj,
     validar_geometria, validar_recorte_pr, impedir_regressao
 )
-VALUES (13, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1);
+VALUES (13, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1);
 
 -- 12. Semear mapeamentos para Fonte 11 (IAT/PR Autos ICMBio) -> auto_infracao
 INSERT INTO ${controleSchema}.mapeamento_coluna (
@@ -627,4 +627,4 @@ INSERT INTO ${controleSchema}.mapeamento_coluna (
     valor_minimo, tabela_referencia, referencia_entidade_silver, validar_cpf_cnpj,
     validar_geometria, validar_recorte_pr, impedir_regressao
 )
-VALUES (14, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1);
+VALUES (14, 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1);

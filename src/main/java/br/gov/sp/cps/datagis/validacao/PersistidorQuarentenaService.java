@@ -4,6 +4,7 @@ import br.gov.sp.cps.datagis.bronze.RegistroBruto;
 import br.gov.sp.cps.datagis.controle.MapeamentoColuna;
 import br.gov.sp.cps.datagis.controle.MapeamentoColunaRepository;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -36,7 +37,7 @@ public class PersistidorQuarentenaService {
     private final ObjectMapper objectMapper;
     private final MapeamentoColunaRepository mapeamentoRepository;
     private final Map<String, Long> tiposErroCache = new ConcurrentHashMap<>();
-    private final Map<Long, Map<String, String>> mapeamentoPorFonteCache = new ConcurrentHashMap<>();
+    private final Map<Long, Map<String, List<String>>> mapeamentoPorFonteCache = new ConcurrentHashMap<>();
     private volatile Long statusPendenteId = null;
 
     @Autowired
@@ -103,7 +104,7 @@ public class PersistidorQuarentenaService {
         Long regId = reg != null ? reg.getId() : null;
         Long loteId = reg != null ? reg.getLoteIngestaoId() : null;
         Long fonteId = reg != null ? reg.getFonteDadoId() : null;
-        Map<String, String> mapCols = obterMapaAtributos(fonteId);
+        Map<String, List<String>> mapCols = obterMapaAtributos(fonteId);
 
         String geomWkt = reg != null ? reg.getGeometriaWkt() : null;
         String campoProb = rej.campoProblema();
@@ -282,7 +283,7 @@ public class PersistidorQuarentenaService {
         }
     }
 
-    private Map<String, String> obterMapaAtributos(Long fonteDadoId) {
+    private Map<String, List<String>> obterMapaAtributos(Long fonteDadoId) {
         if (fonteDadoId == null || mapeamentoRepository == null) {
             return Collections.emptyMap();
         }
@@ -292,10 +293,11 @@ public class PersistidorQuarentenaService {
                 if (lista == null || lista.isEmpty()) {
                     return Collections.emptyMap();
                 }
-                Map<String, String> map = new HashMap<>();
+                Map<String, List<String>> map = new HashMap<>();
                 for (MapeamentoColuna m : lista) {
                     if (m.getAtributoDestino() != null && m.getColunaOrigem() != null) {
-                        map.put(m.getAtributoDestino().trim().toLowerCase(Locale.ROOT), m.getColunaOrigem().trim());
+                        map.computeIfAbsent(m.getAtributoDestino().trim().toLowerCase(Locale.ROOT), k -> new ArrayList<>())
+                                .add(m.getColunaOrigem().trim());
                     }
                 }
                 return map;
@@ -306,15 +308,19 @@ public class PersistidorQuarentenaService {
         });
     }
 
-    private String extrairCampo(Map<String, Object> payloadMap, Map<String, String> mapCols, String atributoDestino, String... aliasesPadrao) {
+    private String extrairCampo(Map<String, Object> payloadMap, Map<String, List<String>> mapCols, String atributoDestino, String... aliasesPadrao) {
         if (payloadMap == null || payloadMap.isEmpty()) return null;
 
-        // 1. Se houver coluna de origem mapeada explicitamente em controle.mapeamento_coluna:
+        // 1. Se houver coluna(s) de origem mapeada(s) explicitamente em controle.mapeamento_coluna:
         if (mapCols != null && atributoDestino != null) {
-            String colOrigem = mapCols.get(atributoDestino.toLowerCase(Locale.ROOT));
-            if (colOrigem != null && !colOrigem.isBlank()) {
-                String val = extrairTexto(payloadMap, colOrigem);
-                if (val != null) return val;
+            List<String> colsOrigem = mapCols.get(atributoDestino.toLowerCase(Locale.ROOT));
+            if (colsOrigem != null && !colsOrigem.isEmpty()) {
+                for (String colOrigem : colsOrigem) {
+                    if (colOrigem != null && !colOrigem.isBlank()) {
+                        String val = extrairTexto(payloadMap, colOrigem);
+                        if (val != null) return val;
+                    }
+                }
             }
         }
 

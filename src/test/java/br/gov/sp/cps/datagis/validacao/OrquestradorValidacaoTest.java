@@ -219,7 +219,70 @@ class OrquestradorValidacaoTest {
         assertThat(OrquestradorValidacao.inferirReferenciaEntidadeSilverCanonico("auto_infracao")).isNull();
     }
 
-    // -------------------------------------------------------------------------
+    @Test
+    @DisplayName("Deve aprovar registro quando qualquer uma das origens alternativas estiver preenchida (1:N)")
+    void deveAprovarComMultiplasColunasDeOrigemAlternativas() {
+        Long fonteId = 1L;
+
+        MapeamentoColuna map1 = MapeamentoColuna.builder()
+                .colunaOrigem("num_car")
+                .atributoDestino("cod_imovel")
+                .destinoTipo("COLUNA")
+                .obrigatorio(true)
+                .build();
+
+        MapeamentoColuna map2 = MapeamentoColuna.builder()
+                .colunaOrigem("numero_car")
+                .atributoDestino("cod_imovel")
+                .destinoTipo("COLUNA")
+                .obrigatorio(true)
+                .build();
+
+        when(mapeamentoRepository.findByFonteDadoId(fonteId)).thenReturn(List.of(map1, map2));
+
+        // Registro 1 vem com num_car
+        RegistroBruto reg1 = criarRegistro(1L, 10L, "{\"num_car\": \"PR-001\"}");
+        // Registro 2 vem com a alternativa numero_car
+        RegistroBruto reg2 = criarRegistro(2L, 10L, "{\"numero_car\": \"PR-002\"}");
+
+        ResultadoOrquestracao resultado = orquestrador.orquestrarLote(fonteId, List.of(reg1, reg2), null);
+
+        assertThat(resultado.totalAprovados()).isEqualTo(2);
+        assertThat(resultado.totalRejeitados()).isEqualTo(0);
+        assertThat(resultado.aprovados().get(0).atributosTransformados()).containsEntry("cod_imovel", "PR-001");
+        assertThat(resultado.aprovados().get(1).atributosTransformados()).containsEntry("cod_imovel", "PR-002");
+    }
+
+    @Test
+    @DisplayName("Deve rejeitar para quarentena quando nenhuma das origens alternativas estiver presente para campo obrigatório")
+    void deveRejeitarQuandoNenhumaOrigemAlternativaFornecida() {
+        Long fonteId = 1L;
+
+        MapeamentoColuna map1 = MapeamentoColuna.builder()
+                .colunaOrigem("num_car")
+                .atributoDestino("cod_imovel")
+                .destinoTipo("COLUNA")
+                .obrigatorio(true)
+                .build();
+
+        MapeamentoColuna map2 = MapeamentoColuna.builder()
+                .colunaOrigem("numero_car")
+                .atributoDestino("cod_imovel")
+                .destinoTipo("COLUNA")
+                .obrigatorio(true)
+                .build();
+
+        when(mapeamentoRepository.findByFonteDadoId(fonteId)).thenReturn(List.of(map1, map2));
+
+        RegistroBruto regInvalido = criarRegistro(1L, 10L, "{\"outro_campo\": \"qualquer\"}");
+
+        ResultadoOrquestracao resultado = orquestrador.orquestrarLote(fonteId, List.of(regInvalido), null);
+
+        assertThat(resultado.totalAprovados()).isEqualTo(0);
+        assertThat(resultado.totalRejeitados()).isEqualTo(1);
+        assertThat(resultado.rejeitados().get(0).tipoErro()).isEqualTo("CAMPO_OBRIGATORIO_AUSENTE");
+    }
+
     // Helpers
     // -------------------------------------------------------------------------
 

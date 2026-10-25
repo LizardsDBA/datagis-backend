@@ -8,6 +8,8 @@ OBS IMPORTANTE:
 2. Tudo que for relacionado a "tipo_area_protegida" é derivado automaticamente a partir de "categoria_area_protegida". Não sendo necessário vincular tipo_area_protegida no mapeamento de coluna. Em contrapartida, "categoria_area_protegida" é de preenchimento obrigatório para áreas protegidas.
 3. Tudo relacionado a "unidade_federativa" em município é preenchido automaticamente com o valor padrão do estado do Paraná (PR). Não sendo necessário vincular no mapeamento de coluna.
 4. Regra de Bloqueio de Ingestão por Mapeamento Incompleto: O sistema bloqueia preventivamente a execução da fonte (manual ou agendada) caso alguma coluna física da tabela Silver marcada como NOT NULL não esteja mapeada. Colunas que não possuem restrição NOT NULL na tabela física da Silver (por exemplo, situacao_imovel em imovel_rural) são opcionais e não impedem a ingestão.
+5. Suporte a Múltiplas Colunas de Origem (1:N): Uma mesma coluna de destino da Silver (`atributo_destino`) pode possuir múltiplas colunas de origem candidatas no Bronze cadastradas (ex.: `cd_cnuc` e `codigo_uc` apontando para `codigo_origem`, ou `cria_ato` e `ato_criaca` apontando para `ato_legal`). O motor de validação processa as alternativas em ordem e seleciona a primeira coluna presente e não-nula/não-vazia no payload.
+6. Remoção da Validação Territorial do Paraná: A validação que restringia geometrias aos limites territoriais do Paraná (`validarRecortePr`) foi desativada do motor. Geometrias válidas espacialmente não são mais descartadas para a quarentena com `FORA_DO_RECORTE_TERRITORIAL`.
 
 ---
 
@@ -74,7 +76,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `m_fiscal` | `modulos_fiscais` | COLUNA | numero | Não | Valor mínimo: 0.0 |
 | `cod_municipio_ibge` | `municipio` | COLUNA | texto | Não | Ref. Silver: `municipio` |
 | `dat_criacao` | `data_registro` | COLUNA | data_iso | Não |  |
-| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
+| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria |
 
 ---
 
@@ -92,7 +94,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `NUM_MODULO` | `modulos_fiscais` | COLUNA | numero | Não | Valor mínimo: 0.0 |
 | `COD_MUNICIPIO` | `municipio` | COLUNA | texto | Não | Ref. Silver: `municipio` |
 | `DAT_CRIACAO` | `data_registro` | COLUNA | data_iso | Não |  |
-| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
+| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria |
 
 ---
 
@@ -107,7 +109,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `num_area` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
 | `ind_status` | `situacao_bruto` | COLUNA | texto | Não |  |
 | `des_condic` | `condicao_bruto` | COLUNA | texto | Não |  |
-| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
+| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria |
 
 ---
 
@@ -122,7 +124,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `num_area` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
 | `ind_status` | `situacao_bruto` | COLUNA | texto | Não |  |
 | `des_condic` | `condicao_bruto` | COLUNA | texto | Não |  |
-| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
+| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria |
 
 ---
 
@@ -137,7 +139,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `num_area` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
 | `ind_status` | `situacao_bruto` | COLUNA | texto | Não |  |
 | `des_condic` | `condicao_bruto` | COLUNA | texto | Não |  |
-| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
+| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria |
 
 ---
 
@@ -153,7 +155,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `categoria` | `categoria_area_protegida` | COLUNA | texto | Sim | Domínio: `categoria_area_protegida` |
 | `biomas` | `bioma` | COLUNA | texto | Não | Domínio: `bioma` |
 | `criacaoato` | `ato_legal` | COLUNA | texto | Não |  |
-| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
+| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria |
 
 ---
 
@@ -167,7 +169,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `terrai_nom` | `nome` | COLUNA | texto | Sim |  |
 | `superficie` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
 | `modalidade` | `categoria_area_protegida` | COLUNA | texto | Sim | Domínio: `categoria_area_protegida` |
-| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
+| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria |
 
 ---
 
@@ -177,12 +179,12 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 
 | Coluna Origem (Bruto) | Coluna Destino (Silver) | Destino Tipo | Tipo de Dado | Obrigatório | Validações / Regras |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `cd_cnuc` | `codigo_origem` | COLUNA | texto | Sim | Chave natural CNUC |
+| `cd_cnuc`, `codigo_uc` | `codigo_origem` | COLUNA | texto | Sim | Chave natural CNUC |
 | `nome_uc` | `nome` | COLUNA | texto | Sim |  |
 | `ha_total` | `area_ha` | COLUNA | numero | Não | Valor mínimo: 0.0 |
 | `categoria` | `categoria_area_protegida` | COLUNA | texto | Sim | Domínio: `categoria_area_protegida` |
-| `cria_ato` | `ato_legal` | COLUNA | texto | Não |  |
-| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
+| `cria_ato`, `ato_criaca` | `ato_legal` | COLUNA | texto | Não |  |
+| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria |
 
 ---
 
@@ -198,7 +200,7 @@ Obs: Coluna `ativo` vem como padrao 1 e `data_add` vem como parão a data da ing
 | `categoria` | `categoria_area_protegida` | COLUNA | texto | Sim | Domínio: `categoria_area_protegida` |
 | `bioma` | `bioma` | COLUNA | texto | Não | Domínio: `bioma` |
 | `atolegal` | `ato_legal` | COLUNA | texto | Não | Ato legal |
-| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria + Limite PR |
+| `geometry` | `geometria` | GEOMETRIA | wkt | Não | Validar geometria |
 
 
 ---
