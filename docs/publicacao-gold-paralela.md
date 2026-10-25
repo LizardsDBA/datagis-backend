@@ -1,11 +1,29 @@
 # Publicação da Gold em paralelo
 
-> Documento de **proposta**, escrito antes da implementação, a partir de medições feitas
-> no servidor de produção (OCI) e num notebook da equipe em 2026-10-23. Relacionado:
-> `CLAUDE.md` §9.33 (procedures da Gold), §9.36 (camadas de mapa em Java/JTS), §9.43
-> (publicação Gold com botão único) e §10.9 (execução em segundo plano).
+> Nasceu como documento de **proposta**, escrito antes da implementação, a partir de
+> medições feitas no servidor de produção (OCI) e num notebook da equipe em
+> 2026-10-23 (§1-§10, abaixo). Relacionado: `CLAUDE.md` §9.33 (procedures da Gold),
+> §9.36 (camadas de mapa em Java/JTS), §9.43 (publicação Gold com botão único) e
+> §10.9 (execução em segundo plano).
 
-**Status:** [PROPOSTO — a validar]. Nada implementado ainda.
+**Status:** [IMPLEMENTADO e em produção, 2026-10-25]. §1-§10 documentam a proposta
+original (histórico — algumas premissas ficaram obsoletas, marcado inline onde
+relevante); §11 em diante é a investigação e a implementação real:
+
+- **§11.3** — paralelismo no cálculo dos indicadores (ganho medido: 5,6x nesta
+  máquina de investigação, com a PGA ajustada).
+- **§11.4** — otimização do cálculo do IDESMAT (`gold.desmatamento_otimizado`),
+  destravou o gargalo que dominava 94% do tempo por imóvel.
+- **§12** — correção de um bug real de cálculo (não de performance): orientação de
+  anel de geometria fazia `SDO_GEOM.SDO_INTERSECTION` devolver lixo silenciosamente
+  (ISAP publicado em 0,0184% quando devia ser ~100%).
+- **§13** — paralelismo também nas camadas de mapa (ganho mais modesto, ~1,23x).
+- **§14** — auditoria das 7 fórmulas oficiais contra a pág. 6 do PDF do desafio;
+  IRL (déficit/excedente) e IAPP (passivo) implementados; ISAP (terra
+  indígena/quilombola) e IDESMAT (corte temporal do PRODES) seguem com gap de fonte,
+  não tocados.
+- **§15** — configuração final por ambiente (dev `2`/`10`, produção `6`/`16`) e o
+  ajuste de PGA já aplicado no servidor real.
 
 ---
 
@@ -306,6 +324,10 @@ renderia o mesmo.
 
 ## 9. Fora do escopo desta mudança
 
+> **A 1ª melhoria do item "Camadas do mapa" abaixo foi feita — ver §13** (paralelizar
+> por página, mesma ideia dos indicadores). A 2ª (trocar WKT por WKB) segue não
+> tentada. Seção mantida por histórico.
+
 - **Camadas do mapa** (`publicarCamadaMapaEmLotes`): também são sequenciais e somam
   ~29 min da publicação no servidor (§2.4). A medição mostrou que o custo está no Oracle
   convertendo as geometrias para texto (`SDO_UTIL.TO_WKTGEOMETRY`), e não na
@@ -328,9 +350,15 @@ renderia o mesmo.
 
 ## 10. Itens em aberto
 
-- ID da task no board.
-- Valor final do paralelismo no servidor (4 ou 6), definido pela medição.
-- Se a segunda etapa (camadas do mapa, §9) entra na mesma task ou numa própria.
+> **Os 3 itens abaixo estão resolvidos** — ver §15 (valor final do paralelismo, por
+> ambiente) e §13 (camadas de mapa, mesma task). Seção mantida por histórico.
+
+- ~~ID da task no board.~~ `LIZARDS-29` (mesma task do item 3.1 que deu origem a
+  este documento).
+- ~~Valor final do paralelismo no servidor (4 ou 6), definido pela medição.~~ `6`,
+  aplicado via `docker-compose.prod.yml` — §15.
+- ~~Se a segunda etapa (camadas do mapa, §9) entra na mesma task ou numa própria.~~
+  Mesma task — §13.
 
 ---
 
@@ -474,6 +502,12 @@ Keycloak, GeoServer, frontend).
 Sem o ajuste de PGA, o valor de paralelismo quase não importa (ficava preso perto de
 2 im/s em qualquer K, como o §2 original já tinha medido com paralelismo=1 no
 servidor).
+
+> **Nota (§15):** esse `8` é o pico medido **nesta máquina específica** de
+> investigação, não o valor que ficou configurado. O `docker-compose.yml`
+> compartilhado pelo time em dev usa `2` (seguro em qualquer máquina, sem precisar
+> do ajuste de PGA acima); o valor calibrado pro servidor real de produção é `6`,
+> aplicado só via `docker-compose.prod.yml`. Ver §15 para o porquê.
 
 **Risco já conhecido, reconfirmado:** a essa taxa (16 im/s), publicar o Paraná inteiro
 (~556 mil imóveis) levaria **~9,7 horas** só nos indicadores — ainda não é suficiente
