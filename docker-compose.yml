@@ -129,6 +129,12 @@ services:
       APP_KEYCLOAK_PROVISIONAR: "true"
       APP_KEYCLOAK_USUARIOS_DEV: "true"
       JAVA_TOOL_OPTIONS: "-Xmx8g"
+      # Otimizacao da publicacao Gold (docs/publicacao-gold-paralela.md, secao 3.1):
+      # paralelismo=8 foi o pico medido (5,6x sobre sequencial, PGA ajustado); o pool
+      # do Hikari precisa de folga sobre o paralelismo (paralelismo + margem pra outras
+      # requisicoes HTTP concorrentes), senao thread do calculo fica esperando conexao.
+      APP_GOLD_PARALELISMO: "8"
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "16"
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     volumes:

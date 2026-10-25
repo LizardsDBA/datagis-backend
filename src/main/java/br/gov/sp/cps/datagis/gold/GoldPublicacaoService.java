@@ -364,37 +364,7 @@ public class GoldPublicacaoService {
                 if (selectSql == null) {
                     throw new IllegalArgumentException("Camada desconhecida: " + codigoCamada);
                 }
-                long offset = 0;
-                while (true) {
-                    List<LinhaSilver> linhas = jdbcTemplate.query(selectSql, GoldPublicacaoService::mapearLinha, offset, TAMANHO_PAGINA);
-                    if (linhas.isEmpty()) {
-                        break;
-                    }
-
-                    int publicados = 0;
-                    int pulados = 0;
-                    for (LinhaSilver linha : linhas) {
-                        try {
-                            String wktSimplificado = CAMADA_LIMITE_PR.equals(codigoCamada)
-                                    ? simplificador.simplificarContornoExterno(linha.wkt(), TOLERANCIA_LIMITE_PR_GRAUS)
-                                    : simplificador.simplificar(linha.wkt());
-                            inserirFeaturePublicada(mapaCamadaId, linha, wktSimplificado, novaVersao);
-                            publicados++;
-                        } catch (Exception e) {
-                            pulados++;
-                            jdbcTemplate.update(
-                                    """
-                                    INSERT INTO gold.publicacao_camada_mapa_erro
-                                        (publicacao_camada_mapa_id, origem_silver_id, identificador, motivo)
-                                    VALUES (?, ?, ?, ?)
-                                    """,
-                                    publicacaoId, linha.id(), linha.codNatural(), truncar(e.getMessage(), 500));
-                        }
-                    }
-
-                    atualizarProgresso(publicacaoId, linhas.size(), publicados, pulados);
-                    offset += TAMANHO_PAGINA;
-                }
+                publicarCamadaEmParalelo(codigoCamada, selectSql, mapaCamadaId, novaVersao, publicacaoId);
             }
 
             jdbcTemplate.update(
@@ -421,6 +391,71 @@ public class GoldPublicacaoService {
                     "DELETE FROM gold.feature_publicada WHERE mapa_camada_id = ? AND versao_publicacao = ?",
                     mapaCamadaId, novaVersao);
             throw new IllegalStateException("Falha publicando camada " + codigoCamada, e);
+        }
+    }
+
+    /**
+     * Processa 1 página de linhas da Silver por vez, mas cada página em
+     * {@link #paralelismo} threads — a simplificação JTS é CPU pura (sem a mesma
+     * disputa de PGA do Oracle que dominava o cálculo de indicadores, §3.2 de
+     * docs/publicacao-gold-paralela.md), então paraleliza bem. A leitura paginada
+     * em si continua sequencial (1 SELECT por página, OFFSET/FETCH); só o trabalho
+     * por linha dentro da página (simplificar + inserir) roda em paralelo. O item
+     * mais pesado isolado (1 polígono muito complexo) ainda limita o piso do tempo
+     * da página em que ele cai — paraleliza o conjunto, não o pior caso.
+     */
+    private void publicarCamadaEmParalelo(
+            String codigoCamada, String selectSql, Long mapaCamadaId, long novaVersao, long publicacaoId) {
+        ExecutorService executor = Executors.newFixedThreadPool(
+                paralelismo, Thread.ofPlatform().name("gold-mapa-", 1).factory());
+        try {
+            long offset = 0;
+            while (true) {
+                List<LinhaSilver> linhas = jdbcTemplate.query(selectSql, GoldPublicacaoService::mapearLinha, offset, TAMANHO_PAGINA);
+                if (linhas.isEmpty()) {
+                    break;
+                }
+
+                AtomicInteger publicados = new AtomicInteger();
+                AtomicInteger pulados = new AtomicInteger();
+                List<Future<?>> tarefas = linhas.stream()
+                        .<Future<?>>map(linha -> executor.submit(() -> {
+                            try {
+                                String wktSimplificado = CAMADA_LIMITE_PR.equals(codigoCamada)
+                                        ? simplificador.simplificarContornoExterno(linha.wkt(), TOLERANCIA_LIMITE_PR_GRAUS)
+                                        : simplificador.simplificar(linha.wkt());
+                                inserirFeaturePublicada(mapaCamadaId, linha, wktSimplificado, novaVersao);
+                                publicados.incrementAndGet();
+                            } catch (Exception e) {
+                                pulados.incrementAndGet();
+                                jdbcTemplate.update(
+                                        """
+                                        INSERT INTO gold.publicacao_camada_mapa_erro
+                                            (publicacao_camada_mapa_id, origem_silver_id, identificador, motivo)
+                                        VALUES (?, ?, ?, ?)
+                                        """,
+                                        publicacaoId, linha.id(), linha.codNatural(), truncar(e.getMessage(), 500));
+                            }
+                        }))
+                        .toList();
+
+                for (Future<?> tarefa : tarefas) {
+                    try {
+                        tarefa.get();
+                    } catch (Exception e) {
+                        // Falha de infraestrutura real (falha de 1 registro já foi
+                        // tratada dentro da tarefa acima e nunca chega aqui) - cancela
+                        // o resto e deixa o chamador marcar a publicação como FALHOU.
+                        tarefas.forEach(t -> t.cancel(true));
+                        throw new IllegalStateException("Falha publicando página da camada " + codigoCamada, e);
+                    }
+                }
+
+                atualizarProgresso(publicacaoId, linhas.size(), publicados.get(), pulados.get());
+                offset += TAMANHO_PAGINA;
+            }
+        } finally {
+            executor.shutdown();
         }
     }
 
