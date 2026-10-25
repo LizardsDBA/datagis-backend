@@ -1,7 +1,12 @@
 package br.gov.sp.cps.datagis.controle;
 
-import java.util.List;
+import br.gov.sp.cps.datagis.config.OperacaoEmAndamentoException;
+import br.gov.sp.cps.datagis.validacao.ProgressoTransicaoRegistry;
+import br.gov.sp.cps.datagis.validacao.ProgressoTransicaoResponse;
 import br.gov.sp.cps.datagis.validacao.TransicaoBronzeSilverService;
+import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,12 +22,22 @@ public class LoteIngestaoController {
 
     private final LoteIngestaoRepository loteIngestaoRepository;
     private final TransicaoBronzeSilverService transicaoBronzeSilverService;
+    private final ProgressoTransicaoRegistry progressoTransicaoRegistry;
+
+    @Autowired
+    public LoteIngestaoController(
+            LoteIngestaoRepository loteIngestaoRepository,
+            TransicaoBronzeSilverService transicaoBronzeSilverService,
+            @Autowired(required = false) ProgressoTransicaoRegistry progressoTransicaoRegistry) {
+        this.loteIngestaoRepository = loteIngestaoRepository;
+        this.transicaoBronzeSilverService = transicaoBronzeSilverService;
+        this.progressoTransicaoRegistry = progressoTransicaoRegistry;
+    }
 
     public LoteIngestaoController(
             LoteIngestaoRepository loteIngestaoRepository,
             TransicaoBronzeSilverService transicaoBronzeSilverService) {
-        this.loteIngestaoRepository = loteIngestaoRepository;
-        this.transicaoBronzeSilverService = transicaoBronzeSilverService;
+        this(loteIngestaoRepository, transicaoBronzeSilverService, null);
     }
 
     @GetMapping
@@ -43,16 +58,33 @@ public class LoteIngestaoController {
     }
 
     /**
+     * Retorna o progresso atual da transição/revalidação do lote.
+     */
+    @GetMapping("/{id}/progresso")
+    public ResponseEntity<ProgressoTransicaoResponse> progresso(@PathVariable Long id) {
+        ProgressoTransicaoResponse resp = progressoTransicaoRegistry != null
+                ? progressoTransicaoRegistry.obter(id).map(ProgressoTransicaoResponse::de).orElseGet(() -> ProgressoTransicaoResponse.ocioso(id))
+                : ProgressoTransicaoResponse.ocioso(id);
+        return ResponseEntity.ok(resp);
+    }
+
+    /**
      * Roda a validação Bronze→Silver de novo pros registros já ingeridos desse lote
-     * (sem precisar buscar a fonte de novo) - útil depois de corrigir um bug na
-     * esteira de validação (ex.: ValidadorCpfCnpj, LIZARDS-50) pra revalidar um lote
-     * que tinha ido pra quarentena sem precisar que o dado na fonte externa mude
-     * (a detecção de "sem mudança", RN018, bloquearia uma nova ingestão real).
-     * Mesma regra All-or-Nothing de sempre.
+     * de forma assíncrona desacoplada da thread HTTP.
      */
     @PostMapping("/{id}/reprocessar")
     @Transactional
-    public ResponseEntity<TransicaoBronzeSilverService.ResultadoTransicao> reprocessar(@PathVariable Long id) {
-        return ResponseEntity.ok(transicaoBronzeSilverService.processarLote(id));
+    public ResponseEntity<ProgressoTransicaoResponse> reprocessar(@PathVariable Long id) {
+        if (progressoTransicaoRegistry != null && progressoTransicaoRegistry.isExecutando(id)) {
+            throw new OperacaoEmAndamentoException("O lote #" + id + " já está sendo reprocessado.");
+        }
+        if (progressoTransicaoRegistry != null) {
+            progressoTransicaoRegistry.iniciar(id, 0, "INICIANDO");
+        }
+        transicaoBronzeSilverService.processarLoteAssincrono(id);
+        ProgressoTransicaoResponse resp = progressoTransicaoRegistry != null
+                ? progressoTransicaoRegistry.obter(id).map(ProgressoTransicaoResponse::de).orElseGet(() -> ProgressoTransicaoResponse.ocioso(id))
+                : ProgressoTransicaoResponse.ocioso(id);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(resp);
     }
 }

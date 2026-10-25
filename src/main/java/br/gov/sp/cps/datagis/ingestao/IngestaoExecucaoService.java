@@ -5,8 +5,13 @@ import br.gov.sp.cps.datagis.controle.FonteDado;
 import br.gov.sp.cps.datagis.controle.FonteDadoRepository;
 import br.gov.sp.cps.datagis.controle.LoteIngestao;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 /**
@@ -19,6 +24,8 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class IngestaoExecucaoService {
+
+    private static final Logger log = LoggerFactory.getLogger(IngestaoExecucaoService.class);
 
     private final FonteDadoRepository fonteDadoRepository;
     private final List<IngestaoExecutor> executores;
@@ -45,17 +52,21 @@ public class IngestaoExecucaoService {
     public LoteIngestao executar(Long fonteId) {
         FonteDado fonte = buscarFonte(fonteId);
 
-        validacaoMapeamentoService.validarParaIngestao(fonte);
-
-        IngestaoExecutor executor = executores.stream()
-                .filter(e -> e.suportar(fonte))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Ainda não existe ingestão implementada para a fonte \"" + fonte.getNome() + "\""));
-
         progresso.iniciar(fonte.getId());
         long inicio = System.currentTimeMillis();
         try {
+            // Validação e escolha do executor dentro do try (LIZARDS-54): fonte barrada
+            // (mapeamento incompleto, formato sem executor) também grava o erro na fonte e
+            // encerra o progresso. Antes, na execução agendada ou em segundo plano o motivo
+            // ficava só no log e a fonte continuava marcada como "em andamento".
+            validacaoMapeamentoService.validarParaIngestao(fonte);
+
+            IngestaoExecutor executor = executores.stream()
+                    .filter(e -> e.suportar(fonte))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Ainda não existe ingestão implementada para a fonte \"" + fonte.getNome() + "\""));
+
             LoteIngestao lote = executor.executar(fonte);
             registrarExecucao(fonte, inicio, "SUCESSO", null);
             progresso.finalizar(fonte.getId(), FaseExecucao.CONCLUIDO);
@@ -100,6 +111,37 @@ public class IngestaoExecucaoService {
         fonte.setCaminhoArquivoUpload(endereco);
         fonteDadoRepository.save(fonte);
         return executar(fonteId);
+    }
+
+    /**
+     * Executa a ingestão da fonte de forma assíncrona desacoplada da thread HTTP.
+     */
+    @Async("datagisTaskExecutor")
+    public void executarAssincrono(Long fonteId) {
+        try {
+            executar(fonteId);
+        } catch (Throwable t) {
+            log.error("Erro na execução assíncrona da fonte {}: {}", fonteId, t.getMessage(), t);
+        }
+    }
+
+    /**
+     * Executa a ingestão manual por upload de forma assíncrona, lendo o arquivo temporário
+     * previamente persistido no disco e garantindo sua remoção ao término.
+     */
+    @Async("datagisTaskExecutor")
+    public void executarComUploadAssincrono(Long fonteId, String nomeArquivo, Path arquivoTemporario) {
+        try (InputStream in = Files.newInputStream(arquivoTemporario)) {
+            executarComUpload(fonteId, nomeArquivo, in);
+        } catch (Throwable t) {
+            log.error("Erro no upload assíncrono da fonte {}: {}", fonteId, t.getMessage(), t);
+        } finally {
+            try {
+                Files.deleteIfExists(arquivoTemporario);
+            } catch (Exception e) {
+                log.warn("Não foi possível excluir arquivo temporário {}: {}", arquivoTemporario, e.getMessage());
+            }
+        }
     }
 
     private FonteDado buscarFonte(Long fonteId) {

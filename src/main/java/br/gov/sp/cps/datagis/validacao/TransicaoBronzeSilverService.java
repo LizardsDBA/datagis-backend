@@ -21,6 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,6 +65,19 @@ public class TransicaoBronzeSilverService {
     private final JdbcTemplate jdbcTemplate;
     private final String quarentenaSchema;
     private final String bronzeSchema;
+    private final ProgressoTransicaoRegistry progressoTransicaoRegistry;
+
+    /**
+     * Referência ao próprio bean via proxy do Spring, injetada tardiamente (evita ciclo
+     * na construção). Necessária porque {@code processarLoteAssincrono}/
+     * {@code liberarLoteParaSilverAssincrono} chamam um método {@code @Transactional}
+     * desta mesma classe: uma chamada direta via {@code this} (auto-invocação) não passa
+     * pelo proxy AOP, então nenhuma transação/sessão Hibernate é aberta e o acesso a uma
+     * associação lazy (ex.: {@code lote.getFonteDado()}) falha com "no session".
+     */
+    @Autowired
+    @Lazy
+    private TransicaoBronzeSilverService self;
 
     @Autowired
     public TransicaoBronzeSilverService(
@@ -75,7 +89,8 @@ public class TransicaoBronzeSilverService {
             PersistidorQuarentenaService persistidorQuarentenaService,
             JdbcTemplate jdbcTemplate,
             @Value("${spring.flyway.placeholders.quarentenaSchema:QUARENTENA}") String quarentenaSchema,
-            @Value("${spring.flyway.placeholders.bronzeSchema:BRONZE}") String bronzeSchema) {
+            @Value("${spring.flyway.placeholders.bronzeSchema:BRONZE}") String bronzeSchema,
+            @Autowired(required = false) ProgressoTransicaoRegistry progressoTransicaoRegistry) {
         this.loteIngestaoRepository = loteIngestaoRepository;
         this.fonteDadoRepository = fonteDadoRepository;
         this.registroBrutoRepository = registroBrutoRepository;
@@ -86,6 +101,22 @@ public class TransicaoBronzeSilverService {
         this.quarentenaSchema = (quarentenaSchema != null && !quarentenaSchema.isBlank()) ? quarentenaSchema.trim()
                 : "QUARENTENA";
         this.bronzeSchema = (bronzeSchema != null && !bronzeSchema.isBlank()) ? bronzeSchema.trim() : "BRONZE";
+        this.progressoTransicaoRegistry = progressoTransicaoRegistry;
+    }
+
+    public TransicaoBronzeSilverService(
+            LoteIngestaoRepository loteIngestaoRepository,
+            FonteDadoRepository fonteDadoRepository,
+            RegistroBrutoRepository registroBrutoRepository,
+            OrquestradorValidacao orquestradorValidacao,
+            PersistidorSilverService persistidorSilverService,
+            PersistidorQuarentenaService persistidorQuarentenaService,
+            JdbcTemplate jdbcTemplate,
+            String quarentenaSchema,
+            String bronzeSchema) {
+        this(loteIngestaoRepository, fonteDadoRepository, registroBrutoRepository,
+                orquestradorValidacao, persistidorSilverService, persistidorQuarentenaService,
+                jdbcTemplate, quarentenaSchema, bronzeSchema, null);
     }
 
     public TransicaoBronzeSilverService(
@@ -99,7 +130,7 @@ public class TransicaoBronzeSilverService {
             String quarentenaSchema) {
         this(loteIngestaoRepository, fonteDadoRepository, registroBrutoRepository,
                 orquestradorValidacao, persistidorSilverService, persistidorQuarentenaService,
-                jdbcTemplate, quarentenaSchema, "BRONZE");
+                jdbcTemplate, quarentenaSchema, "BRONZE", null);
     }
 
     /**
@@ -143,6 +174,10 @@ public class TransicaoBronzeSilverService {
         log.info("Iniciando esteira de validação para o lote {} (Fonte: {}, Entidade: {}, Registros: {})",
                 loteId, fonte != null ? fonte.getNome() : "Desconhecida", entidadeSilver, registros.size());
 
+        if (progressoTransicaoRegistry != null) {
+            progressoTransicaoRegistry.iniciar(loteId, registros.size(), "REVALIDANDO_REGRAS");
+        }
+
         // Executa o motor de validações e deduplicação
         ResultadoOrquestracao resOrquestracao = orquestradorValidacao.orquestrarLote(
                 fonte != null ? fonte.getId() : null,
@@ -171,6 +206,12 @@ public class TransicaoBronzeSilverService {
             lote.setStatus(STATUS_RETIDO_QUARENTENA);
             loteIngestaoRepository.save(lote);
 
+            if (progressoTransicaoRegistry != null) {
+                progressoTransicaoRegistry.finalizar(loteId, "RETIDO_QUARENTENA", registros.size(), registros.size(),
+                        qtdErros, STATUS_RETIDO_QUARENTENA,
+                        "Lote retido na Quarentena com " + qtdErros + " inconsistência(s). 0 registros enviados à Silver." + sufixoRecorte);
+            }
+
             return new ResultadoTransicao(
                     loteId,
                     STATUS_RETIDO_QUARENTENA,
@@ -190,6 +231,12 @@ public class TransicaoBronzeSilverService {
 
         lote.setStatus(STATUS_PROMOVIDO_SILVER);
         loteIngestaoRepository.save(lote);
+
+        if (progressoTransicaoRegistry != null) {
+            progressoTransicaoRegistry.finalizar(loteId, "CONCLUIDO", qtdAprovados, registros.size(),
+                    0, STATUS_PROMOVIDO_SILVER,
+                    "LOTE APROVADO: 100% íntegro. " + qtdAprovados + " registro(s) promovidos para a Silver." + sufixoRecorte);
+        }
 
         return new ResultadoTransicao(
                 loteId,
@@ -244,6 +291,10 @@ public class TransicaoBronzeSilverService {
             throw new IllegalArgumentException("O lote #" + loteId + " não possui registros a serem promovidos.");
         }
 
+        if (progressoTransicaoRegistry != null) {
+            progressoTransicaoRegistry.iniciar(loteId, registros.size(), "REVALIDANDO_REGRAS");
+        }
+
         // Executa esteira de revalidação e deduplicação de todos os registros do lote
         ResultadoOrquestracao res = orquestradorValidacao.orquestrarLote(
                 fonteDadoId,
@@ -266,6 +317,12 @@ public class TransicaoBronzeSilverService {
             // Mantém lote com status RETIDO_QUARENTENA
             lote.setStatus(STATUS_RETIDO_QUARENTENA);
             loteIngestaoRepository.save(lote);
+
+            if (progressoTransicaoRegistry != null) {
+                progressoTransicaoRegistry.finalizar(loteId, "RETIDO_QUARENTENA", registros.size(), registros.size(),
+                        qtdErros, STATUS_RETIDO_QUARENTENA,
+                        "O lote #" + loteId + " não pode ser liberado para a Silver: " + qtdErros + " registro(s) ainda contêm erro(s).");
+            }
 
             throw new IllegalArgumentException(
                     "O lote #" + loteId + " não pode ser liberado para a Silver: " + qtdErros
@@ -290,9 +347,47 @@ public class TransicaoBronzeSilverService {
         lote.setStatus(STATUS_PROMOVIDO_SILVER);
         loteIngestaoRepository.save(lote);
 
+        if (progressoTransicaoRegistry != null) {
+            progressoTransicaoRegistry.finalizar(loteId, "CONCLUIDO", todosParaPersistir.size(), registros.size(),
+                    0, STATUS_PROMOVIDO_SILVER,
+                    "Lote #" + loteId + " revalidado e liberado com sucesso. " + todosParaPersistir.size() + " registros promovidos à Silver.");
+        }
+
         log.info("Lote {} revalidado e liberado com sucesso pelo analista {}. {} registros promovidos à Silver.",
                 loteId, analistaId, todosParaPersistir.size());
         return true;
+    }
+
+    /**
+     * Executa a transição do lote de forma assíncrona desacoplada da thread HTTP.
+     */
+    @org.springframework.scheduling.annotation.Async("datagisTaskExecutor")
+    public void processarLoteAssincrono(Long loteId) {
+        try {
+            self.processarLote(loteId);
+        } catch (Exception e) {
+            log.error("Erro no processamento assíncrono do lote {}: {}", loteId, e.getMessage(), e);
+            if (progressoTransicaoRegistry != null) {
+                progressoTransicaoRegistry.finalizar(loteId, "ERRO", 0, 0, 0, "FALHA", e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Executa a liberação do lote de forma assíncrona desacoplada da thread HTTP.
+     */
+    @org.springframework.scheduling.annotation.Async("datagisTaskExecutor")
+    public void liberarLoteParaSilverAssincrono(Long loteId, Long analistaId) {
+        try {
+            self.liberarLoteParaSilver(loteId, analistaId);
+        } catch (IllegalArgumentException e) {
+            log.warn("Liberação assíncrona do lote {} barrada por validação: {}", loteId, e.getMessage());
+        } catch (Exception e) {
+            log.error("Erro fatal na liberação assíncrona do lote {}: {}", loteId, e.getMessage(), e);
+            if (progressoTransicaoRegistry != null) {
+                progressoTransicaoRegistry.finalizar(loteId, "ERRO", 0, 0, 0, "FALHA", e.getMessage());
+            }
+        }
     }
 
     /**

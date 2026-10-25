@@ -1,6 +1,8 @@
 package br.gov.sp.cps.datagis.gold;
 
 import java.util.List;
+import br.gov.sp.cps.datagis.config.OperacaoEmAndamentoException;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,10 +25,17 @@ public class GoldPublicacaoController {
         this.service = service;
     }
 
-    /** Recalcula os 7 indicadores (ISAP/IAE/IRL/IAPP/IDesmat/IFC/ICV) e publica todo imóvel + todas as camadas de mapa. */
+    /**
+     * Recalcula os 7 indicadores (ISAP/IAE/IRL/IAPP/IDesmat/IFC/ICV) e publica todo imóvel
+     * + todas as camadas de mapa de forma assíncrona em segundo plano.
+     */
     @PostMapping("/publicar")
-    public ResponseEntity<GoldPublicacaoService.ResultadoPublicacaoTudo> publicarTudo() {
-        return ResponseEntity.ok(service.publicarTudo());
+    public ResponseEntity<GoldPublicacaoService.StatusGoldConsolidado> publicar() {
+        if (service.obterStatusConsolidado().algumEmAndamento()) {
+            throw new OperacaoEmAndamentoException("Já existe uma publicação para a camada Gold em andamento.");
+        }
+        service.publicarTudoAssincrono();
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.obterStatusConsolidado());
     }
 
     /** Recalcula e publica só 1 imóvel. */

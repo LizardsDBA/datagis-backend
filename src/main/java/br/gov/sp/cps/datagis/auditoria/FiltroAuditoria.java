@@ -32,7 +32,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * uma segunda vez na cadeia de servlet e cada acao seria gravada duas vezes.
  *
  * <p>Falha ao gravar o log nao derruba a requisicao do usuario - vira erro no log da
- * aplicacao. O corpo da requisicao nunca e lido (senha temporaria, uploads de GB).
+ * aplicacao. O corpo da requisicao nunca e lido (senha temporaria, uploads de GB); o antes
+ * e depois, quando existe, vem do servico que alterou o dado ({@link MudancaAuditada}).
  */
 public class FiltroAuditoria extends OncePerRequestFilter {
 
@@ -99,7 +100,9 @@ public class FiltroAuditoria extends OncePerRequestFilter {
                     status,
                     status < 400,
                     Instant.now().toEpochMilli() - inicio.toEpochMilli(),
-                    ipDeOrigem(request)));
+                    ipDeOrigem(request),
+                    MudancaAuditada.antes(request),
+                    MudancaAuditada.depois(request)));
         } catch (RuntimeException e) {
             log.error("Falha ao gravar log de auditoria de {} {}", request.getMethod(), request.getRequestURI(), e);
         }

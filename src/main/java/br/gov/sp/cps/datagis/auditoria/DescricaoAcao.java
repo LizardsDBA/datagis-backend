@@ -30,6 +30,8 @@ public final class DescricaoAcao {
         ACOES.put("POST /api/fontes/{id}/executar", "Executar ingestao da fonte");
         ACOES.put("POST /api/fontes/{id}/upload", "Enviar arquivo para ingestao");
         ACOES.put("POST /api/fontes/{fonteId}/mapeamentos", "Salvar mapeamento de colunas");
+        ACOES.put("PUT /api/fontes/{fonteId}/mapeamentos/atributo/{atributoDestino}", "Sincronizar colunas de origem de um atributo de destino");
+        ACOES.put("DELETE /api/fontes/{fonteId}/mapeamentos/atributo/{atributoDestino}", "Remover todos os mapeamentos de um atributo de destino");
         ACOES.put("DELETE /api/fontes/{fonteId}/mapeamentos/{id}", "Excluir mapeamento de coluna");
         ACOES.put("DELETE /api/fontes/{fonteId}/mapeamentos", "Limpar todos os mapeamentos de colunas da fonte");
         // Lotes e quarentena

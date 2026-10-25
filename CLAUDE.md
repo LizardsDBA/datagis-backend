@@ -205,7 +205,7 @@ CREATE TABLE controle.mapeamento_coluna (
     referencia_entidade_silver VARCHAR2(60),              -- integridade relacional cruzada (ex: 'municipio')
     validar_cpf_cnpj           NUMBER(1) DEFAULT 0 NOT NULL, -- validacao algoritmica modulo 11
     validar_geometria          NUMBER(1) DEFAULT 0 NOT NULL, -- validade topologica e tipo primitivo
-    validar_recorte_pr         NUMBER(1) DEFAULT 0 NOT NULL, -- coordenadas/poligono dentro do Parana
+    validar_recorte_pr         NUMBER(1) DEFAULT 0 NOT NULL, -- (descontinuado no motor ativo) mantido no schema por compatibilidade
     impedir_regressao          NUMBER(1) DEFAULT 1 NOT NULL, -- campo preenchido nao pode regredir pra nulo
     regras_extras              JSON,                      -- regras customizadas de fontes desconhecidas
     data_add                   TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL
@@ -215,6 +215,13 @@ CREATE TABLE controle.mapeamento_coluna (
 O pipeline Bronze→Silver lê essa tabela em runtime para saber como interpretar/converter
 cada coluna e quais validações aplicar para desviar inconsistências para a Quarentena. Isola
 a variação de schema e regras na tabela de mapeamento; a Silver continua com colunas fixas e tipadas.
+
+A tabela suporta mapeamento **1:N** (múltiplas colunas de origem para uma mesma coluna Silver): cada
+variação de nome de campo presente no payload bruto (ex.: `cd_cnuc` e `codigo_uc` apontando para `codigo_origem`, ou `cria_ato` e `ato_criaca` para `ato_legal`)
+é armazenada como uma linha distinta em `controle.mapeamento_coluna` compartilhando o mesmo
+`atributo_destino` e regras de validação. O motor de validação (`OrquestradorValidacao`) agrupa os mapeamentos
+por atributo de destino (`agruparMapeamentosPorDestino`) e seleciona o primeiro candidato não-nulo e não-vazio do payload (`resolverValorDoGrupo`).
+Para governança desses mapeamentos, o `MapeamentoColunaController` fornece sincronização atômica por atributo via `PUT /api/fontes/{id}/mapeamentos/atributo/{atributoDestino}` e remoção via `DELETE /api/fontes/{id}/mapeamentos/atributo/{atributoDestino}`.
 
 ### 2.4. Quarentena
 ```sql
@@ -259,7 +266,8 @@ Validar na fatia de cálculo.
 > (`mapa_camada` + `feature_publicada` genérica — todo polígono/ponto que o Leaflet
 > desenha); **(3)** detalhe congelado por imóvel (`imovel_publicado` + `sobreposicao_
 > publicada`, com `geometria_intersecao` em precisão total — artefato de auditoria).
-> **O portal lê só a Gold, nunca a Silver.**
+> **O portal lê só a Gold, nunca a Silver.** O mapa lê as camadas pelas views
+> `gold.vw_mapa_*` (V080), que já filtram a última publicação concluída (§9.45).
 
 **`hash_versao` — [RESOLVIDO, 2026-10-04]:** implementado em `pkg_gold_publicacao.
 registrar_resultado` exatamente como proposto em `docs/gold-procedures-calculo-
@@ -524,6 +532,9 @@ starters `-test` granulares do Boot 4, mais tudo do §4.4 acima.
 ### 4.6. Ambiente de desenvolvimento em containers — **[DECIDIDO, implementado e testado end-to-end]**
 Dev roda **3 containers via `docker compose`**: `oracle` + `backend` + `frontend`.
 **Desde 2026-10-12 são 4**: entrou o `keycloak` (login/RBAC, porta 8180 — §9.39).
+**Desde 2026-10-20 são 5** (+ 1 que roda e termina): entrou o `geoserver` (mapa de
+cobertura, painel em `127.0.0.1:8085`) e o `geoserver-config`, que configura o GeoServer
+pela API REST e sai (§9.45).
 Testado em 2026-09-02 no WSL: os 3 sobem, Oracle fica `healthy`, backend conecta e
 migra Flyway em `CONTROLE`, `curl localhost:8080/actuator/health` → `200 UP`, Vite serve
 em `localhost:5173` e o proxy `/api` alcança o backend pela rede Docker.
@@ -1207,7 +1218,7 @@ a regras de validação por coluna diretamente na tabela `controle.mapeamento_co
 - `referencia_entidade_silver` (VARCHAR2(60)): integridade relacional cruzada com Silver (ex.: `municipio`).
 - `validar_cpf_cnpj` (NUMBER(1)): flag para validação algorítmica de CPF/CNPJ (módulo 11).
 - `validar_geometria` (NUMBER(1)): flag para validação topológica (`isValid`) e tipo primitivo.
-- `validar_recorte_pr` (NUMBER(1)): flag para checagem de coordenadas dentro dos limites do Paraná.
+- `validar_recorte_pr` (NUMBER(1)): flag para checagem de coordenadas dentro dos limites do Paraná (descontinuada no motor ativo em `LIZARDS-49`).
 - `impedir_regressao` (NUMBER(1)): flag para checar se o campo existia preenchido e regrediu pra nulo.
 - `regras_extras` (JSON): campo flexível para fontes futuras desconhecidas.
 
@@ -1275,17 +1286,17 @@ Implementado `ValidadorFaixaMinima` no pacote `br.gov.sp.cps.datagis.validacao`:
 - Se o valor for menor que o piso configurado, gera erro `VALOR_ABAIXO_DO_MINIMO`.
 - Testes: 23 cenários em `ValidadorFaixaMinimaTest` cobrindo aprovações, limites exatos, conversões tolerantes, erros de tipo, rejeições abaixo do piso e casos de borda (nulos e vazios).
 
-### 9.20. Validador de Geometria e Recorte PR — [FEITO, 2026-09-13, Fase 2.6]
+### 9.20. Validador de Geometria — [FEITO, 2026-09-13, Fase 2.6 | EVOLUÍDO 2026-10-24, LIZARDS-49]
 Implementado `ValidadorGeometria` no pacote `br.gov.sp.cps.datagis.validacao`:
 - Validação completa de atributos espaciais utilizando a biblioteca JTS Topology Suite (`org.locationtech.jts`).
 - Suporta entradas em formato WKT e GeoJSON (via `ObjectMapper`).
 - Validação sintática: erros de formatação geram `GEOMETRIA_MALFORMADA`.
 - Validação topológica com `IsValidOp`: auto-interseções, anéis desconexos e laços geram `GEOMETRIA_INVALIDA` com o motivo e as coordenadas exatas da quebra topológica.
 - Validação de primitivo: garante que o tipo (ex.: `Polygon`, `MultiPolygon`, `Point`) respeite a configuração de `regras_extras` ou `tipo_dado`, gerando `GEOMETRIA_TIPO_INCOMPATIVEL` se divergente.
-- Validação de recorte territorial do Paraná (`validar_recorte_pr = 1`): verifica interseção com os limites oficiais do Paraná (SRID 4674: lon `[-55.00, -47.50]`, lat `[-27.20, -22.00]`), gerando `FORA_DO_RECORTE_TERRITORIAL` se fora.
+- **Descontinuação do Recorte PR (`LIZARDS-49`):** A restrição de recorte territorial do Paraná (`validar_recorte_pr = 1` e erro `FORA_DO_RECORTE_TERRITORIAL`) foi desativada do motor. Geometrias válidas espacialmente não são mais rejeitadas por estarem fora do bounding box estadual.
 - Geometrias nulas obrigatórias geram `GEOMETRIA_NULA`.
 - Sucesso retorna WKT padronizado gerado por `WKTWriter`.
-- Testes: 29 cenários em `ValidadorGeometriaTest` cobrindo WKT, GeoJSON, auto-interseções, primitivos incompatíveis, recorte Paraná e nulidade.
+- Testes: cenários em `ValidadorGeometriaTest` cobrindo WKT, GeoJSON, auto-interseções, primitivos incompatíveis e nulidade.
 
 ### 9.21. Validador de Regressão de Valor — [FEITO, 2026-09-13, Fase 2.7]
 Implementado `ValidadorRegressao` no pacote `br.gov.sp.cps.datagis.validacao`:
@@ -1353,7 +1364,7 @@ Implementado `OrquestradorValidacao` no pacote `br.gov.sp.cps.datagis.validacao`
     - Para lotes em `RETIDO_QUARENTENA`: "Inspecionar Erros" (navega direto para a Quarentena com filtro pré-aplicado), "Liberar para Silver" e "Descartar" (com modal de justificativa obrigatória).
 - **Modal de Mapeamento de Colunas (`ModalMapeamentoColunas.vue`):**
   - Permite visualizar o de-para de campos configurados para qualquer fonte de dados (`/api/fontes/{id}/mapeamentos`).
-  - Permite aos analistas cadastrar novos mapeamentos para fontes com estruturas desconhecidas, configurando destino (`COLUNA`, `JSON`, `GEOMETRIA`), tipo de dado e flags de validação (`obrigatorio`, `validarGeometria`, `validarCpfCnpj`, `validarRecortePr`, `impedirRegressao`).
+  - Permite aos analistas cadastrar novos mapeamentos para fontes com estruturas desconhecidas, configurando destino (`COLUNA`, `JSON`, `GEOMETRIA`), tipo de dado e flags de validação (`obrigatorio`, `validarGeometria`, `validarCpfCnpj`, `impedirRegressao`), além de mapear múltiplas colunas de origem candidatas para o mesmo atributo de destino (1:N).
 - **Integração na Tela de Cadastro de Fontes (`CadastroFontes.vue`):**
   - Novo botão de ação em cada linha para abrir o modal de mapeamento de colunas.
   - Linha de resultado após execução/upload atualizada para refletir a semântica de pipeline:
@@ -1430,7 +1441,7 @@ Branch `feat/servico-de-ingestao`. Liga de verdade a decisão do §3.2. Resumo:
   desativada ou perde o cron — foram corrigidos pelo `fix<LIZARDS-10>`.
 - **[EM ABERTO]**
   - `proxima_execucao_em` ainda não é preenchida (dá pra obter de
-    `trigger.getNextFireTime()`).
+    `trigger.getNextFireTime()`). **[RESOLVIDO na §9.47]**
 
 ### 9.29. Cadastro de Fontes em Modal e Exibição do Agendamento na Listagem (Frontend) — [FEITO, 2026-09-23, `LIZARDS-11`]
 Repositório `datagis-frontend`, branch `feat/tela-upload-status` (nome herdado do título
@@ -1444,7 +1455,7 @@ do card no board, que não descreve o escopo real acordado com o time).
   - Alerta de sucesso movido para fora do formulário, acima da listagem, com autodesaparecimento em 4s (`mostrarSucesso()` + `clearTimeout` no `onUnmounted`) — dentro do modal ele ficava invisível, já que o modal fecha ao salvar.
 - **Coluna "Agendamento" na listagem (`CadastroFontes.vue`):**
   - `descreverCron(expressao)` traduz para linguagem natural os três formatos gerados pelo `ConstrutorCron.vue`: diário (`0 m H * * ?` → "Todo dia às HH:MM"), semanal (`0 m H ? * DOW` → "Toda segunda-feira às HH:MM") e mensal (`0 m H D * ?` → "Todo dia D às HH:MM").
-  - Expressões fora desses padrões são exibidas na forma original, sem tradução; fontes sem `cron_expressao` aparecem como "Somente manual".
+  - Expressões fora desses padrões são exibidas na forma original, sem tradução; fontes sem `cron_expressao` aparecem como "Somente manual". **[ATUALIZADO na §9.48]:** "Sem agendamento" ou "Por envio de arquivo" (upload manual).
   - A expressão original é mantida visível abaixo da descrição, em fonte monoespaçada, para conferência pelo operador.
   - Comentário desatualizado em `ConstrutorCron.vue` corrigido para apontar o consumo real do valor (`controle.fonte_dado.cron_expressao` → `AgendadorInicializacaoRunner`, §9.28).
 - **Testes automatizados do frontend (`src/components/CadastroFontes.test.js`):**
@@ -1469,7 +1480,7 @@ disparar.
 - **Validação ao vivo (2026-09-23):** com o backend de pé, editar o cron da fonte 5 pela tela gerou `Trigger atualizado para a fonte 5 (IAT/PR - Embargos IBAMA), cron = 0 0 5 ? * MON` na thread `nio-8080-exec-2` — ou seja, dentro da requisição HTTP, quase dois minutos depois da subida. Antes deste fix, salvar pela tela não produzia log nenhum do agendador.
 - **[EM ABERTO]**
   - O `sincronizar` roda fora de transação com o `save`. Se a gravação for desfeita depois, o trigger continua lá. Não acontece hoje (o `FonteDadoService` não é `@Transactional`, cada `save` commita sozinho), mas vira problema se alguém envolver o cadastro numa transação maior.
-  - `proxima_execucao_em` continua sem ser preenchida (§9.28).
+  - `proxima_execucao_em` continua sem ser preenchida (§9.28). **[RESOLVIDO na §9.47]**
 
 ### 10.4-bis. Estado atual (2026-09-14)
 - **Branch de trabalho corrente:** `feat/regras-para-vallidacao` (backend) e `sprint-1` (frontend).
@@ -2239,7 +2250,618 @@ criadas pela `V077`; sem elas o IFC é desenhado em escala percentual.
     possui `indicador:visualizar`.
   - **Interseção com a LIZARDS-35 (visualização em mapa).** Ambas as tarefas alteram
     `Sidebar.vue` e `router/index.js`; convém alinhar a ordem de merge para evitar conflito
-    nesses dois arquivos.
+    nesses dois arquivos. **[RESOLVIDO na §9.46]:** o mapa entrou dentro da tela
+    Conjuntos e Cobertura e não mexe no `router/index.js`. Em 2026-10-22 a LIZARDS-35
+    passou a mexer no `Sidebar.vue`: o item "Indicadores e Resultados" saiu do menu (a
+    tela abre pela Conjuntos e Cobertura, ver §9.46).
+
+### 9.42. Mapeamento guiado por tabela Silver, bloqueio preventivo de ingestão e revalidação estrita em Quarentena — **[FEITO, 2026-10-18, `LIZARDS-49`]**
+Branch `feat/mapeamento-quarentena` (backend e frontend). Evolui a governança de mapeamento de colunas, previne a execução de ingestões sem configuração prévia e fecha brechas no fluxo de liberação de lotes retidos na Quarentena.
+
+- **Catálogo guiado por tabela Silver (`CatalogoSilverService`):**
+  - O endpoint `GET /api/fontes/{id}/catalogo-silver` expõe a lista de colunas canônicas da tabela Silver correspondente à fonte (`fonte.entidadeSilver`), orientando o usuário sobre os atributos disponíveis.
+  - Elimina a poluição de campos de tabelas não correlacionadas no modal de mapeamento e restringe o cadastro ao domínio de persistência da fonte.
+  - Campos autogerados pelo sistema (`orgao`, `tipo_area_protegida`, `unidade_federativa`) foram removidos do catálogo e do select de destino, pois sua resolução é gerenciada internamente pela esteira de persistência.
+  - No frontend (`ModalMapeamentoColunas.vue`), a interface foi aprimorada com filtros, busca textual, badges de obrigatoriedade e contador dinâmico de preenchimento.
+- **Filtro contextual de domínios de referência:**
+  - O seletor de tabela de referência (`tabelaReferencia` para `ValidadorDominio`) passou a listar apenas domínios compatíveis com a entidade mapeada, prevenindo que colunas de áreas protegidas apontassem para domínios de imóveis rurais (ex.: `situacao_imovel`).
+- **Bloqueio preventivo de ingestão por mapeamento incompleto:**
+  - O serviço de execução de ingestão (`IngestaoExecucaoService`) passou a validar preventivamente se a fonte possui todas as colunas obrigatórias mapeadas antes de iniciar a extração (seja por requisição manual `POST /api/fontes/{id}/executar` ou pelo Quartz via `IngestaoAgendadaJob`).
+  - Fontes sem mapeamento das colunas obrigatórias da entidade Silver são imediatamente barradas com `MapeamentoIncompletoException` (HTTP 422), impedindo o desperdício de recursos e a geração de lotes destinados ao descarte imediato.
+- **Revalidação estrita All-or-Nothing ao liberar lote em Quarentena:**
+  - O endpoint de liberação de lote (`POST /api/quarentena/lotes/{id}/liberar`) foi refatorado em `TransicaoBronzeSilverService`: em vez de promover cegamente os registros não descartados, o método revalida o lote contra as regras vigentes do motor de validação.
+  - Caso ainda existam inconsistências não resolvidas pelo analista, a transição é bloqueada, o lote é mantido no status `RETIDO_QUARENTENA` e é retornada mensagem informativa ao usuário.
+- **Correção da migração dinâmica por coluna:**
+  - Ajustada a leitura de colunas dinâmicas em tempo de execução: o de-para agora respeita com precisão o tipo de destino configurado (`COLUNA`, `JSON` ou `GEOMETRIA`), eliminando gaps onde colunas canônicas mapeadas eram desconsideradas na montagem das entidades da camada Silver.
+- **Testes e cobertura:**
+  - Novos testes adicionados para `CatalogoSilverServiceTest`, `IngestaoExecucaoServiceTest` (cenários com bloqueio e liberação de mapeamento), e cenários de revalidação no `TransicaoBronzeSilverServiceTest`. Backend 100% aprovado; testes unitários do frontend (`ModalMapeamentoColunas.test.js`) atualizados.
+
+### 9.43. Seeds canônicas, flexibilização do bloqueio Silver (apenas NOT NULL) e migração Gold via botão único — **[FEITO, 2026-10-20, `LIZARDS-29`]**
+Branch `feat/migracao-gold` (backend e frontend). Finaliza a esteira de migração de dados consolidada para a camada Gold, automatiza o catálogo de de-para para todas as fontes e refina o bloqueio de ingestão para alinhar-se à nulabilidade física da camada Silver.
+
+- **Seeds canônicas de mapeamento para as 18 fontes (`V078`):**
+  - Migration `V078__seed_mapeamentos_completos_todas_fontes.sql` popula o de-para completo de todas as 18 fontes ativas do DataGIS em `controle.mapeamento_coluna`, com base no inventário canônico de `docs/estudo_mapeamento_fontes_silver.md`.
+  - Garante que, na inicialização do sistema, nenhuma das 18 fontes padrão caia no bloqueio preventivo de ingestão por ausência de mapeamento.
+- **Flexibilização do bloqueio preventivo (apenas colunas NOT NULL):**
+  - Revisão da regra de obrigatoriedade no `CatalogoSilverService` e `IngestaoExecucaoService`: o bloqueio prévio de ingestão restringe-se exclusivamente a colunas que possuam restrição relacional `NOT NULL` no schema físico da camada Silver (`coluna.obrigatorio = true`).
+  - Colunas opcionais na Silver (por exemplo `situacao_imovel` em `imovel_rural`, `area_km2` em `municipio`, etc.) não bloqueiam mais a ingestão caso não estejam mapeadas.
+  - Em `area_protegida`, `categoria_area_protegida` permanece com obrigatoriedade estrita (`Sim`), pois a coluna `tipo_area_protegida_id` na Silver é `NOT NULL` e é derivada da categoria.
+  - Campos autogerados (`orgao`, `tipo_area_protegida`, `unidade_federativa`) mantêm-se excluídos da seleção manual de mapeamento e não afetam o cálculo de pendências.
+- **Arquitetura de publicação Gold: Botão Único Global vs. Migração por Lote:**
+  - A publicação para a camada Gold é, por definição arquitetural, uma operação global, versionada e *set-based*. Migrar por lote individual gerava inconsistências parciais nos recortes de mapa e concorrência sobre as camadas cartográficas compartilhadas.
+  - Remoção de todo o código legado de migração por lote (`POST /api/gold/lotes/{id}/publicar` e recálculo fragmentado por lote em `LoteDto.java`, `GoldPublicacaoController.java` e `GoldPublicacaoService.java`).
+  - A publicação é disparada exclusivamente pelo botão global "Migrar para Gold" na tela de Gestão de Lotes (`LotesView.vue`), chamando `POST /api/gold/publicar` (sem parâmetros de lote).
+  - O fluxo orquestrado pelo `GoldPublicacaoService`:
+    1. Lê todos os imóveis da Silver (`SELECT cod_imovel FROM silver.imovel_rural`);
+    2. Executa em lote as procedures PL/SQL para recálculo dos 7 indicadores (`pkg_calculo_territorial`, `pkg_calculo_ambiental`, `pkg_calculo_conservacao`) e publica o detalhe congelado em `gold.imovel_publicado`;
+    3. Publica as 6 camadas cartográficas unificadas no bloco de mapas da Gold (`gold.publicacao_camada_mapa`);
+    4. Atualiza atomicamente todos os lotes que estavam com status `PROMOVIDO_SILVER` para `PROMOVIDO_GOLD` (`UPDATE controle.lote_ingestao SET status = 'PROMOVIDO_GOLD' WHERE status = 'PROMOVIDO_SILVER'`).
+- **Feedback em tempo real e resiliência no Frontend:**
+  - Endpoint `GET /api/gold/publicar/status` fornece monitoramento de status assíncrono.
+  - O componente `LotesView.vue` exibe modal com barra de progresso animada e stepper de 4 etapas durante a migração, com polling a cada 2s até a finalização.
+  - Tratamento de erro resiliente: falhas parciais em geometrias pontuais são registradas sem abortar o processamento do restante do conjunto de dados.
+- **Suíte de testes:**
+  - 176 testes unitários no backend aprovados (`GoldPublicacaoServiceTest`, `MatrizAcessoTest`, etc.).
+  - 140 testes unitários no frontend aprovados (`npm test` no Vitest, cobrindo `LotesView.test.js` e `goldService.test.js`).
+
+### 9.44. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
+Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
+todas as telas do sistema. A tela de login não entra: ela é do Keycloak, outro container,
+e o CSS do front não a alcança (ver o último item).
+
+- **Regra da entrega: só acrescentar.** Nenhuma variável, classe ou linha existente foi
+  renomeada ou alterada. O tema claro continua idêntico ao que era, e o escuro é uma
+  camada a mais por cima: na branch são 3.945 linhas acrescentadas contra 0 removidas em
+  relação à `sprint-2`.
+- **Mecanismo (`src/tema.js`):** o tema vive no atributo `data-tema` do `<html>`.
+  `iniciarTema()` roda no `main.js` antes de montar o app, para a tela não piscar no tema
+  errado. Vale a escolha salva no `localStorage` (chave `datagis.tema`); sem escolha
+  salva, segue `prefers-color-scheme` do sistema operacional, e o claro é o padrão. Sem
+  `localStorage` (aba anônima, bloqueio do navegador) o tema funciona igual, só não é
+  lembrado ao recarregar.
+- **Paleta (`src/style.css`):** um bloco `:root[data-tema="escuro"]` com os tokens da
+  paleta aprovada (`--cor-fundo`, `--cor-superficie`, `--cor-superficie-elevada`, três
+  níveis de borda, seis níveis de texto, primária com hover/contraste/tênue/borda,
+  `--cor-link`, cinco cores de estado e os `--tenue-*` a 12%). Um segundo bloco aponta as
+  variáveis que já existiam (`--cor-branco`, `--cor-slate-*`, `--status-*`) para essa
+  paleta, mudando só o valor e nunca o nome. Por isso telas que já usavam variáveis, como
+  Indicadores e Gold, escureceram sem alteração nenhuma; a `IndicadoresView` é a única
+  tela sem bloco escuro próprio, porque não tem cor fixa.
+- **Telas com cor fixa:** cada componente ganhou, no fim do `<style scoped>`, um bloco
+  `:root[data-tema="escuro"] .classe { ... }` que repinta só o que o claro define por cor
+  fixa. Mais de mil cores fixas foram mapeadas para os tokens conforme o papel (fundo,
+  borda, texto) e a família da cor. Uma única regra usa `!important`: a linha em edição do
+  Mapeamento de Colunas, porque a regra original do claro (`.linha-ativa`) já usa.
+- **Pegadinha do `<style scoped>`, achada na prática:** escrever
+  `:global(:root[data-tema="escuro"]) .classe` faz o Vue descartar o `.classe`, e a regra
+  vira só `:root`, pintando a página inteira. O certo é escrever
+  `:root[data-tema="escuro"] .classe` direto, e o Vue escopa só a classe. Elementos criados
+  por JavaScript, como os do Leaflet, precisam de `:deep(...)`. Na dúvida, conferir o
+  seletor no CSS gerado pelo `vite build`.
+- **Mapa sem trocar o mapa do projeto:** os tiles do OpenStreetMap continuam os mesmos; no
+  escuro só o `.leaflet-tile-pane` recebe `filter: invert(1) hue-rotate(180deg)
+  brightness(0.95) contrast(0.9)`. Os polígonos, desenhados em outra camada, mantêm as
+  cores originais. Controles, atribuição e popups do Leaflet ganharam cores da paleta via
+  `:deep()`. **[ATUALIZADO na §9.46]:** na tela Conjuntos (mapa de cobertura, LIZARDS-35)
+  o fundo do OpenStreetMap passou a um painel próprio (`.leaflet-fundo-pane`) e o filtro
+  vale só para ele, para as camadas do GeoServer manterem as cores da legenda.
+- **Botão de tema na sidebar:** lua no claro e sol no escuro, no rodapé, ao lado do Sair.
+  Com a sidebar recolhida, avatar, tema e Sair ficam empilhados. **O Sair visível com a
+  sidebar recolhida foi combinado com o Benjamin**, autor do recuo (LIZARDS-37): antes, a
+  sidebar recolhida escondia o Sair.
+- **Barra de rolagem da sidebar discreta:** fica invisível e aparece ao passar o mouse. No
+  Chrome, `scrollbar-width`/`scrollbar-color` fazem o `::-webkit-scrollbar` ser ignorado,
+  então os dois jeitos estão escritos.
+- **Campos de formulário sem classe:** uma regra global com `:where(...)` dá fundo e texto
+  escuros a `input`, `select` e `textarea`. O `:where` deixa a prioridade em zero, então
+  ela só preenche o que a tela não definiu e nunca passa por cima de regra de tela.
+- **Menus de seleção modernos, nos dois temas (a pedido, durante a task):** a lista aberta
+  do `<select>` é desenhada pelo navegador e ficava no visual do Windows. Com
+  `appearance: base-select` dentro de `@supports`, ela passa a ter cantos arredondados,
+  sombra, opções arredondadas e ✓ no item escolhido. Funciona no Chrome/Edge 135+; no
+  Firefox e no Safari o `@supports` pula o bloco e o menu fica como antes. A tela de
+  Conjuntos usa `appearance: none` com a seta própria (`.select-chevron`), então ganhou uma
+  regra própria e esconde a seta do navegador (`::picker-icon`).
+- **Defeito anterior que ficou visível no escuro:** na tabela do Mapeamento de Colunas, a
+  célula "Regras Ativas" (`.regras-tags`) usa `display: flex`, o que a tira do alinhamento
+  da linha e desloca a borda dela das outras colunas. No claro a borda é quase branca e o
+  defeito não aparece. Corrigido só no escuro (a célula volta a `table-cell` e o
+  espaçamento passa para as tags), para não alterar o claro.
+- **Testes:**
+  - `src/tema.test.js` (6 casos): preferência do sistema (escuro e claro), escolha salva
+    valendo mais que o sistema, valor salvo desconhecido ignorado, alternância gravando a
+    escolha e funcionamento sem `localStorage`.
+  - `src/components/Sidebar.test.js` (5 casos): botão de tema, alternância, ordem
+    tema/Sair, e sidebar recolhida com tema e Sair, incluindo o clique no Sair.
+  - `src/temaEscuro.test.js` (65 casos): o jsdom não aplica folha de estilo, então este
+    arquivo lê o CSS como texto. Confere cada token da paleta com o valor exato, que o
+    `:root` sem atributo continua sendo o claro, que nenhuma tela usa `:global(:root` nem
+    tem `:root[data-tema="escuro"]` solto, e que as 1.043 `var(--...)` usadas no tema
+    escuro existem no `style.css` (nome de variável digitado errado não dá erro, a cor só
+    some). Validado colocando três erros de propósito numa cópia temporária: cada um
+    derrubou o teste certo.
+  - Estado em 2026-10-21: 20 arquivos, **204 testes, 100% de sucesso**.
+- **[EM ABERTO]**
+  - **Tela de login (Keycloak).** Mudar o visual exige um tema de login do Keycloak (CSS
+    herdando o tema padrão, montado no container e ativado no realm `datagis`), tudo no
+    repositório do backend. O Keycloak não sabe qual tema o usuário escolheu no app, por
+    ser outro endereço: só pode seguir a preferência do sistema ou ter visual fixo.
+    Sugerida como task própria.
+  - **Paleta do gráfico de diagnóstico.** As cores do `DiagnosticoChart` vêm de um array
+    no JavaScript (linha 37) e o CSS não as alcança; o cinza `#475569` fica apagado no
+    escuro.
+  - **401 ao dar F5 em `/conjuntos`.** Já acontecia antes desta branch: o proxy do Vite
+    manda `^/conjuntos($|/)` para o backend, e recarregar a tela nesse endereço cai no
+    backend em vez da SPA. **[RESOLVIDO na §9.46]:** corrigido no `vite.config.js` pela
+    LIZARDS-35.
+  - **Telas novas precisam do bloco escuro.** Tela que use só as variáveis do `style.css`
+    já nasce coberta; tela com cor fixa precisa do seu bloco `:root[data-tema="escuro"]`.
+    O `temaEscuro.test.js` passa a conferir automaticamente as regras acima em qualquer
+    componente novo que tenha tema escuro.
+
+### 9.45. Mapa de cobertura — backend (banco, GeoServer e proxy) — **[FEITO e validado contra o Oracle real, 2026-10-20, `LIZARDS-35`]**
+Branch `feat/mapa-cobertura`, a partir da `sprint-2`. A tela está na §9.46.
+
+- **Objetivo:** mostrar no mapa a situação de um município ou imóvel do Paraná — os 7
+  indicadores e o aviso de interseção com as camadas de alerta. Decisões do usuário: o mapa
+  entra na tela Conjuntos e Cobertura; mostra só o Paraná; qualquer sobreposição conta (sem
+  área mínima); o GeoServer desenha e destaca, mas **o aviso e a contagem vêm dos valores
+  dos indicadores** (ver "Validação" abaixo).
+- **`V080__gold_views_mapa_cobertura.sql`:** `gold.vw_mapa_feature_vigente` concentra a
+  regra "versão válida = última publicação `CONCLUIDA` da camada" (V067) e 7 views finas
+  sobre ela (`vw_mapa_limite_pr`, `_municipio`, `_imovel`, `_area_protegida`, `_embargo`,
+  `_desmatamento`, `_foco_calor`), com metadado espacial — exigido pelo GeoServer. Camada
+  nova no mapa = linha em `gold.mapa_camada` + view de 3 linhas + metadado. Também cadastra
+  a camada **`LIMITE_PR`** (contorno do estado, base do mapa).
+- **`V081__gold_indice_espacial_feature_publicada.sql`:** índice espacial em
+  `gold.feature_publicada`. Cruzar Ponta Grossa com os imóveis pela view: 6,1 s → 0,04 s
+  (plano com `DOMAIN INDEX`, mesmo resultado, 2.654). **Pegadinha:** como na V049, o R-tree
+  exige `CREATE TABLE/SEQUENCE` + `UNLIMITED TABLESPACE` **diretos** no schema `GOLD`; sem
+  eles o `CREATE INDEX` não falha limpo — o índice fica com `DOMIDX_OPSTATUS = FAILED` e a
+  tabela passa a **recusar INSERT** (testado), o que pararia a publicação da Gold. O
+  `CONTROLE` também não enxerga os privilégios do `GOLD` (`DBA_SYS_PRIVS` invisível). Por
+  isso a migration faz uma **sonda** numa tabela descartável antes; sem o grant, falha com
+  `ORA-20080` e a instrução, sem deixar nada pela metade. O grant entrou no
+  `infra/oracle-init/01-criar-schemas.sh`; **banco já existente roda uma vez, como SYS**
+  (imagem Enterprise, por isso o `ORACLE_SID`):
+  ```
+  printf 'ALTER SESSION SET CONTAINER = FREEPDB1;\nGRANT CREATE TABLE, CREATE SEQUENCE, UNLIMITED TABLESPACE TO gold;\n' \
+    | docker compose exec -T -e ORACLE_SID=ORCLCDB oracle sqlplus -s / as sysdba
+  ```
+- **Contorno do Paraná (`GoldPublicacaoService`):** publicado como camada, a partir da
+  união dos 399 municípios da Silver (~14 s, 1 polígono, 199.891 km²). A união sai com
+  **9.794 buracos falsos** (frestas entre municípios vizinhos — a malha da V037 foi
+  simplificada a 5 m e as divisas não encaixam; o maior tem 2,6 ha). Com eles o
+  simplificador não reduz nada (45 mil vértices); `SimplificadorGeometriaMapa.
+  simplificarContornoExterno` descarta os buracos e simplifica a ~50 m: 6.044 vértices,
+  140 KB de GeoJSON, mesma área.
+- **Bug antigo corrigido — anel no sentido errado:** 2.101 dos 4.611 imóveis da camada de
+  mapa estavam inválidos pro Oracle (`ORA-13367`). O JTS não impõe sentido de anel e o
+  `SDO_GEOMETRY(wkt)` não corrige; o CAR manda o anel no sentido horário. O
+  `SimplificadorGeometriaMapa` agora orienta (externo anti-horário, buraco horário) em toda
+  camada. Republicados: 4.603 válidos (os 8 restantes já vêm inválidos da Silver).
+- **GeoServer como código:** serviço `geoserver` (`docker.osgeo.org/geoserver:3.0.2`,
+  extensões `oracle` + `querylayer`, volume `geoserver-data`, painel só em
+  `127.0.0.1:8085`) e `geoserver-config` (`curlimages/curl`, roda
+  `infra/geoserver/configurar.sh` e termina). O script cria workspace `datagis`, datastore
+  `gold` (Oracle, usuário `APP_USER`), as 7 camadas e os estilos de
+  `infra/geoserver/estilos/*.sld`; é idempotente — reaplicar com
+  `docker compose run --rm geoserver-config`. Variáveis novas no `.env`:
+  `GEOSERVER_ADMIN_PASSWORD`, `GEOSERVER_PORT`. **Pegadinhas:** o REST de estilo sem
+  extensão responde 500 pra estilo existente (consultar com `.xml`); o GeoServer devolve
+  erro com HTTP 200 (`ows:ExceptionReport`); a primeira subida baixa as extensões da
+  internet (alguns minutos).
+- **Proxy `GET /api/indicadores/geoserver/{wms|wfs}`** (`GeoServerProxyController`/
+  `Service`/`Properties`): o navegador nunca fala com o GeoServer direto. Cai na regra
+  existente `indicador:visualizar`; GET não entra no log de auditoria. **Lista fechada:**
+  só `wms` (GetMap, GetLegendGraphic) e `wfs` (GetFeature, DescribeFeatureType); só as 7
+  `vw_mapa_*` em LAYERS/LAYER/QUERY_LAYERS/TYPENAMES/TYPENAME **e dentro de
+  `querySingle`/`queryCollection` no CQL**; `SLD`/`SLD_BODY` proibidos; `SERVICE` tem que
+  bater com o caminho. Encaminha pro serviço virtual do workspace
+  (`/geoserver/datagis/{wms|wfs}`), reencodando cada valor (sinal de `+` não vira espaço).
+  Status e Content-Type do GeoServer passam adiante; fora do ar → 502. Config
+  `app.geoserver.url` (compose: `GEOSERVER_URL=http://geoserver:8080/geoserver`).
+- **KPI de interseção:** `/api/indicadores/municipios` ganhou `qtdImoveisComIntersecao` —
+  imóveis com ISAP, IAE, IDESMAT ou IFC > 0 (`ConsultaIndicadoresService.COM_INTERSECAO`).
+  IRL, IAPP e ICV ficam de fora (cruzar Reserva Legal/APP/vegetação não é alerta).
+- **Renumeradas antes do merge (2026-10-22):** as duas migrations nasceram como V079 e
+  V080, mas a `sprint-2` recebeu antes a `V079__seed_reconfiguracao_completa_mapeamento_coluna`
+  (LIZARDS-29). Duas V079 fazem o Flyway recusar a subida, então as nossas viraram **V080**
+  (views) e **V081** (índice). Os números antigos nunca chegaram ao remoto; só o banco local
+  de quem desenvolveu os tinha aplicado (acertado no `flyway_schema_history` e aplicada a
+  V079 da LIZARDS-29 com `spring.flyway.out-of-order=true` uma única vez).
+- **Testes:** `SimplificadorGeometriaMapaTest` (8), `GeoServerProxyServiceTest` (22 — o que
+  passa, como chega no GeoServer e tudo o que é barrado), `GeoServerProxyControllerTest`
+  (3), +1 em `ConsultaIndicadoresServiceTest`, rota nova no `MatrizAcessoTest`,
+  `MapaCoberturaViewsOracleIT` (4, Oracle real: só a versão CONCLUIDA mais recente aparece;
+  camada sem publicação concluída não mostra nada; interseção pela view usa o índice;
+  metadado das 7 views). **Suíte: 722 testes, 0 falhas** (fora o `DatagisApplicationTests`
+  de sempre, §9.3).
+- **Ao vivo (tokens reais):** analista 200 (PNG e GeoJSON); operador 403; sem token 401;
+  camada ou operação fora da lista 400; POST 405.
+- **Validação do aviso contra os indicadores (2026-10-20):** dos 24 imóveis com IAE > 0, 23
+  também cruzam embargo no mapa. As 2 divergências confirmam a decisão e expõem um bug:
+  - `PR-4119905-C4FE…`: o mapa diz que cruza, IAE = 0. Com a geometria da Silver reparada,
+    o embargo fica a 0,1 m — a simplificação de 5 m do mapa criou a sobreposição. **Mapa
+    errado, indicador certo** — exatamente o motivo de o aviso vir do indicador.
+  - `PR-4119905-97E4…`: IAE = 5,5% (108 ha), o mapa diz que não cruza. Com a geometria
+    reparada, o embargo mais próximo está a **579 m**: a geometria do imóvel na Silver é
+    inválida (`ORA-13356`, vértice duplicado) e o Oracle calculou uma interseção falsa, sem
+    erro. **Indicador errado** — a tela mostra um alerta que não existe.
+- **[EM ABERTO]**
+  - **Geometria inválida na Silver gera indicador falso.** `silver.imovel_rural` tem 1.928
+    geometrias com anel invertido (`13367`), 357 com vértice duplicado (`13356`) e 8 com
+    auto-interseção (`13349`). O caso `97E4…` acima prova o impacto: alerta falso de IAE.
+    Correção sugerida, em task própria: orientar/retificar a geometria na promoção
+    Bronze→Silver (mesmo tratamento do `SimplificadorGeometriaMapa`) ou aplicar
+    `SDO_UTIL.RECTIFY_GEOMETRY` nas procedures antes do cálculo, e republicar.
+  - **Mapa e indicadores são publicações separadas da Gold** e podem divergir: local, o mapa
+    mostrava 24 imóveis × embargo e o indicador só 1, porque os indicadores eram de antes da
+    ingestão dos embargos. `POST /api/gold/publicar` faz os dois juntos; publicar só uma
+    camada pela tela da Gold deixa o descompasso. A tela mostra a data da publicação dos
+    indicadores para o usuário perceber.
+  - **Camadas de IRL, IAPP e ICV no mapa** dependem da entrega de outro integrante (camadas
+    de Reserva Legal, APP e Vegetação Nativa na Gold). Quando chegar: view nova
+    `vw_mapa_*` + metadado, nome na lista `CAMADAS` do `GeoServerProxyService` e do
+    `configurar.sh`, um `.sld`, e preencher `camada` em `CAMADAS_INDICADOR` da tela. O aviso
+    desses 3 indicadores já funciona sem a camada, porque vem do valor.
+
+### 9.46. Mapa de cobertura — frontend — **[FEITO e validado no navegador, 2026-10-20, `LIZARDS-35`]**
+Repositório `datagis-frontend`, branch `feat/mapa-cobertura`, a partir da `sprint-2`.
+Depende da §9.45.
+
+- **Tela Conjuntos e Cobertura (`ConjuntosView.vue`) reescrita como o mapa.** A lista de
+  conjuntos e o formulário "Novo Conjunto" saíram (decisão do usuário; o `POST /conjuntos`
+  continua no backend, só sem tela, e o `conjuntoService.js` ficou sem uso). Rota, item de
+  menu e permissão (`conjunto:visualizar`) não mudaram.
+- **Só o Paraná:** contorno vindo da Gold (`vw_mapa_limite_pr`, não mais arquivo fixo);
+  máscara cobrindo tudo fora do estado, na cor do fundo da página (acompanha o tema);
+  `maxBounds` + `minZoom` — testado no navegador arrastando 1.200 px e afastando o zoom: o
+  mapa não sai do estado. Sem o contorno publicado, a tela avisa em vez de mostrar o mapa
+  solto.
+- **Municípios / Imóveis:** seleção pela lista, pela busca do código CAR ou **clique no
+  mapa**. Selecionado fica em amarelo e enquadrado; com município em foco, o WMS desenha só
+  os imóveis dele (`CQL_FILTER=MUNICIPIO_COD_IBGE=…`). Clique em município sem imóveis
+  publicados avisa e não seleciona.
+- **KPIs:** imóveis, municípios, interseções e o valor bruto dos 7 indicadores, **sem cor
+  de faixa** (decisão da equipe, 2026-10-21: a tela é só visual, o usuário não analisa o
+  dado aqui; a classificação por faixa fica na tela Indicadores e Resultados). Geral = média ponderada pela área (mesma conta do backend).
+  **Interseções:** geral e município = `qtdImoveisComIntersecao` do backend; imóvel = quantas
+  camadas de alerta ele cruza. O título mostra a data da última publicação dos indicadores.
+- **Aviso de interseção vem do valor do indicador** (decisão da §9.45): restrição (ISAP,
+  IAE, IDESMAT, IFC) alerta se > 0; IRL alerta se = 0 (sem Reserva Legal declarada); IAPP e
+  ICV são informativos. Indicador nulo aparece como "Indicador não calculado", nunca como
+  alerta. O GeoServer só destaca no mapa as feições que cruzam (`INTERSECTS` +
+  `querySingle`) e informa quantas são.
+- **`camadaWmsAutenticada.js`:** o `L.tileLayer.wms` padrão põe a URL direto no `<img>` e o
+  navegador não manda o token — o proxy recusaria. Cada tile é baixado pelo `apiFetch` e
+  entra como blob; resposta que não é imagem (erro do GeoServer com HTTP 200) vira erro do
+  tile.
+- **`geoserverService.js`:** todas as chamadas pelo proxy. **Pegadinha:** o ponto do clique
+  vai como `SRID=4326;POINT(lon lat)`. Sem SRID, o GeoServer (WFS 2.0) lê o EPSG:4674 como
+  latitude primeiro e o clique nunca acha nada — o protótipo do spike tinha esse bug.
+- **Bug antigo corrigido (`vite.config.js`):** F5 ou URL digitada em `/conjuntos` caía no
+  backend (401), porque o proxy do endpoint legado `/conjuntos` tem o mesmo caminho da tela.
+  `bypass`: pedido de página (`Accept: text/html`) fica no Vite.
+- **Testes:** `ConjuntosView.test.js` (17, reescrito — KPIs geral/município/imóvel, aviso
+  pelos indicadores, faixas e sentido, indicador nulo, situação de cada camada, destaque só
+  das camadas com dado, filtro do WMS, mapa preso ao Paraná, contorno ausente, clique),
+  `geoserverService.test.js` (10), `camadaWmsAutenticada.test.js` (3). **Suíte: 149, 0
+  falhas; build ok.**
+- **Validado no navegador real** (Brave headless, logado como `analista`): login; 64 tiles
+  pelo proxy sem erro; KPIs iguais à API (24 imóveis com interseção no geral, 22 em Ponta
+  Grossa); seleção por lista e por clique (município e imóvel); F5 na rota.
+- **Tema escuro no mapa (2026-10-21, depois do merge da LIZARDS-38 na `sprint-2`):** a branch
+  foi rebaseada sobre a `sprint-2`. O rebase não deu conflito, mas o Git colou no fim da
+  `ConjuntosView.vue` o bloco escuro da **tela antiga** (296 linhas, classes que não existem
+  mais, algumas com o mesmo nome das novas — `.titulo`, `.subtitulo`, `.mapa-dica`); foi
+  substituído por um bloco próprio. A tela usa só variáveis do `style.css`, que o escuro já
+  remapeia, então o bloco cobre só o que o Leaflet cria (`:deep()`): controles,
+  atribuição e tooltips. **Pegadinha:** a 38 escurece o mapa com `filter: invert` no
+  `.leaflet-tile-pane` inteiro, mas as camadas do GeoServer (WMS) também são tiles nesse
+  painel e ficariam com as cores invertidas (imóvel azul virando laranja). O OpenStreetMap
+  passou a um painel próprio (`fundo`, `zIndex` 150) e o filtro vale só nele. A máscara e o
+  contorno do Paraná leem as cores de `--cor-slate-100`/`--cor-slate-900` e são repintados
+  num `watch` de `estadoTema.atual` — trocar o tema com a tela aberta funciona sem
+  recarregar. **Menu moderno da 38** (`appearance: base-select`): com a altura fixa do campo,
+  o texto e a seta do `<select>` subiam pro topo da caixa; corrigido com `align-items:
+  center` dentro de `@supports`. Testes: +2 no `ConjuntosView.test.js` (OpenStreetMap no
+  painel `fundo` e camadas do GeoServer fora dele; troca de tema repinta máscara e contorno);
+  o `temaEscuro.test.js` da 38 aceita o bloco novo. **Suíte: 227, 0 falhas; build ok.**
+  Conferido no navegador nos dois temas: filtro só no painel do fundo, 48 tiles do
+  GeoServer sem filtro, máscara de `#f1f5f9` para `#1C2530` ao trocar o tema.
+- **Melhorias visuais (2026-10-21):**
+  - **Mapa maior sem faixa vazia:** zoom fracionado (`zoomSnap: 0.25`, `zoomDelta: 0.5`) —
+    o enquadramento do Paraná não cai mais num nível inteiro. Altura `clamp(560px, 60vh,
+    720px)`, medida pra caber sem rolar numa janela de 1000px. **Pegadinha achada:** o
+    Paraná é enquadrado duas vezes (caixa aproximada, depois o contorno da Gold); com o
+    `fitBounds` animado, o `getZoom()` lido logo depois ainda é o anterior e o zoom mínimo
+    ficava meio nível abaixo do estado (dava pra afastar). Agora `fitBounds(..., { animate:
+    false })`.
+  - **Divisas municipais discretas:** `vw_mapa_municipio.sld` com 2 regras por escala —
+    acima de 1:1.500.000 (estado inteiro) linha fina `#94a3b8` 0,5 px e opacidade 0,55;
+    abaixo (zoom de cidade) o tracejado de antes.
+  - **Municípios com imóveis publicados destacados:** estilo extra
+    `vw_mapa_municipio_com_dados.sld` (violeta `#7c3aed`, preenchimento 14%), pedido pela
+    tela via `STYLES` na mesma camada de municípios com `CQL_FILTER=COD_NATURAL IN (...)`
+    dos códigos que vieram de `/api/indicadores/municipios` — município novo publicado
+    entra sozinho. Item próprio na legenda, com liga/desliga. São **duas camadas**: o
+    preenchimento (`vw_mapa_municipio_com_dados`, abaixo dos imóveis, `zIndex` 6) e o
+    contorno (`vw_mapa_municipio_com_dados_contorno`, acima dos imóveis e abaixo dos
+    alertas, `zIndex` 11) — com uma só, onde os imóveis cobrem o município quase inteiro
+    (Maringá, Ponta Grossa) o destaque sumia. O liga/desliga controla as duas. `configurar.sh` ganhou
+    `publicar_estilo` e a lista `ESTILOS_EXTRAS` (estilo que não é padrão de camada).
+  - **Carregamento visível:** aviso "Carregando mapa…" sobre o mapa enquanto alguma camada
+    WMS carrega (eventos `loading`/`load`/`remove` do Leaflet — o `remove` evita o aviso
+    preso quando a camada é desligada no meio) ou alguma consulta ao GeoServer está em
+    andamento. Enquanto os indicadores não chegam, KPIs mostram "—" e o aviso de cada
+    camada "Carregando…" (antes mostrava 0 imóveis e "Indicador não calculado", dando a
+    impressão de falta de dado).
+  - **Informações no mapa (clique e mouse):** o clique continua selecionando e abre um
+    balão no ponto com tudo do item — imóvel: código, município, área, camadas de alerta
+    que cruza ("Cruza N camada(s) de alerta: IAE", mesmo termo do KPI) e o valor dos 7
+    indicadores; município: imóveis, área, imóveis com sobreposição e os 7
+    indicadores agregados; município sem dados: o nome e "Ainda sem imóveis com indicadores
+    publicados". Mouse parado 400 ms mostra uma etiqueta curta (nome/código, município e
+    resumo do alerta). Como o mapa é imagem (WMS), a tela pergunta ao GeoServer o que está
+    no ponto (`identificarNoPonto`, que passou a devolver `{ codigo, rotulo }` — o rótulo
+    dá o nome até de município sem dado); mexeu o mouse, a etiqueta some, e resposta que
+    chega depois é descartada (contador de consulta). Os dados do conteúdo vêm do que a
+    tela já carregou, sem chamada nova. Texto vindo dos dados entra escapado no HTML do
+    Leaflet. Estilos com `:deep()` a partir de `.mapa` e popup escuro no bloco do tema.
+    Descartado: carregar os imóveis como vetor pra etiqueta ser instantânea (pesado com
+    4.611 e inviável no estado inteiro, ~556 mil).
+  - **Atalhos e ajudas (2026-10-21):**
+    - *Imóveis com alerta* no painel quando há município selecionado: os que têm ISAP,
+      IAE, IDESMAT ou IFC > 0 (mesma regra do KPI, por isso a contagem bate — 22 em Ponta
+      Grossa), primeiro quem cruza mais camadas e, no empate, a maior sobreposição
+      percentual. Mostra 8 e um "Mostrar todos". Clicar passa para a visão de imóvel nele.
+    - *Seleção na URL* (`?municipio=<IBGE>` ou `?imovel=<CAR>`, `router.replace`): F5
+      volta no mesmo item e o link pode ser enviado. Aplicada só depois que os indicadores
+      chegam; código desconhecido é ignorado.
+    - *Botão "ver o Paraná inteiro"* (abaixo do zoom, reenquadra sem limpar a seleção) e
+      *régua de escala* em metros (`L.control.scale`).
+    - *Dica do KPI:* passar o mouse (ou focar pelo teclado) num card mostra o que a sigla
+      significa (`tipo_indicador.descricao`, sem acento porque vem assim do catálogo —
+      [EM ABERTO] da §9.40). Chegou a ter legenda de cores (Bom/Atenção/Crítico/Não
+      calculado), sentido e faixas na dica; **tudo removido** na mesma data, junto com as
+      cores dos cards e do balão, pela decisão de a tela ser só visual.
+    - *Aviso que leva ao motivo:* os códigos no "Atenção: N camadas com alerta — IAE IRL"
+      são botões. Clicar abre a aba certa da lista do município ou, sem lista (imóvel
+      selecionado, ou IAPP/ICV), rola até o item da camada no painel e o destaca por 2,5 s
+      — é onde está a explicação; IRL, IAPP e ICV nem têm camada no mapa. A lista do
+      município ganhou abas *Sobreposição* (ISAP/IAE/IDESMAT/IFC > 0, igual ao KPI) e *Sem
+      Reserva Legal* (IRL = 0, maiores primeiro); aba vazia fica desabilitada e a tela abre
+      na que tem imóvel. No banco local, Curitiba mostra os 111 sem Reserva Legal — é o
+      zero × não declarado da §9.40, não erro da tela.
+    - *Botão "Indicadores e Resultados"* (era "Ver na tabela"; só com
+      `indicador:visualizar`): abre `/indicadores?municipio=` ou `?visao=imovel&imovel=`. A
+      `IndicadoresView` (LIZARDS-34) passou a ler essa query ao abrir — filtra e abre o
+      detalhe do item; sem query, comportamento igual ao de antes.
+    - **Indicadores e Resultados saiu do menu lateral (2026-10-22, pedido do usuário).** A
+      tela continua em `/indicadores` (rota e permissão iguais) e passa a ser aberta pelo
+      botão acima. A seção "Publicação & Resultados (Gold)" sumiu do `Sidebar.vue` (ficou
+      vazia) e o item Conjuntos e Cobertura virou "Mapa, indicadores e resultados" com
+      `rotasRelacionadas: ['/indicadores']` — com a tabela aberta, ele continua marcado
+      como ativo no menu. Na `IndicadoresView` entrou o botão **"Ver no mapa"** (só com
+      `conjunto:visualizar`), que volta para `/conjuntos` no município/imóvel aberto
+      (`?municipio=`/`?imovel=`) ou no recorte inteiro. Testes: +3 no `Sidebar.test.js`, +4
+      no `IndicadoresView.test.js`; suíte **266, 0 falhas**, build ok; ida e volta
+      conferidas no navegador.
+    - **Mesma área, um nome só (2026-10-22, pedido do usuário):** o item do menu e o título
+      da tela do mapa passaram de "Conjuntos e Cobertura" para **"Indicadores e
+      Resultados"** (subtítulo do item: "Indicadores, Mapa e Cobertura", a pedido), o mesmo nome da tela de tabela.
+      As duas telas se alternam por **"Ver em tabela"** (no mapa; era "Indicadores e
+      Resultados") e **"Ver no mapa"** (na tabela). Rotas (`/conjuntos`, `/indicadores`),
+      permissões e o nome do arquivo `ConjuntosView.vue` não mudaram — renomear a rota
+      quebraria links já enviados (`?municipio=`/`?imovel=`). Suíte 266, build ok, conferido
+      no navegador.
+  - Testes: +15 no `ConjuntosView.test.js` e o de `identificarNoPonto` ajustado; depois +11
+    (atalhos), +1 (dica do KPI) e +3 (aviso que leva ao motivo) no
+    `ConjuntosView.test.js` e +3 no `IndicadoresView.test.js`; depois os de faixa e legenda
+    viraram testes de "sem cor" (tela só visual). Suíte do frontend **259, 0 falhas**, build ok. Atalhos conferidos no navegador (URL, lista,
+    reenquadrar, escala, tabela aberta no imóvel) nos dois temas. Conferido no navegador nas duas visões (etiqueta
+    e balão de Ponta Grossa e de um imóvel com embargo) e no tema escuro.
+    Conferido no navegador: aviso de carregamento aparece e some, "—" durante o
+    carregamento, mapa de 600 px cabendo na tela, zoom-out travado no estado inteiro.
+- **[EM ABERTO]**
+  - **IRL, IAPP e ICV zerados no banco local de quem não ingeriu** Reserva Legal, APP e
+    Vegetação Nativa: o aviso diz "4.611 imóveis sem Reserva Legal declarada". Não é erro da
+    tela — é o problema de zero × não declarado da §9.40.
+  - **Um alerta falso de IAE** (`PR-4119905-97E4…`) por geometria inválida na Silver —
+    ver §9.45. A tela mostra o que o indicador diz; a correção é no cálculo.
+
+### 9.47. Agendamento automático das fontes de volta ao funcionamento — backend — **[FEITO e validado contra o Oracle real, 2026-10-23, `LIZARDS-54`]**
+Branch `feat/agendamento-fontes`, a partir da `sprint-2`. A parte da tela (ligar/desligar a
+atualização automática) é a LIZARDS-55.
+
+- **"Restaurar" quer dizer o agendamento funcionando, não horários fixos.** Nenhuma
+  migration devolve os crons da antiga `V035`: as fontes continuam nascendo "Somente
+  manual" (decisão da §9.35) e a frequência de cada uma é escolhida na tela, que sempre foi
+  o desenho (§3.2, §9.30). Quem quiser a fonte atualizando sozinha liga pela tela
+  (interruptor da §9.48).
+- **Teste do Quartz consertado (`IngestaoAgendadaOracleIT`).** Quebrou com o bloqueio de
+  mapeamento da LIZARDS-49: a fonte falsa do teste não tinha tabela Silver nem colunas
+  mapeadas e era barrada antes de rodar. Ganhou `entidade_silver = foco_calor` e o
+  mapeamento mínimo (`id` → `identificador_origem` e a geometria), igual aos focos do INPE
+  na `V079`. Não era a ingestão em segundo plano da LIZARDS-29: o job do Quartz chama o
+  `executar` síncrono, que continua o mesmo.
+- **Fonte barrada grava o erro e não fica travada.** Em `IngestaoExecucaoService.executar`
+  a validação do mapeamento e a escolha do executor passaram para dentro do `try`. Antes,
+  o bloqueio era lançado antes de qualquer registro: na execução agendada o motivo ficava
+  só no log, e na execução manual em segundo plano (o botão chama `progresso.iniciar` e
+  depois `executarAssincrono`) o progresso nunca terminava — a fonte ficava "em andamento"
+  para sempre e todo clique seguinte recebia "já está com uma execução em andamento", até
+  reiniciar o backend. Agora fica `ERRO` com a mensagem do bloqueio na "Última execução".
+- **Fuso de Brasília no agendamento.** O container do backend roda em UTC e o
+  `CronTrigger` era criado sem fuso: "todo dia às 3:00" disparava às 3:00 UTC, meia-noite
+  em Brasília. `AgendamentoFonteService` aplica `inTimeZone` com
+  `app.agendamento.fuso=America/Sao_Paulo` (configurável). Os triggers são recriados na
+  subida pelo `AgendadorInicializacaoRunner`, então um agendamento antigo passa a valer no
+  fuso novo sem intervenção.
+- **Próxima execução preenchida.** `fonte_dado.proxima_execucao_em` existia desde a
+  `V001`, mas nunca era gravada (pendência da §9.28 e da §9.30). Agora é gravada ao
+  agendar (data devolvida pelo `scheduleJob`/`rescheduleJob`), limpa ao remover o
+  agendamento e atualizada depois de cada disparo. A API de fontes devolve
+  `proximaExecucaoEm`, inclusive na resposta do próprio salvar. A gravação é um `UPDATE`
+  só dessa coluna (`FonteDadoRepository.atualizarProximaExecucao`), e não um `save` da
+  fonte inteira, para não sobrescrever o resultado que a execução acabou de gravar.
+- **Datas no fuso do servidor (UTC).** Os containers (backend, Oracle e frontend) rodam em
+  UTC e todas as datas gravadas pelo sistema (`ultima_execucao_em`, `data_add`, lotes,
+  auditoria...) ficam em UTC sem indicar o fuso; a tela as exibe como se fossem de
+  Brasília, ou seja, 3 horas adiantadas. A `proxima_execucao_em` segue o mesmo padrão, de
+  propósito, para a tela não misturar dois fusos: com "todo dia às 03:00" a fonte roda às
+  3:00 de Brasília, mas a próxima execução aparece como 06:00, como as outras datas. Ajustar
+  o fuso dos containers (variável `TZ` no compose e na JVM, mais o histórico já gravado em
+  UTC) fica para um fix próprio.
+- **Uma execução por fonte de cada vez.** `IngestaoAgendadaJob` ganhou
+  `@DisallowConcurrentExecution` (o job é um por fonte, então o disparo seguinte espera o
+  anterior) e pula o disparo quando a mesma fonte já está rodando por outro caminho
+  (`ProgressoExecucaoRegistry.isExecutando`, o mesmo controle do botão da tela). Sem isso,
+  um horário que coincidisse com uma execução manual, ou uma fonte lenta como o CAR com
+  intervalo curto, gravava lotes em dobro.
+- **Testes:** `IngestaoAgendadaOracleIT` (Oracle real) passa e agora também confere que o
+  trigger dispara às 3:00 de Brasília e que a próxima execução fica gravada na fonte;
+  `AgendamentoFonteServiceTest` +3 (fuso, próxima execução gravada, limpa ao remover);
+  `IngestaoExecucaoServiceTest` +1 (fonte barrada grava o erro e sai do "em andamento"); `IngestaoAgendadaJobTest` novo (4:
+  executa e grava a próxima, pula se já está rodando, grava a próxima mesmo com falha, não
+  roda em paralelo). As 10 chamadas do construtor do `AgendamentoFonteService` nos testes
+  ganharam os 2 parâmetros novos. Suíte completa: **752 testes, 0 falhas**, só o erro
+  conhecido do `DatagisApplicationTests` (§9.3).
+- **Complemento depois do merge (commit `b036565`, Matheus, 2026-10-23):** dois ajustes no
+  `finally` do `IngestaoAgendadaJob`, que grava a próxima execução depois do disparo:
+  - **A próxima execução é lida do trigger atual.** Antes vinha de
+    `context.getNextFireTime()`, lido no começo da execução: se o agendamento fosse
+    desligado ou editado pela tela enquanto a ingestão rodava, o horário antigo era
+    regravado. Agora `AgendamentoFonteService.atualizarProximaExecucaoDoTrigger` consulta
+    o trigger no Quartz naquele momento (nulo se ele foi removido).
+  - **Falha ao gravar a próxima execução não esconde o erro da ingestão.** Uma exceção
+    nesse `finally` (ex.: banco fora do ar) substituía a da ingestão; agora vira só um
+    `log.warn`, e o erro real continua saindo do `catch`.
+  - Testes: +2 no `AgendamentoFonteServiceTest` e +1 no `IngestaoAgendadaJobTest`. Suíte
+    completa: **755 testes, 0 falhas**, e o `IngestaoAgendadaOracleIT` continua passando.
+
+### 9.48. Ligar e desligar a atualização automática das fontes — frontend — **[FEITO e validado na tela, 2026-10-23, `LIZARDS-55`]**
+Repositório `datagis-frontend`, branch `feat/agendamento-fontes`, a partir da `sprint-2`.
+Parte da tela do agendamento cuja parte de backend está na §9.47.
+
+- **Interruptor "Atualização automática" (`ConstrutorCron.vue`).** Desligado, a fonte fica
+  só com execução manual: nenhuma frequência marcada, Hora e Minuto com "–", e a expressão
+  aparece como `– – – – (sem agendamento)`. O valor enviado é **vazio**, que o backend já
+  entende como "remover o agendamento" (§9.30). Nunca é enviado `* * * * * ?`, que no Quartz
+  dispararia a cada segundo.
+- **Ligado, a escolha começa do zero.** Nada vem preenchido: a pessoa escolhe a frequência
+  (todo dia, toda semana, todo mês ou personalizado) e o horário. Enquanto falta algo, a
+  caixa avisa e o **Salvar fica bloqueado**; hora fora de 0–23, minuto fora de 0–59 ou dia
+  do mês fora de 1–31 também bloqueiam. Desligar e religar começa do zero de novo. O
+  construtor avisa o formulário pelo evento `update:completo`.
+- **Bug da LIZARDS-11 corrigido — fonte sem horário gravava "Todo dia, 3:00" sozinha.** O
+  construtor abria nesse modo mesmo sem cron e emitia o valor; salvar a fonte por qualquer
+  outro motivo ligava o agendamento sem ninguém escolher. Agora fonte sem horário abre
+  desligada.
+- **Editar abre no modo certo.** O construtor reconhece os 3 formatos que ele mesmo gera
+  (diário, semanal, mensal) e preenche os campos; qualquer outra expressão, ou uma com valor
+  fora do intervalo (ex.: hora 25), abre em "Personalizado" com o texto.
+- **Bug da LIZARDS-49 corrigido — editar a fonte apagava a tabela Silver dela
+  (`CadastroFontes.vue`).** O `PUT /api/fontes/{id}` grava a `entidadeSilver` que vem no
+  corpo, mas o formulário nunca enviava esse campo: qualquer edição pela tela deixava a
+  fonte "Sem Tabela Silver" e bloqueava a ingestão. O formulário passou a devolver a tabela
+  que a fonte já tinha. No backend o `PUT` continua gravando o que vier no corpo (quem
+  chamar a API direto sem o campo ainda apaga); a proteção no backend ficou para a próxima
+  sprint. Banco que já perdeu a tabela por esse caminho se corrige com
+  `PATCH /api/fontes/{id}/entidade-silver` ou pelo Mapeamento de Colunas.
+- **Clicar no texto da caixa desligava o agendamento.** A caixa ficava dentro de um
+  `<label>`, e o clique em qualquer texto dela acionava o interruptor. Passou a `<div>`, sem
+  mudança visual.
+- **Upload manual não agenda.** Fonte `UPLOAD_MANUAL` não tem de onde buscar dado novo:
+  agendar só reingeriria o último arquivo (lotes "sem mudança") ou daria erro. Com essa
+  modalidade o interruptor fica travado, com o motivo escrito; trocar para upload manual
+  desliga e limpa o horário (props `bloqueado` e `motivoBloqueio`).
+- **Coluna "Agendamento" da lista** (atualiza a §9.29): com horário, a descrição de antes
+  ("Todo dia às 03:00"); API ou download sem horário, **"Sem agendamento"**; upload manual,
+  **"Por envio de arquivo"** (antes as duas eram "Somente manual"); fonte inativa com
+  horário ganha **"Pausado: fonte inativa"**, porque o backend não agenda fonte inativa. O
+  título da caixa no formulário perdeu o "(Quartz Cron)".
+- **A próxima execução não aparece na tela.** O backend já devolve `proximaExecucaoEm`, mas
+  ela está em UTC como as outras datas (§9.47) e apareceria 3 horas adiantada.
+- **Tema escuro:** interruptor, avisos e "Pausado" com bloco `:root[data-tema="escuro"]`
+  próprio, pelas regras da §9.44.
+- **Testes:** `ConstrutorCron.test.js` novo (20: abre desligado sem gravar horário, abre no
+  modo certo, cada modo só completa com tudo preenchido e dentro do intervalo, desligar
+  limpa, religar começa do zero, nunca emite `* * * * * ?`, e 4 do bloqueio) e
+  `CadastroFontes.test.js` +7 (tabela Silver devolvida no `PUT`, Salvar bloqueado com o
+  agendamento incompleto, clique no texto não desliga, upload manual trava, inativa aparece
+  pausada e os dois textos novos). Conferido desfazendo cada correção numa cópia
+  temporária: o teste correspondente falhou em todos os casos. Suíte do frontend: **329
+  testes, 0 falhas**; build ok.
+
+
+### 9.48. Controle de Acesso e antes/depois no Log de Auditoria — backend — **[FEITO e validado contra o Oracle real, 2026-10-23, `LIZARDS-56`]**
+Branch `feat/controle-acesso-auditoria` (backend e frontend), a partir da `sprint-2`. A tela
+está na §9.49.
+
+- **Objetivo:** o Log de Auditoria passa a mostrar o **antes e depois** das alterações de
+  usuário, além de quem fez e quando (§9.39, LIZARDS-48).
+- **`V082__log_auditoria_antes_e_depois.sql`:** colunas `dados_antes` e `dados_depois`
+  (CLOB com `IS JSON`) em `controle.log_auditoria`. A tabela continua somente inserção: o
+  trigger da V075 só dispara em UPDATE/DELETE de linha, `ALTER TABLE` não passa por ele.
+  Null nas duas = ação sem antes/depois (processo, ou registro anterior à V082); antes
+  null = cadastro novo.
+- **`MudancaAuditada` (pacote `auditoria`):** o serviço que altera o dado chama
+  `MudancaAuditada.registrar(antes, depois)` **depois** de salvar com sucesso; o valor vai
+  como JSON num atributo da requisição (`RequestContextHolder`) e o `FiltroAuditoria` grava
+  junto com a linha do log. O filtro continua **sem ler o corpo da requisição** (senha
+  temporária, uploads). Fora de uma requisição (job agendado, teste) a chamada não faz nada.
+- **Coberto hoje:** `UsuarioAdminService` — criar, editar dados (inclui ativar/desativar),
+  definir perfis/permissões e redefinir senha. A "fotografia" (`fotografia(UsuarioResponse)`)
+  tem login, nome, sobrenome, e-mail, ativo, perfis e permissões avulsas; nada derivado
+  (permissões efetivas) nem secreto. Na troca de senha o log registra só que uma nova senha
+  temporária foi definida — **o valor nunca é gravado** (teste trava isso).
+- **API:** `GET /api/auditoria` devolve `dadosAntes` e `dadosDepois` (texto JSON) em cada item.
+- **Para outra tela ganhar antes/depois** (fontes, mapeamento, domínios): ler o registro
+  antes, salvar, e chamar `MudancaAuditada.registrar(...)` no serviço dela.
+- **Testes:** `MudancaAuditadaTest` (3), `UsuarioAdminServiceTest` (+4: antes/depois da
+  edição, cadastro sem senha, senha nunca gravada, falha não registra depois),
+  `LogAuditoriaOracleIT` (+1, vai e volta no Oracle real). Backend sem falhas fora o
+  `DatagisApplicationTests` de sempre (§9.3); `LogAuditoriaOracleIT` 4/4.
+- **Validado ao vivo:** editar um usuário gerou o registro com o sobrenome antes e depois.
+- **[EM ABERTO]** Antes/depois só nas ações de usuário; o Auditor vê o id (não o login) do
+  usuário alterado, porque a lista de usuários exige `usuario:gerenciar` (§9.49).
+
+### 9.49. Controle de Acesso e antes/depois no Log de Auditoria — frontend — **[FEITO e validado no navegador, 2026-10-23, `LIZARDS-56`]**
+Repositório `datagis-frontend`, branch `feat/controle-acesso-auditoria`. Depende da §9.48
+para o antes e depois (sem a V082 o resto funciona, só não aparece antes/depois).
+
+- **Painel `/admin/controle-acesso`** (`ControleAcessoView.vue`): o menu "Usuários e
+  Acessos" virou "Controle de Acesso", com cards Usuários, Perfis e Matriz de Acesso e um
+  número de resumo em cada. O item do menu fica marcado em todas as telas `/admin/`.
+- **Usuários** (`UsuariosView.vue`, reescrita): lista com "Mostrar N", "Procurar",
+  ordenação por coluna, paginação, Ativo com joinha e detalhe expansível (inclui o **ID do
+  Keycloak** com Copiar); formulário de página inteira ("Salvar"/"Voltar à lista"), sem o
+  campo Ativo — ativar/desativar só pelo botão da lista, com **confirmação própria** (foco no
+  Cancelar); perfis e permissões avulsas em seleção múltipla com busca (`SeletorMultiplo.vue`).
+- **Exportar** CSV ou PDF (`usuariosCsv.js`, `usuariosPdf.js`): arquivo
+  `userDatagis_dd-mm-aaaa`, coluna ativo por último; CSV com vírgula, aspas e BOM, valor
+  com `= + - @` no início ganha apóstrofo (fórmula no Excel). PDF com `jspdf` +
+  `jspdf-autotable` (**dependências novas**, carregadas só ao gerar o PDF).
+- **Importação em Massa de Usuário:** modelo CSV para baixar, prévia com o erro de cada
+  linha (campo em branco, login inválido, e-mail, senha < 8, perfil/permissão inexistente,
+  login já cadastrado ou repetido) e cadastro um a um só das válidas.
+- **Perfis** (`PerfisAcessoView.vue`) e **Matriz de Acesso** (`MatrizAcessoView.vue`):
+  **somente consulta** — perfis e permissões são do código e o `KeycloakProvisionador` os
+  reaplica a cada subida (§9.39). A Matriz lista as telas de cada permissão a partir de
+  `meta.permissao` + `meta.titulo` das rotas: tela nova com `meta.titulo` aparece sozinha.
+  Estilo comum em `controleAcesso.css`, só com variáveis do tema (escuro sem bloco próprio).
+- **Logs de Auditoria** (`AuditoriaView.vue`): botão `{ }` por linha (JSON + Copiar), "Ver
+  JSON do filtro" (todas as páginas, até 10.000), "Usuário alterado: login" nas rotas
+  `/api/admin/usuarios/{id}` (só com `usuario:gerenciar`), aviso "N campo(s) alterado(s)" e
+  janela **Antes | Depois** com os campos alterados em vermelho. Texto vindo do registro é
+  escapado antes de colorir.
+- **Testes:** `ControleAcesso.test.js`, `usuariosCsv.test.js`, `usuariosPdf.test.js` (novos);
+  `UsuariosView.test.js` e `AuditoriaView.test.js` ampliados. Suíte **348, 0 falhas**, build ok.
+- **[EM ABERTO]** Descrições das permissões sem acento vêm do enum `Permissao`; CSV com
+  vírgula abre numa coluna só no Excel em padrão brasileiro (`;`) — se incomodar, exportar
+  `.xlsx`.
 
 ### 9.42. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
 Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
@@ -2471,5 +3093,110 @@ Branch: `bugfix/ajustes-quarentena` (Tasks: `LIZARDS-20`, `LIZARDS-23`).
    - Visando evitar conflitos de versionamento de migrações com branches paralelas da equipe (que criaram `V033`, `V034` e `V035`), as migrações anteriores foram unificadas no arquivo:
      - `src/main/resources/db/migration/controle/V036__atualizar_mapeamentos_dominio_e_integridade_cruzada.sql`
    - Os arquivos redundantes `V033` e `V034` foram removidos e o schema do banco sincronizado na versão `036`.
+
+### 10.7. Gestão de Mapeamento por Tabela Silver e Bloqueio de Ingestão (2026-10-18)
+Branch: `feat/mapeamento-quarentena` (Task: `LIZARDS-49`).
+- Implementado catálogo guiado de colunas por tabela Silver vinculada à fonte (`fonte.entidadeSilver`), isolando domínios de referência por contexto e removendo colunas gerenciadas internamente pelo sistema (`orgao`, `tipo_area_protegida`, `unidade_federativa`).
+- Bloqueio preventivo de ingestão em `IngestaoExecucaoService` contra execuções (manuais ou automáticas via Quartz) de fontes com mapeamento obrigatório incompleto (`MapeamentoIncompletoException`).
+- Revalidação estrita All-or-Nothing no endpoint de liberação de lotes da Quarentena (`POST /api/quarentena/lotes/{id}/liberar`), garantindo que o lote só passe para a Silver quando todos os registros estiverem 100% válidos.
+- Correção de mapeamento dinâmico Bronze→Silver por tipo de coluna de destino (`COLUNA`, `JSON` ou `GEOMETRIA`).
+
+### 10.8. Seeds de Mapeamento, Flexibilização NOT NULL e Publicação Gold Botão Único (2026-10-20)
+Branch: `feat/migracao-gold` (Task: `LIZARDS-29`).
+- Migration `V078__seed_mapeamentos_completos_todas_fontes.sql`: carga das seeds completas de mapeamento para as 18 fontes canônicas do DataGIS.
+- Flexibilização da obrigatoriedade: apenas colunas com restrição relacional NOT NULL no schema físico da Silver bloqueiam a ingestão da fonte. Colunas opcionais (ex.: `imovel_rural.situacao_imovel`) não bloqueiam mais a execução.
+- `area_protegida.categoria_area_protegida` mantida como obrigatória no de-para para garantir a resolução da constraint NOT NULL de `tipo_area_protegida_id` na Silver física.
+- Descontinuação da migração por lotes individuais e remoção completa de código legado de recálculo fragmentado por lote no backend e frontend.
+### 10.9. Arquitetura de Processamento em Segundo Plano (Assíncrono) e Polling em Tempo Real (2026-10-21)
+Branch: `feat/carregamento-segundo-plano`.
+
+1. **Infraestrutura Assíncrona no Spring Boot (`@EnableAsync` e `AsyncConfig`):**
+   - Configurado o thread pool dedicado `datagisTaskExecutor` (`ThreadPoolTaskExecutor`) com capacidade de 4 a 8 threads simultâneas, fila de 100 tarefas e prefixo de thread `datagis-async-`.
+   - Adicionado `DelegatingSecurityContextAsyncTaskExecutor` para propagar de forma transparente o `SecurityContext` do Spring Security (tokens JWT / Keycloak) para as threads em segundo plano.
+   - Criada a exceção `OperacaoEmAndamentoException` mapeada globalmente em `TratadorDeErro` para responder com `HTTP 409 Conflict`, garantindo bloqueio atômico contra requisições concorrentes sobre o mesmo recurso em processamento.
+
+2. **Ingestão Assíncrona de Fontes (`IngestaoController` e `IngestaoExecucaoService`):**
+   - Endpoints `POST /api/fontes-dados/{id}/executar` e `POST /api/fontes-dados/{id}/upload` agora respondem imediatamente com `HTTP 202 Accepted` e o snapshot de status `ExecucaoResponse`.
+   - Tratamento de upload multipart em background: os bytes do arquivo são persistidos em arquivo temporário no disco (`Files.createTempFile`) antes do retorno da requisição HTTP e excluídos com segurança no bloco `finally` da execução assíncrona.
+   - Consulta contínua via `GET /api/fontes-dados/{id}/progresso` consumindo o `ProgressoExecucaoRegistry`. Se uma execução já estiver em andamento para a fonte, novas tentativas disparam `409 Conflict`.
+   - Frontend (`CadastroFontes.vue`): polling dinâmico de 1s e recuperação automática de fontes em execução no carregamento da tela (`onMounted`).
+
+3. **Transição Bronze→Silver e Quarentena Assíncrona (`LoteIngestaoController` e `QuarentenaController`):**
+   - Criados `ProgressoTransicao`, `ProgressoTransicaoResponse` e o registrador thread-safe `ProgressoTransicaoRegistry` rastreando etapas (`VALIDANDO_QUARENTENA`, `CARREGANDO_BRONZE`, `VALIDANDO_REGRAS`, `PERSISTINDO_SILVER`, `CONCLUIDO`, `RETIDO_QUARENTENA`).
+   - `POST /api/quarentena/lotes/{loteId}/liberar` e `POST /api/lotes/{id}/reprocessar` desacoplados da thread HTTP, respondendo imediatamente com `HTTP 202 Accepted`.
+   - Novo endpoint `GET /api/lotes/{id}/progresso` para acompanhamento de percentual e etapas em tempo real.
+   - Frontend (`LotesView.vue`): substituído o timer simulado por polling real via `obterProgressoLote(loteId)`, atualizando o stepper de 4 etapas e a barra de progresso. Suporte a retomada automática de monitoramento pós-refresh via `sessionStorage` e `verificarLoteLiberandoAtivo()`.
+
+4. **Publicação Consolidada na Camada Gold (`GoldPublicacaoController` e `GoldPublicacaoService`):**
+   - `POST /api/gold/publicar` desacoplado com `HTTP 202 Accepted` e verificação de concorrência com `409 Conflict`.
+   - Monitoramento contínuo no frontend (`LotesView.vue`) via `obterStatusGold()` a cada 2s com retomada automática de estado ao recarregar a tela.
+
+### 10.10. Painel de Monitoramento Global de Ingestões e Migrações em Segundo Plano (2026-10-21)
+Branch: `feat/carregamento-segundo-plano`.
+
+1. **Objetivo e Visão Arquitetural:**
+   - Centralizar o monitoramento de todas as esteiras de processamento assíncrono em segundo plano (Ingestão Bronze, Transição Silver e Publicação Gold) em um painel global persistente no frontend.
+   - Acompanhamento unificado e em tempo real independente da tela/rota em que o analista ou operador esteja navegando.
+   - Acesso fixo no canto inferior direito, com suporte a expansão e minimização em formato de pílula compacta para não obstruir a interface de trabalho.
+
+2. **Backend — Agregação em Memória O(1) e Endpoint Global (`MonitoramentoController` e `MonitoramentoService`):**
+   - **DTOs Canônicos (`br.gov.sp.cps.datagis.controle.monitoramento`):**
+     - `MonitoramentoIngestaoItem`: ID e nome da fonte, formato, fase de execução, total de registros, processados, percentual, data de início e mensagem de erro.
+     - `MonitoramentoSilverItem`: ID do lote, ID e nome da fonte, etapa da transição, total de registros, processados, percentual, data de início e mensagem de erro.
+     - `MonitoramentoGoldItem`: indicador de execução, etapa atual, percentual consolidado, datas, contadores de camadas e indicadores processados e erro.
+     - `MonitoramentoGlobalResponse`: contagem consolidada de tarefas ativas (`totalEmAndamento`) e listas/objetos das três esteiras.
+   - **Exposição nos Registradores em Memória:**
+     - Adicionado método `obterTodos()` em `ProgressoExecucaoRegistry` e `ProgressoTransicaoRegistry`, retornando snapshots thread-safe das execuções ativas e recentes.
+   - **Serviço Agregador (`MonitoramentoService`):**
+     - Cruza em tempo constante os registradores em memória de ingestão, transição e o serviço de publicação Gold (`GoldPublicacaoService.obterProgressoAtual()`).
+     - Calcula dinamicamente o total de operações ativas em andamento.
+   - **Endpoint REST:**
+     - `GET /api/monitoramento/status-global`: expõe o snapshot consolidado para o frontend em uma única chamada HTTP leve.
+   - **Testes Unitários:** `MonitoramentoServiceTest` e `MonitoramentoControllerTest`.
+
+3. **Frontend — Composable Singleton e Polling Adaptativo (`useMonitoramentoGlobal`):**
+   - Centraliza o ciclo de vida do monitoramento com padrão Singleton no composable reativo `src/composables/useMonitoramentoGlobal.js`.
+   - **Polling Inteligente e Eficiente:**
+     - Intervalo curto de 2 segundos quando existem tarefas ativas em andamento (`totalEmAndamento > 0`).
+     - Intervalo ampliado de 8 segundos quando o sistema está ocioso, poupando CPU e largura de banda.
+     - Destruição e limpeza automática dos timers ao desmontar.
+   - **Persistência de Preferência de Interface:**
+     - Estado de minimização/expansão persistido em `localStorage` (`datagis_monitor_minimizado`) para manter a ergonomia escolhida pelo usuário durante a navegação.
+
+4. **Frontend — Componente Visual Glassmorphism (`PainelMonitoramentoGlobal.vue`):**
+   - **Posicionamento e Estados:**
+     - Fixado no canto inferior direito (`bottom-4 right-4 z-50`).
+     - **Estado Minimizado:** Pílula flutuante estilizada com efeito de vidro (Glassmorphism), badge numérico pulsante exibindo a quantidade de tarefas em andamento e botão expansor para puxar o modal de volta.
+     - **Estado Expandido:** Painel com cabeçalho contendo resumo de tarefas ativas, botão de fechar/minimizar e abas dedicadas:
+       - **Aba Todas:** Visão geral rápida com resumo das operações em execução nas três esteiras.
+       - **Aba Ingestão (Bronze):** Cards detalhados de cada fonte em processamento com formato, fase atual, barra de progresso e atalho de navegação para a tela de Fontes.
+       - **Aba Silver (Transição e Quarentena):** Cards de cada lote sendo promovido para a Silver, com identificação da fonte, etapa de validação, barra de progresso e atalho para a tela de Lotes.
+       - **Aba Gold (Publicação Analítica):** Acompanhamento do recálculo consolidado de camadas geoespaciais e indicadores municipais, com percentual e status de conclusão.
+   - **Integração na Raiz (`App.vue`):**
+     - O componente é montado no rodapé global do `App.vue`, persistindo em todas as rotas da aplicação (Dashboard, Fontes, Lotes, Quarentena, Mapas, Indicadores, etc.).
+   - **Testes Unitários Frontend:** `useMonitoramentoGlobal.test.js` e `PainelMonitoramentoGlobal.test.js` integrados na suíte Vitest com 149 testes aprovados.
+
+### 10.11. Múltiplas Colunas de Origem no Mapeamento (1:N) e Remoção da Validação Territorial PR (2026-10-24)
+Commits: `951fcfd`, `c8da8ac`, `364a9bc` (`feat<LIZARDS-49>`).
+
+1. **Remoção da Restrição de Recorte Territorial do Paraná (`ValidadorGeometria`):**
+   - Removida a checagem por bounding box do Paraná (`ENVELOPE_PARANA`) no `ValidadorGeometria.java`.
+   - O método `suporta(contexto)` não é mais ativado unicamente pela flag `validarRecortePr`, e o erro `FORA_DO_RECORTE_TERRITORIAL` foi desativado do motor ativo (preservado apenas no catálogo `quarentena.tipo_erro_quarentena` para integridade histórica de logs/migrações passadas).
+   - O controlador `MapeamentoColunaController` e as migrações/seeds (`V031`, `V053`, `V079`) forçam/refletem `validarRecortePr = false / 0`. Geometrias válidas espacialmente não são mais rejeitadas caso ultrapassem o envelope geográfico do PR.
+   - Atualizados testes em `ValidadorGeometriaTest` cobrindo a aceitação de geometrias fora do Paraná.
+
+2. **Suporte a Múltiplas Colunas de Origem no Mapeamento (1:N):**
+   - **Modelo e Integridade:** Permite cadastrar múltiplos mapeamentos de origem apontando para o mesmo `atributoDestino` na camada Silver (ex.: `cd_cnuc` e `codigo_uc` mapeando para `codigo_origem`, ou `cria_ato` e `ato_criaca` para `ato_legal` em `area_protegida`).
+   - A integridade do de-para impede duplicidade do par exato `(coluna_origem, atributo_destino)` e impede que a mesma coluna de origem aponte para atributos Silver distintos (conflito de chave), preservando a unicidade da interpretação.
+   - **Orquestrador de Validação (`OrquestradorValidacao`):**
+     - Mapeamentos são agrupados por atributo de destino (`agruparMapeamentosPorDestino`).
+     - Para cada grupo, `resolverValorDoGrupo` avalia as colunas candidatas no payload bruto e seleciona a primeira que apresentar valor preenchido (não-nulo e não-vazio).
+     - O contexto de validação (`prepararContexto`) é configurado a partir do mapeamento vencedor; caso nenhuma coluna esteja presente no payload, o primeiro mapeamento do grupo atua como sentinela de validação (ex.: disparo de obrigatoriedade).
+   - **APIs REST de Governança (`MapeamentoColunaController`):**
+     - `PUT /api/fontes/{fonteId}/mapeamentos/atributo/{atributoDestino}`: Sincroniza atômica e integralmente todos os mapeamentos vinculados a um atributo Silver, realizando inclusões, atualizações e exclusões dos pares omitidos.
+     - `DELETE /api/fontes/{fonteId}/mapeamentos/atributo/{atributoDestino}`: Remove todos os mapeamentos vinculados àquele atributo específico da fonte.
+   - **Resiliência Transacional Assíncrona (`TransicaoBronzeSilverService`):**
+     - Injeção de `TransactionTemplate` para assegurar o isolamento de sessão em invocações assíncronas internas (`processarLoteAssincrono` e `liberarLoteParaSilverAssincrono`), eliminando riscos de `LazyInitializationException` e garantindo o commit de estados da Quarentena em cenários All-or-Nothing.
+
 
 

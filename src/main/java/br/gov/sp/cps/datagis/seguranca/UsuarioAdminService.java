@@ -1,5 +1,6 @@
 package br.gov.sp.cps.datagis.seguranca;
 
+import br.gov.sp.cps.datagis.auditoria.MudancaAuditada;
 import br.gov.sp.cps.datagis.seguranca.KeycloakAdminClient.KcRole;
 import br.gov.sp.cps.datagis.seguranca.KeycloakAdminClient.KcUsuario;
 import br.gov.sp.cps.datagis.seguranca.UsuarioDtos.CatalogoAcessoResponse;
@@ -14,6 +15,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -27,6 +29,9 @@ import org.springframework.stereotype.Service;
  * <p>So mexe nas roles do catalogo ({@link Perfil} e {@link Permissao}); roles internas do
  * Keycloak (ex.: {@code default-roles-datagis}, {@code offline_access}) nunca sao
  * adicionadas nem removidas por aqui.
+ *
+ * <p>Toda alteracao entrega o antes e depois do usuario ao log de auditoria
+ * ({@link MudancaAuditada}), sem senha.
  *
  * <p>Trava de seguranca: o administrador nao consegue desativar a si mesmo nem tirar de si
  * a permissao {@code usuario:gerenciar} - senao o sistema pode ficar sem ninguem capaz de
@@ -69,15 +74,20 @@ public class UsuarioAdminService {
                 dados.email().trim());
         keycloak.definirSenha(id, dados.senhaTemporaria(), true);
         keycloak.adicionarRoles(id, resolverRoles(roles));
-        return buscar(id);
+        UsuarioResponse criado = buscar(id);
+        MudancaAuditada.registrar(null, fotografia(criado));
+        return criado;
     }
 
     public UsuarioResponse atualizar(String id, UsuarioAtualizacaoRequest dados, String idSolicitante) {
         if (id.equals(idSolicitante) && !dados.ativo()) {
             throw new IllegalArgumentException("Voce nao pode desativar o seu proprio usuario");
         }
+        UsuarioResponse antes = buscar(id);
         keycloak.atualizarUsuario(id, dados.nome().trim(), dados.sobrenome().trim(), dados.email().trim(), dados.ativo());
-        return buscar(id);
+        UsuarioResponse depois = buscar(id);
+        MudancaAuditada.registrar(fotografia(antes), fotografia(depois));
+        return depois;
     }
 
     /**
@@ -99,13 +109,37 @@ public class UsuarioAdminService {
         List<String> adicionar = desejadas.stream().filter(r -> !nomesAtuais.contains(r)).toList();
         List<KcRole> remover = atuaisDoCatalogo.stream().filter(r -> !desejadas.contains(r.name())).toList();
 
+        UsuarioResponse antes = buscar(id);
         keycloak.adicionarRoles(id, resolverRoles(adicionar));
         keycloak.removerRoles(id, remover);
-        return buscar(id);
+        UsuarioResponse depois = buscar(id);
+        MudancaAuditada.registrar(fotografia(antes), fotografia(depois));
+        return depois;
     }
 
     public void redefinirSenha(String id, String senhaTemporaria) {
         keycloak.definirSenha(id, senhaTemporaria, true);
+        // A senha nunca vai pro log: so o fato de ter sido trocada
+        Map<String, Object> antes = new LinkedHashMap<>();
+        antes.put("senha", "anterior");
+        antes.put("trocaObrigatoriaNoProximoLogin", null);
+        Map<String, Object> depois = new LinkedHashMap<>();
+        depois.put("senha", "nova senha temporaria definida (o valor nao e gravado)");
+        depois.put("trocaObrigatoriaNoProximoLogin", true);
+        MudancaAuditada.registrar(antes, depois);
+    }
+
+    /** O que vai pro log de auditoria: so dado de cadastro e acesso, nada derivado nem secreto. */
+    static Map<String, Object> fotografia(UsuarioResponse u) {
+        Map<String, Object> foto = new LinkedHashMap<>();
+        foto.put("login", u.login());
+        foto.put("nome", u.nome());
+        foto.put("sobrenome", u.sobrenome());
+        foto.put("email", u.email());
+        foto.put("ativo", u.ativo());
+        foto.put("perfis", u.perfis());
+        foto.put("permissoesAvulsas", u.permissoesAvulsas());
+        return foto;
     }
 
     private UsuarioResponse montarResposta(KcUsuario u) {

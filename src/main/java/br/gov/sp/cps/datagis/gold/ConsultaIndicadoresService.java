@@ -26,6 +26,15 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ConsultaIndicadoresService {
 
+    /**
+     * Imovel que cruza alguma camada de restricao do mapa de cobertura (LIZARDS-35):
+     * area protegida (ISAP), embargo (IAE), desmatamento (IDESMAT) ou foco de calor
+     * (IFC). Qualquer sobreposicao conta, por menor que seja - decisao da task. IRL,
+     * IAPP e ICV ficam de fora: cruzar Reserva Legal, APP ou vegetacao nao e alerta.
+     */
+    static final String COM_INTERSECAO = "(NVL(i.valor_isap, 0) > 0 OR NVL(i.valor_iae, 0) > 0 "
+            + "OR NVL(i.valor_idesmat, 0) > 0 OR NVL(i.valor_ifc, 0) > 0)";
+
     private final JdbcTemplate jdbcTemplate;
     private final String goldSchema;
     private final String silverSchema;
@@ -44,7 +53,8 @@ public class ConsultaIndicadoresService {
     public List<ConsultaImovelResponse> listarPorImovel() {
         String sql = "SELECT i.cod_imovel, i.municipio_cod_ibge, m.nome AS municipio_nome, i.area_ha, "
                 + "i.valor_icv, i.valor_irl, i.valor_iapp, i.valor_isap, "
-                + "i.valor_iae, i.valor_idesmat, i.valor_ifc, i.data_publicacao "
+                + "i.valor_iae, i.valor_idesmat, i.valor_ifc, "
+                + "i.valor_irl_deficit_ha, i.valor_iapp_passivo_ha, i.data_publicacao "
                 + "FROM " + versaoAtualDeCadaImovel() + " "
                 // LEFT JOIN de proposito: imovel com municipio ainda nao semeado na Silver
                 // continua aparecendo na tela, so sem o nome.
@@ -64,6 +74,8 @@ public class ConsultaIndicadoresService {
                 lerDouble(rs, "valor_iae"),
                 lerDouble(rs, "valor_idesmat"),
                 lerDouble(rs, "valor_ifc"),
+                lerDouble(rs, "valor_irl_deficit_ha"),
+                lerDouble(rs, "valor_iapp_passivo_ha"),
                 rs.getTimestamp("data_publicacao") == null
                         ? null
                         : rs.getTimestamp("data_publicacao").toLocalDateTime()));
@@ -76,6 +88,7 @@ public class ConsultaIndicadoresService {
     public List<ConsultaMunicipioResponse> listarPorMunicipio() {
         String sql = "SELECT i.municipio_cod_ibge AS cod_ibge, MAX(m.nome) AS nome, "
                 + "COUNT(*) AS qtd_imoveis, "
+                + "SUM(CASE WHEN " + COM_INTERSECAO + " THEN 1 ELSE 0 END) AS qtd_imoveis_com_intersecao, "
                 + "ROUND(SUM(NVL(i.area_ha, 0)), 2) AS area_total_ha, "
                 + mediaPonderada("valor_icv") + ", "
                 + mediaPonderada("valor_irl") + ", "
@@ -83,7 +96,9 @@ public class ConsultaIndicadoresService {
                 + mediaPonderada("valor_isap") + ", "
                 + mediaPonderada("valor_iae") + ", "
                 + mediaPonderada("valor_idesmat") + ", "
-                + mediaPonderada("valor_ifc") + " "
+                + mediaPonderada("valor_ifc") + ", "
+                + "ROUND(SUM(i.valor_irl_deficit_ha), 2) AS valor_irl_deficit_ha, "
+                + "ROUND(SUM(i.valor_iapp_passivo_ha), 2) AS valor_iapp_passivo_ha "
                 + "FROM " + versaoAtualDeCadaImovel() + " "
                 + "LEFT JOIN " + silverSchema + ".municipio m ON m.cod_ibge = i.municipio_cod_ibge "
                 + "WHERE i.ordem_versao = 1 "
@@ -94,6 +109,7 @@ public class ConsultaIndicadoresService {
                 lerLong(rs, "cod_ibge"),
                 rs.getString("nome"),
                 rs.getLong("qtd_imoveis"),
+                rs.getLong("qtd_imoveis_com_intersecao"),
                 lerDouble(rs, "area_total_ha"),
                 lerDouble(rs, "valor_icv"),
                 lerDouble(rs, "valor_irl"),
@@ -101,7 +117,9 @@ public class ConsultaIndicadoresService {
                 lerDouble(rs, "valor_isap"),
                 lerDouble(rs, "valor_iae"),
                 lerDouble(rs, "valor_idesmat"),
-                lerDouble(rs, "valor_ifc")));
+                lerDouble(rs, "valor_ifc"),
+                lerDouble(rs, "valor_irl_deficit_ha"),
+                lerDouble(rs, "valor_iapp_passivo_ha")));
     }
 
     /**

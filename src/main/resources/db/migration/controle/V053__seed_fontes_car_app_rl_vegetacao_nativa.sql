@@ -76,7 +76,7 @@ UNION ALL
 SELECT f.id, 'des_condic', 'condicao_bruto', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 0
   FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - APP Total (CAR)'
 UNION ALL
-SELECT f.id, 'geometry', 'geometria', 'GEOMETRIA', 'geometria', 0, NULL, NULL, NULL, 0, 1, 1, 0
+SELECT f.id, 'geometry', 'geometria', 'GEOMETRIA', 'geometria', 0, NULL, NULL, NULL, 0, 1, 0, 0
   FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - APP Total (CAR)'
 UNION ALL
 SELECT f.id, 'objectid', 'identificador_origem', 'COLUNA', 'texto', 1, NULL, NULL, NULL, 0, 0, 0, 0
@@ -94,7 +94,7 @@ UNION ALL
 SELECT f.id, 'des_condic', 'condicao_bruto', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 0
   FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - Reserva Legal (CAR)'
 UNION ALL
-SELECT f.id, 'geometry', 'geometria', 'GEOMETRIA', 'geometria', 0, NULL, NULL, NULL, 0, 1, 1, 0
+SELECT f.id, 'geometry', 'geometria', 'GEOMETRIA', 'geometria', 0, NULL, NULL, NULL, 0, 1, 0, 0
   FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - Reserva Legal (CAR)'
 UNION ALL
 SELECT f.id, 'objectid', 'identificador_origem', 'COLUNA', 'texto', 1, NULL, NULL, NULL, 0, 0, 0, 0
@@ -112,7 +112,7 @@ UNION ALL
 SELECT f.id, 'des_condic', 'condicao_bruto', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 0
   FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - Vegetação Nativa (CAR)'
 UNION ALL
-SELECT f.id, 'geometry', 'geometria', 'GEOMETRIA', 'geometria', 0, NULL, NULL, NULL, 0, 1, 1, 0
+SELECT f.id, 'geometry', 'geometria', 'GEOMETRIA', 'geometria', 0, NULL, NULL, NULL, 0, 1, 0, 0
   FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - Vegetação Nativa (CAR)'
 UNION ALL
 SELECT f.id, 'objectid', 'identificador_origem', 'COLUNA', 'texto', 1, NULL, NULL, NULL, 0, 0, 0, 0

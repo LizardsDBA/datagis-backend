@@ -1,0 +1,82 @@
+# Ambiente publicado (instancia OCI, https://datagis.com.br). Override do
+# docker-compose.yml - so troca o que muda entre dev e servidor:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env --env-file .env.prod up -d
+#
+# - Entra o Caddy (HTTPS + roteamento por caminho, infra/caddy/Caddyfile). E o unico com
+#   porta publicada; Oracle, backend e Keycloak so ficam na rede interna do Docker
+#   (`!reset` remove o `ports` herdado - porta publicada pelo Docker ignora o iptables).
+# - Keycloak passa a responder em https://datagis.com.br/auth (mesmo dominio do portal).
+# - Frontend deixa de rodar o Vite: compila uma vez (npm run build) e o Caddy serve o dist.
+# - Usuarios de teste (login = senha) desligados: num site publico seriam uma porta
+#   aberta. O primeiro administrador e criado pelo console do Keycloak.
+# - .env.prod (so no servidor, fora do git) sobrescreve a senha do console do Keycloak.
+# - O realm versionado (infra/keycloak) so conhece http://localhost:5173 e fica assim - o
+#   dev da equipe nao muda. As URLs de https://datagis.com.br sao cadastradas uma vez no
+#   client datagis-frontend direto no Keycloak do servidor (kcadm.sh), depois da 1a subida.
+#
+# Backend continua em modo dev (./mvnw spring-boot:run) nesta sprint - empacotar em jar
+# fica pra depois (CLAUDE.md §4.6).
+services:
+  oracle:
+    ports: !reset []
+
+  keycloak:
+    environment:
+      KC_HOSTNAME: https://datagis.com.br/auth
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_PROXY_HEADERS: xforwarded
+    ports: !reset []
+
+  backend:
+    environment:
+      KEYCLOAK_URL_INTERNA: http://keycloak:8080/auth
+      KEYCLOAK_URL_PUBLICA: https://datagis.com.br/auth
+      APP_KEYCLOAK_USUARIOS_DEV: "false"
+      # Otimizacao da publicacao Gold (docs/publicacao-gold-paralela.md, secao 5.2) -
+      # valor calibrado contra o shape real desta instancia (8 vCPU, 31,3 GB, 7,86 GB
+      # em uso no momento da medicao via htop - secao 2.1/14). docker-compose.yml
+      # (base, compartilhado pelo time em dev) fica em 2 (seguro) de proposito - so
+      # aqui, no override de producao, sobe pra 6.
+      # PRE-REQUISITO pro paralelismo=6 nao estourar PGA (ORA-04036, secao 5.3) - teto
+      # subido pra 16G no servidor real, 2026-10-25 (ALTER SYSTEM como SYS, CDB$ROOT
+      # depois FREEPDB1, mesmo padrao de infra/oracle-init/01-criar-schemas.sh):
+      # ALTER SYSTEM SET PGA_AGGREGATE_LIMIT = 16G SCOPE = BOTH;  -- ja aplicado
+      # Isso e um ajuste no banco real, nao em arquivo deste repositorio - sobrevive
+      # a redeploy de container (dado persistido no volume do Oracle), mas NAO
+      # sobrevive a um volume novo (`docker compose down -v` em produção, que nunca
+      # deveria rodar sem motivo grave) - se isso acontecer, repetir o comando acima
+      # antes de religar o backend com paralelismo=6.
+      APP_GOLD_PARALELISMO: "6"
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "16"
+    ports: !reset []
+
+  frontend:
+    environment:
+      VITE_KEYCLOAK_URL: https://datagis.com.br/auth
+    command: sh -c "npm install && npm run build"
+    ports: !reset []
+    restart: "no"
+
+  caddy:
+    image: caddy:2.10.2
+    depends_on:
+      frontend:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+      keycloak:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./datagis-frontend/dist:/srv:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

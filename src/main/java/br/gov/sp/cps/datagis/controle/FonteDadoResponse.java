@@ -24,7 +24,9 @@ public record FonteDadoResponse(
         Boolean mapeamentoCompleto,
         Integer totalColunasSilver,
         Integer totalColunasMapeadas,
-        java.util.List<String> colunasSilverFaltantes) {
+        java.util.List<String> colunasSilverFaltantes,
+        // No fuso do servidor, como as outras datas desta resposta
+        LocalDateTime proximaExecucaoEm) {
 
     public static FonteDadoResponse de(FonteDado fonte) {
         return de(fonte, null);
@@ -54,6 +56,7 @@ public record FonteDadoResponse(
                 status != null ? status.completo() : false,
                 status != null ? status.totalColunasEsperadas() : 0,
                 status != null ? status.totalColunasMapeadas() : 0,
-                status != null ? status.colunasFaltantes() : java.util.Collections.emptyList());
+                status != null ? status.colunasFaltantes() : java.util.Collections.emptyList(),
+                fonte.getProximaExecucaoEm());
     }
 }

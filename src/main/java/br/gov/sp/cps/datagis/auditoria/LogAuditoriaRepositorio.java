@@ -31,7 +31,9 @@ public class LogAuditoriaRepositorio {
             rs.getInt("status_http"),
             rs.getInt("sucesso") == 1,
             rs.getObject("duracao_ms") == null ? null : rs.getLong("duracao_ms"),
-            rs.getString("ip_origem"));
+            rs.getString("ip_origem"),
+            rs.getString("dados_antes"),
+            rs.getString("dados_depois"));
 
     private final JdbcTemplate jdbc;
 
@@ -43,12 +45,13 @@ public class LogAuditoriaRepositorio {
         jdbc.update("""
                 INSERT INTO log_auditoria
                     (data_hora, usuario_id, usuario_login, perfis, metodo, rota, rota_padrao,
-                     parametros, acao, status_http, sucesso, duracao_ms, ip_origem)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     parametros, acao, status_http, sucesso, duracao_ms, ip_origem, dados_antes, dados_depois)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 Timestamp.from(r.dataHora()), r.usuarioId(), cortar(r.usuarioLogin(), 200), cortar(r.perfis(), 1000),
                 r.metodo(), cortar(r.rota(), 1000), r.rotaPadrao(), cortar(r.parametros(), 2000), r.acao(),
-                r.statusHttp(), r.sucesso() ? 1 : 0, r.duracaoMs(), cortar(r.ipOrigem(), 64));
+                r.statusHttp(), r.sucesso() ? 1 : 0, r.duracaoMs(), cortar(r.ipOrigem(), 64),
+                r.dadosAntes(), r.dadosDepois());
     }
 
     /** Mais recentes primeiro. Todos os filtros sao opcionais. */
@@ -102,11 +105,11 @@ public class LogAuditoriaRepositorio {
         return valor == null || valor.length() <= limite ? valor : valor.substring(0, limite);
     }
 
-    /** Linha a gravar. */
+    /** Linha a gravar. {@code dadosAntes}/{@code dadosDepois} = JSON, ou null (ver {@link MudancaAuditada}). */
     public record RegistroAuditoria(
             Instant dataHora, String usuarioId, String usuarioLogin, String perfis, String metodo, String rota,
             String rotaPadrao, String parametros, String acao, int statusHttp, boolean sucesso, Long duracaoMs,
-            String ipOrigem) {
+            String ipOrigem, String dadosAntes, String dadosDepois) {
     }
 
     public record FiltroConsultaAuditoria(
@@ -116,7 +119,7 @@ public class LogAuditoriaRepositorio {
     public record LogAuditoriaResponse(
             long id, Instant dataHora, String usuarioId, String usuarioLogin, String perfis, String metodo,
             String rota, String rotaPadrao, String parametros, String acao, int statusHttp, boolean sucesso,
-            Long duracaoMs, String ipOrigem) {
+            Long duracaoMs, String ipOrigem, String dadosAntes, String dadosDepois) {
     }
 
     public record PaginaAuditoria(List<LogAuditoriaResponse> itens, long total, int pagina, int tamanho) {

@@ -1,5 +1,6 @@
 package br.gov.sp.cps.datagis.validacao;
 
+import br.gov.sp.cps.datagis.gold.SimplificadorGeometriaMapa;
 import java.util.Locale;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
@@ -58,7 +59,6 @@ public class ValidadorGeometria implements ValidadorCampo {
             return false;
         }
         return contexto.validarGeometria()
-                || contexto.validarRecortePr()
                 || "GEOMETRIA".equalsIgnoreCase(contexto.destinoTipo())
                 || "wkt".equalsIgnoreCase(contexto.tipoDado())
                 || "geojson".equalsIgnoreCase(contexto.tipoDado());
@@ -147,21 +147,14 @@ public class ValidadorGeometria implements ValidadorCampo {
             );
         }
 
-        // 5. Validação de Recorte Territorial do Paraná
-        if (contexto != null && contexto.validarRecortePr()) {
-            Envelope envGeom = geometria.getEnvelopeInternal();
-            if (!ENVELOPE_PARANA.intersects(envGeom)) {
-                return ResultadoValidacao.erro(
-                        ERRO_FORA_RECORTE_PR,
-                        nomeCampo,
-                        valorOriginal,
-                        "Geometria localizada fora dos limites territoriais do Paraná (Envelope: "
-                                + envGeom + ", Limites PR: " + ENVELOPE_PARANA + ")"
-                );
-            }
-        }
-
-        // 6. Sucesso — retorna WKT padronizado
+        // 5. Sucesso — orienta anéis pra convenção do Oracle (ver javadoc de
+        // SimplificadorGeometriaMapa.orientarParaOracle) e retorna WKT padronizado.
+        // Achado real (docs/publicacao-gold-paralela.md §12): sem isso, 50-98% das
+        // geometrias poligonais de cada entidade ficavam "válidas" aqui (o JTS não
+        // reprova anel invertido) mas inválidas no Oracle, e SDO_GEOM.SDO_INTERSECTION
+        // contra elas devolve área quase-zero sem erro, zerando indicadores
+        // silenciosamente (ISAP, IAE, IAPP, ICV, IRL).
+        geometria = SimplificadorGeometriaMapa.orientarParaOracle(geometria);
         return ResultadoValidacao.sucesso(wktWriter.write(geometria));
     }
 

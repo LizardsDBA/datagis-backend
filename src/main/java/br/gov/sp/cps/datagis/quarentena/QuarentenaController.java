@@ -4,6 +4,11 @@ import java.time.LocalDate;
 import org.springframework.format.annotation.DateTimeFormat;
 import java.util.List;
 import java.util.Map;
+import br.gov.sp.cps.datagis.config.OperacaoEmAndamentoException;
+import br.gov.sp.cps.datagis.validacao.ProgressoTransicaoRegistry;
+import br.gov.sp.cps.datagis.validacao.ProgressoTransicaoResponse;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,9 +23,18 @@ import org.springframework.web.bind.annotation.RestController;
 public class QuarentenaController {
 
     private final QuarentenaService quarentenaService;
+    private final ProgressoTransicaoRegistry progressoTransicaoRegistry;
+
+    @Autowired
+    public QuarentenaController(
+            QuarentenaService quarentenaService,
+            @Autowired(required = false) ProgressoTransicaoRegistry progressoTransicaoRegistry) {
+        this.quarentenaService = quarentenaService;
+        this.progressoTransicaoRegistry = progressoTransicaoRegistry;
+    }
 
     public QuarentenaController(QuarentenaService quarentenaService) {
-        this.quarentenaService = quarentenaService;
+        this(quarentenaService, null);
     }
 
     @GetMapping
@@ -115,12 +129,21 @@ public class QuarentenaController {
     }
 
     @PostMapping("/lotes/{loteId}/liberar")
-    public ResponseEntity<Void> liberarLote(
+    public ResponseEntity<ProgressoTransicaoResponse> liberarLote(
             @PathVariable Long loteId,
             @RequestBody(required = false) AcaoQuarentenaRequest request) {
+        if (progressoTransicaoRegistry != null && progressoTransicaoRegistry.isExecutando(loteId)) {
+            throw new OperacaoEmAndamentoException("O lote #" + loteId + " já está sendo liberado.");
+        }
+        if (progressoTransicaoRegistry != null) {
+            progressoTransicaoRegistry.iniciar(loteId, 0, "INICIANDO");
+        }
         Long analistaId = request != null ? request.analistaId() : null;
-        boolean sucesso = quarentenaService.liberarLote(loteId, analistaId);
-        return sucesso ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+        quarentenaService.liberarLoteAssincrono(loteId, analistaId);
+        ProgressoTransicaoResponse resp = progressoTransicaoRegistry != null
+                ? progressoTransicaoRegistry.obter(loteId).map(ProgressoTransicaoResponse::de).orElseGet(() -> ProgressoTransicaoResponse.ocioso(loteId))
+                : ProgressoTransicaoResponse.ocioso(loteId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(resp);
     }
 
     @PostMapping("/lotes/{loteId}/descartar")

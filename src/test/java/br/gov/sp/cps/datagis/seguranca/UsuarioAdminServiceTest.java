@@ -16,6 +16,8 @@ import br.gov.sp.cps.datagis.seguranca.UsuarioDtos.UsuarioNovoRequest;
 import br.gov.sp.cps.datagis.seguranca.UsuarioDtos.UsuarioResponse;
 import java.util.List;
 import java.util.Set;
+import br.gov.sp.cps.datagis.auditoria.MudancaAuditadaAcesso;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,6 +25,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -39,8 +44,16 @@ class UsuarioAdminServiceTest {
 
     UsuarioAdminService service;
 
+    MockHttpServletRequest request = new MockHttpServletRequest();
+
+    @AfterEach
+    void limparRequisicao() {
+        RequestContextHolder.resetRequestAttributes();
+    }
+
     @BeforeEach
     void setUp() {
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         service = new UsuarioAdminService(keycloak);
         when(keycloak.listarRoles()).thenReturn(List.of(ADMIN, FONTE_VER, LOTE_GERENCIAR, USUARIO_GERENCIAR, INTERNA));
         when(keycloak.buscarUsuario(anyString()))
@@ -126,5 +139,59 @@ class UsuarioAdminServiceTest {
 
     private static KcRole role(String nome) {
         return new KcRole("id-" + nome, nome, null, false);
+    }
+
+    @Test
+    void editarEntregaOAntesEDepoisProLogDeAuditoria() {
+        when(keycloak.buscarUsuario("u1")).thenReturn(
+                new KcUsuario("u1", "maria", "Maria", "Silva", "maria@x.com", true, 0L),
+                new KcUsuario("u1", "maria", "Maria", "Silva", "maria@novo.com", false, 0L));
+
+        service.atualizar("u1", new UsuarioAtualizacaoRequest("Maria", "Silva", "maria@novo.com", false), "outro");
+
+        assertThat(MudancaAuditadaAcesso.antes(request)).contains("\"email\":\"maria@x.com\"").contains("\"ativo\":true");
+        assertThat(MudancaAuditadaAcesso.depois(request)).contains("\"email\":\"maria@novo.com\"").contains("\"ativo\":false");
+    }
+
+    @Test
+    void cadastroNovoTemSoODepoisESemSenha() {
+        when(keycloak.criarUsuario(anyString(), anyString(), anyString(), anyString())).thenReturn("u1");
+
+        service.criar(new UsuarioNovoRequest("maria", "Maria", "Silva", "maria@x.com", "Senha@123", List.of()));
+
+        assertThat(MudancaAuditadaAcesso.antes(request)).isNull();
+        assertThat(MudancaAuditadaAcesso.depois(request)).contains("\"login\":\"maria\"").doesNotContain("Senha@123");
+    }
+
+    @Test
+    void redefinirSenhaNuncaGravaASenhaNoLog() {
+        service.redefinirSenha("u1", "Segredo@2026");
+
+        assertThat(MudancaAuditadaAcesso.antes(request)).doesNotContain("Segredo@2026");
+        assertThat(MudancaAuditadaAcesso.depois(request))
+                .doesNotContain("Segredo@2026")
+                .contains("\"trocaObrigatoriaNoProximoLogin\":true");
+    }
+
+    @Test
+    void falhaAoSalvarNaoRegistraDepois() {
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("Keycloak recusou"))
+                .when(keycloak).atualizarUsuario(anyString(), anyString(), anyString(), anyString(), anyBoolean());
+
+        assertThatThrownBy(() -> service.atualizar("u1",
+                new UsuarioAtualizacaoRequest("Maria", "Silva", "maria@x.com", true), "outro"))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(MudancaAuditadaAcesso.depois(request)).isNull();
+    }
+
+    @Test
+    void salvarPerfisSemMudarNadaNaoGravaAntesEDepois() {
+        when(keycloak.rolesDiretas(anyString())).thenReturn(List.of(ADMIN));
+
+        service.definirRoles("u1", List.of("perfil-administrador"), "outro");
+
+        assertThat(MudancaAuditadaAcesso.antes(request)).isNull();
+        assertThat(MudancaAuditadaAcesso.depois(request)).isNull();
     }
 }

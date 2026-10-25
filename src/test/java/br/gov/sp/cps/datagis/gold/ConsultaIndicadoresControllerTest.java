@@ -45,11 +45,11 @@ class ConsultaIndicadoresControllerTest {
     @DisplayName("GET /api/indicadores/municipios - Deve retornar 200 OK com os indicadores agregados")
     void deveListarPorMunicipio() throws Exception {
         ConsultaMunicipioResponse curitiba = new ConsultaMunicipioResponse(
-                4106902L, "Curitiba", 111L, 1316.97,
-                16.25, 6.05, 17.67, 22.32, 0.00, 11.36, 4.10);
+                4106902L, "Curitiba", 111L, 7L, 1316.97,
+                16.25, 6.05, 17.67, 22.32, 0.00, 11.36, 4.10, -45.2, 120.8);
         ConsultaMunicipioResponse pontaGrossa = new ConsultaMunicipioResponse(
-                4119905L, "Ponta Grossa", 2657L, 187029.84,
-                27.31, 16.98, 59.69, 17.95, 0.23, 28.94, 9.87);
+                4119905L, "Ponta Grossa", 2657L, 812L, 187029.84,
+                27.31, 16.98, 59.69, 17.95, 0.23, 28.94, 9.87, -210.5, 980.3);
 
         when(service.listarPorMunicipio()).thenReturn(List.of(curitiba, pontaGrossa));
 
@@ -59,6 +59,7 @@ class ConsultaIndicadoresControllerTest {
                 .andExpect(jsonPath("$[0].codIbge").value(4106902))
                 .andExpect(jsonPath("$[0].nome").value("Curitiba"))
                 .andExpect(jsonPath("$[0].qtdImoveis").value(111))
+                .andExpect(jsonPath("$[0].qtdImoveisComIntersecao").value(7))
                 .andExpect(jsonPath("$[0].areaTotalHa").value(1316.97))
                 .andExpect(jsonPath("$[0].valorIcv").value(16.25))
                 .andExpect(jsonPath("$[0].valorIfc").value(4.10))
@@ -75,6 +76,7 @@ class ConsultaIndicadoresControllerTest {
                 "PR-4106902-00B2EA81503E46B8BD95A7E35BBB8472",
                 4106902L, "Curitiba", 8.89,
                 15.54, 6.05, 17.67, 22.32, 0.00, 0.00, 4.10,
+                -0.4, 1.1,
                 LocalDateTime.of(2026, 10, 16, 23, 30));
 
         when(service.listarPorImovel()).thenReturn(List.of(imovel));
@@ -100,6 +102,7 @@ class ConsultaIndicadoresControllerTest {
         ConsultaImovelResponse semIcv = new ConsultaImovelResponse(
                 "PR-4106902-ABC", 4106902L, "Curitiba", 8.89,
                 null, 6.05, null, null, 0.00, null, null,
+                null, null,
                 LocalDateTime.of(2026, 10, 16, 23, 30));
 
         when(service.listarPorImovel()).thenReturn(List.of(semIcv));

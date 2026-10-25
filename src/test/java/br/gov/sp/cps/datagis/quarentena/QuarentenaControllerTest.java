@@ -26,6 +26,9 @@ class QuarentenaControllerTest {
     @Mock
     private QuarentenaService quarentenaService;
 
+    @Mock
+    private br.gov.sp.cps.datagis.validacao.ProgressoTransicaoRegistry progressoTransicaoRegistry;
+
     @InjectMocks
     private QuarentenaController controller;
 
@@ -139,15 +142,28 @@ class QuarentenaControllerTest {
     }
 
     @Test
-    @DisplayName("Deve liberar lote de quarentena com sucesso")
+    @DisplayName("Deve liberar lote de quarentena com sucesso e retornar 202 Accepted")
     void deveLiberarLote() {
-        when(quarentenaService.liberarLote(eq(100L), any())).thenReturn(true);
+        when(progressoTransicaoRegistry.isExecutando(100L)).thenReturn(false);
 
         AcaoQuarentenaRequest req = new AcaoQuarentenaRequest(null, null, 1L);
-        ResponseEntity<Void> response = controller.liberarLote(100L, req);
+        ResponseEntity<br.gov.sp.cps.datagis.validacao.ProgressoTransicaoResponse> response = controller.liberarLote(100L, req);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
-        verify(quarentenaService).liberarLote(eq(100L), eq(1L));
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        verify(quarentenaService).liberarLoteAssincrono(eq(100L), eq(1L));
+        verify(progressoTransicaoRegistry).iniciar(eq(100L), eq(0), eq("INICIANDO"));
+    }
+
+    @Test
+    @DisplayName("Deve lancar OperacaoEmAndamentoException quando lote ja estiver sendo liberado")
+    void deveLancarExcecaoQuandoLoteJaEstiverSendoLiberado() {
+        when(progressoTransicaoRegistry.isExecutando(100L)).thenReturn(true);
+
+        AcaoQuarentenaRequest req = new AcaoQuarentenaRequest(null, null, 1L);
+        org.junit.jupiter.api.Assertions.assertThrows(
+                br.gov.sp.cps.datagis.config.OperacaoEmAndamentoException.class,
+                () -> controller.liberarLote(100L, req)
+        );
     }
 
     @Test

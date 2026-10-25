@@ -18,10 +18,15 @@ public class ConjuntosDadosController {
 
     private final ConjuntosDadosService service;
     private final ComparacaoCamadasService comparacaoService;
+    private final ComparacaoLotesService comparacaoLotesService;
 
-    public ConjuntosDadosController(ConjuntosDadosService service, ComparacaoCamadasService comparacaoService) {
+    public ConjuntosDadosController(
+            ConjuntosDadosService service,
+            ComparacaoCamadasService comparacaoService,
+            ComparacaoLotesService comparacaoLotesService) {
         this.service = service;
         this.comparacaoService = comparacaoService;
+        this.comparacaoLotesService = comparacaoLotesService;
     }
 
     @GetMapping("/fontes/{fonteDadoId}/ultimo-lote")
@@ -64,4 +69,20 @@ public class ConjuntosDadosController {
             @RequestParam String destino) {
         return ResponseEntity.ok(comparacaoService.comparar(registroBrutoId, origem, destino));
     }
+
+    /**
+     * Diff entre os dois últimos lotes promovidos de uma fonte (atual vs anterior),
+     * similar ao "git diff" entre dois commits. Suporta paginação e filtro por situação
+     * (ADICIONADO, REMOVIDO, MODIFICADO, INALTERADO).
+     */
+    @GetMapping("/fontes/{fonteDadoId}/comparacao-lotes")
+    public ResponseEntity<ComparacaoLotesDto> compararLotes(
+            @PathVariable Long fonteDadoId,
+            @RequestParam(defaultValue = "0") int pagina,
+            @RequestParam(defaultValue = "25") int tamanho,
+            @RequestParam(required = false) String filtroSituacao) {
+        return ResponseEntity.ok(
+                comparacaoLotesService.compararUltimosLotes(fonteDadoId, pagina, tamanho, filtroSituacao));
+    }
 }
+
