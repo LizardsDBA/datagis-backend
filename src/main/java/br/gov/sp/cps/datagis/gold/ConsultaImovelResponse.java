@@ -25,5 +25,11 @@ public record ConsultaImovelResponse(
         Double valorIae,
         Double valorIdesmat,
         Double valorIfc,
+        /** Déficit (negativo) ou excedente (positivo) de RL em hectares — pág. 6
+         *  do slide oficial do desafio. */
+        Double valorIrlDeficitHa,
+        /** Área de APP declarada sem vegetação nativa, em hectares — pág. 6 do
+         *  slide oficial do desafio. */
+        Double valorIappPassivoHa,
         LocalDateTime dataPublicacao) {
 }
