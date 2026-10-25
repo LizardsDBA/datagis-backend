@@ -38,5 +38,11 @@ public record ConsultaMunicipioResponse(
         Double valorIsap,
         Double valorIae,
         Double valorIdesmat,
-        Double valorIfc) {
+        Double valorIfc,
+        /** Soma do déficit(-)/excedente(+) de RL dos imóveis do município, em
+         *  hectares — pág. 6 do slide oficial do desafio. */
+        Double valorIrlDeficitHa,
+        /** Soma do passivo de APP a recuperar dos imóveis do município, em
+         *  hectares — pág. 6 do slide oficial do desafio. */
+        Double valorIappPassivoHa) {
 }

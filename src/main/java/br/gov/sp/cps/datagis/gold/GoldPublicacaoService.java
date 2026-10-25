@@ -5,10 +5,16 @@ import java.sql.Connection;
 import java.sql.Types;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -135,12 +141,15 @@ public class GoldPublicacaoService {
 
     private final JdbcTemplate jdbcTemplate;
     private final SimplificadorGeometriaMapa simplificador;
+    private final int paralelismo;
 
     public GoldPublicacaoService(
             JdbcTemplate jdbcTemplate,
-            SimplificadorGeometriaMapa simplificador) {
+            SimplificadorGeometriaMapa simplificador,
+            @Value("${app.gold.paralelismo:1}") int paralelismo) {
         this.jdbcTemplate = jdbcTemplate;
         this.simplificador = simplificador;
+        this.paralelismo = paralelismo;
     }
 
     /**
@@ -164,6 +173,96 @@ public class GoldPublicacaoService {
     private static final int LOTE_PROGRESSO_INDICADORES = 50;
 
     /**
+     * MUITO maior que a do mapa ({@link SimplificadorGeometriaMapa#TOLERANCIA_GRAUS},
+     * ~5 m) — aqui o uso é cálculo de indicador (percentual de área de um imóvel),
+     * não desenho visual. Achado ao vivo (docs/publicacao-gold-paralela.md §3.2):
+     * ~11 m (0.0001) só reduziu o polígono mais pesado do PRODES de 317 mil pra 123
+     * mil vértices — e {@code SDO_GEOM.SDO_INTERSECTION} contra ele ainda levava
+     * ~30 s **por imóvel candidato**. Decompor em sub-polígonos não ajudou porque o
+     * vértice-count mora majoritariamente num único anel conectado, não espalhado em
+     * partes desconexas. ~555 m de folga na borda é pequeno contra imóvel medido em
+     * hectares — o indicador é percentual de área, não desenho de precisão.
+     */
+    private static final double TOLERANCIA_DESMATAMENTO_CALCULO_GRAUS = 0.005;
+
+    private static final String INSERT_DESMATAMENTO_OTIMIZADO_SQL = """
+            INSERT INTO gold.desmatamento_otimizado (desmatamento_id, fonte_dado_id, lote_ingestao_id, geometria)
+            VALUES (?, ?, ?, SDO_GEOMETRY(?, 4674))
+            """;
+
+    /**
+     * Reconstrói {@code gold.desmatamento_otimizado} (V083) com geometria simplificada
+     * em JTS, em vez de ler {@code silver.desmatamento} direto — achado na seção 3.2 de
+     * {@code docs/publicacao-gold-paralela.md}: {@code calcular_idesmat} consumia 94% do
+     * tempo de recálculo de 1 imóvel, não por volume (desmatamento só tem 1.428 linhas,
+     * bem menos que {@code area_protegida}) mas por 1 polígono do PRODES com 317 mil
+     * vértices — mesma classe de problema do LIZARDS-50 (SDO_GEOM.SDO_INTERSECTION
+     * contra geometria assim é caro, não importa quantas vezes ela seja candidata).
+     * Chamado 1x no início de {@link #publicarTudo()}, antes do loop por imóvel — o
+     * custo de simplificar sai do caminho quente (por imóvel) e passa a ser pago 1x
+     * por publicação inteira.
+     */
+    public int prepararDesmatamentoOtimizado() {
+        // DELETE, não TRUNCATE: tabela com índice de domínio espacial (R-tree) e o
+        // volume é pequeno (~1.400 linhas) - não vale o risco de TRUNCATE interagir
+        // mal com o índice (mesma classe de pegadinha de privilégio/estado documentada
+        // na V049/V081), por uma economia de tempo irrelevante nesse volume.
+        jdbcTemplate.update("DELETE FROM gold.desmatamento_otimizado");
+        String selectSql = SELECT_POR_CAMADA.get("DESMATAMENTO");
+        long offset = 0;
+        int total = 0;
+        while (true) {
+            List<LinhaSilver> linhas = jdbcTemplate.query(selectSql, GoldPublicacaoService::mapearLinha, offset, TAMANHO_PAGINA);
+            if (linhas.isEmpty()) {
+                break;
+            }
+            for (LinhaSilver linha : linhas) {
+                try {
+                    List<String> partes = simplificador.decomporEsimplificar(linha.wkt(), TOLERANCIA_DESMATAMENTO_CALCULO_GRAUS);
+                    for (String parteWkt : partes) {
+                        inserirDesmatamentoOtimizado(linha, parteWkt);
+                        total++;
+                    }
+                } catch (Exception e) {
+                    log.warn("prepararDesmatamentoOtimizado: falhou o registro {}: {}", linha.id(), e.getMessage());
+                }
+            }
+            offset += TAMANHO_PAGINA;
+        }
+        log.info("prepararDesmatamentoOtimizado: {} geometrias simplificadas e cacheadas em gold.desmatamento_otimizado", total);
+        return total;
+    }
+
+    private void inserirDesmatamentoOtimizado(LinhaSilver linha, String wktSimplificado) {
+        jdbcTemplate.execute((Connection con) -> {
+            java.sql.Clob clob = con.createClob();
+            try (var ps = con.prepareStatement(INSERT_DESMATAMENTO_OTIMIZADO_SQL)) {
+                clob.setString(1, wktSimplificado);
+                ps.setLong(1, linha.id());
+                if (linha.fonteDadoId() == null) {
+                    ps.setNull(2, Types.NUMERIC);
+                } else {
+                    ps.setLong(2, linha.fonteDadoId());
+                }
+                if (linha.loteIngestaoId() == null) {
+                    ps.setNull(3, Types.NUMERIC);
+                } else {
+                    ps.setLong(3, linha.loteIngestaoId());
+                }
+                ps.setClob(4, clob);
+                ps.executeUpdate();
+                return null;
+            } finally {
+                try {
+                    clob.free();
+                } catch (Exception ignored) {
+                    // nada a fazer
+                }
+            }
+        });
+    }
+
+    /**
      * Recalcula todo {@code silver.imovel_rural} e publica todas as camadas de mapa
      * ativas. Pode levar minutos num volume real - pensado pra disparo manual ou
      * agendado, não pra resposta HTTP instantânea. Status/andamento consultável em
@@ -176,34 +275,11 @@ public class GoldPublicacaoService {
 
         long publicacaoIndicadoresId = inserirControlePublicacaoIndicadores(codigosImovel.size());
 
-        int sucesso = 0;
-        List<String> falhas = new ArrayList<>();
+        AtomicInteger sucesso = new AtomicInteger();
+        List<String> falhas = Collections.synchronizedList(new ArrayList<>());
         try {
-            int processadosDesdeUltimaAtualizacao = 0;
-            for (String codImovel : codigosImovel) {
-                try {
-                    recalcularImovel(codImovel);
-                    sucesso++;
-                } catch (Exception e) {
-                    log.warn("publicarTudo: falhou pro imóvel {}: {}", codImovel, e.getMessage());
-                    falhas.add(codImovel);
-                    jdbcTemplate.update(
-                            """
-                            INSERT INTO gold.publicacao_indicadores_erro
-                                (publicacao_indicadores_id, cod_imovel, motivo)
-                            VALUES (?, ?, ?)
-                            """,
-                            publicacaoIndicadoresId, codImovel, truncar(e.getMessage(), 500));
-                }
-                processadosDesdeUltimaAtualizacao++;
-                if (processadosDesdeUltimaAtualizacao >= LOTE_PROGRESSO_INDICADORES) {
-                    atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucesso, falhas.size());
-                    processadosDesdeUltimaAtualizacao = 0;
-                }
-            }
-            if (processadosDesdeUltimaAtualizacao > 0) {
-                atualizarProgressoIndicadores(publicacaoIndicadoresId, processadosDesdeUltimaAtualizacao, sucesso, falhas.size());
-            }
+            prepararDesmatamentoOtimizado();
+            calcularIndicadoresEmParalelo(codigosImovel, publicacaoIndicadoresId, sucesso, falhas);
 
             jdbcTemplate.update(
                     """
@@ -214,7 +290,8 @@ public class GoldPublicacaoService {
                     publicacaoIndicadoresId);
         } catch (Exception e) {
             // So chega aqui por falha de infraestrutura (ex.: conexao caiu) - falha
-            // de 1 imovel especifico ja e tratada acima e nao propaga ate aqui.
+            // de 1 imovel especifico ja e tratada dentro de calcularIndicadoresEmParalelo
+            // e nao propaga ate aqui.
             log.warn("publicarTudo: recalculo de indicadores falhou de vez", e);
             jdbcTemplate.update(
                     """
@@ -245,7 +322,72 @@ public class GoldPublicacaoService {
         }
 
         return new ResultadoPublicacaoTudo(
-                codigosImovel.size(), sucesso, falhas, camadasPublicadas, camadasComFalha);
+                codigosImovel.size(), sucesso.get(), new ArrayList<>(falhas), camadasPublicadas, camadasComFalha);
+    }
+
+    /**
+     * Calcula os indicadores de cada imóvel em {@link #paralelismo} threads
+     * (docs/publicacao-gold-paralela.md). Cada imóvel é independente nas procedures
+     * (§4 do doc - sem UPDATE de linha compartilhada, sem LOCK), então dividir a lista
+     * sem repetição é suficiente pra não haver disputa entre as threads. Com
+     * {@code paralelismo = 1} o {@link Executors#newFixedThreadPool} processa a fila
+     * em ordem de chegada - mesmo comportamento de hoje, só trocando de forma.
+     *
+     * <p>Progresso: {@code processadosTotal} é um contador atômico único pra todas as
+     * threads - como cada chamada de {@code incrementAndGet()} devolve um valor
+     * diferente, só uma thread vê cada múltiplo exato de {@link #LOTE_PROGRESSO_INDICADORES},
+     * então o UPDATE em {@code gold.publicacao_indicadores} dispara exatamente 1 vez a
+     * cada N processados, não importa a ordem de chegada das threads. O resto (menos
+     * que N desde o último múltiplo) é gravado depois que todas as tarefas terminam.
+     */
+    private void calcularIndicadoresEmParalelo(
+            List<String> codigosImovel, long publicacaoIndicadoresId, AtomicInteger sucesso, List<String> falhas) {
+        AtomicInteger processadosTotal = new AtomicInteger();
+        ExecutorService executor = Executors.newFixedThreadPool(
+                paralelismo, Thread.ofPlatform().name("gold-calculo-", 1).factory());
+        try {
+            List<Future<?>> tarefas = codigosImovel.stream()
+                    .<Future<?>>map(codImovel -> executor.submit(() -> {
+                        try {
+                            recalcularImovel(codImovel);
+                            sucesso.incrementAndGet();
+                        } catch (Exception e) {
+                            log.warn("publicarTudo: falhou pro imóvel {}: {}", codImovel, e.getMessage());
+                            falhas.add(codImovel);
+                            jdbcTemplate.update(
+                                    """
+                                    INSERT INTO gold.publicacao_indicadores_erro
+                                        (publicacao_indicadores_id, cod_imovel, motivo)
+                                    VALUES (?, ?, ?)
+                                    """,
+                                    publicacaoIndicadoresId, codImovel, truncar(e.getMessage(), 500));
+                        }
+                        if (processadosTotal.incrementAndGet() % LOTE_PROGRESSO_INDICADORES == 0) {
+                            atualizarProgressoIndicadores(
+                                    publicacaoIndicadoresId, LOTE_PROGRESSO_INDICADORES, sucesso.get(), falhas.size());
+                        }
+                    }))
+                    .toList();
+
+            for (Future<?> tarefa : tarefas) {
+                try {
+                    tarefa.get();
+                } catch (Exception e) {
+                    // Falha de infraestrutura real (falha de 1 imovel ja foi tratada
+                    // dentro da tarefa acima e nunca chega aqui) - cancela o resto e
+                    // deixa o chamador marcar a publicacao como FALHOU.
+                    tarefas.forEach(t -> t.cancel(true));
+                    throw new IllegalStateException("Falha processando imóveis em paralelo", e);
+                }
+            }
+        } finally {
+            executor.shutdown();
+        }
+
+        int restante = processadosTotal.get() % LOTE_PROGRESSO_INDICADORES;
+        if (restante > 0) {
+            atualizarProgressoIndicadores(publicacaoIndicadoresId, restante, sucesso.get(), falhas.size());
+        }
     }
 
     /**
@@ -313,37 +455,7 @@ public class GoldPublicacaoService {
                 if (selectSql == null) {
                     throw new IllegalArgumentException("Camada desconhecida: " + codigoCamada);
                 }
-                long offset = 0;
-                while (true) {
-                    List<LinhaSilver> linhas = jdbcTemplate.query(selectSql, GoldPublicacaoService::mapearLinha, offset, TAMANHO_PAGINA);
-                    if (linhas.isEmpty()) {
-                        break;
-                    }
-
-                    int publicados = 0;
-                    int pulados = 0;
-                    for (LinhaSilver linha : linhas) {
-                        try {
-                            String wktSimplificado = CAMADA_LIMITE_PR.equals(codigoCamada)
-                                    ? simplificador.simplificarContornoExterno(linha.wkt(), TOLERANCIA_LIMITE_PR_GRAUS)
-                                    : simplificador.simplificar(linha.wkt());
-                            inserirFeaturePublicada(mapaCamadaId, linha, wktSimplificado, novaVersao);
-                            publicados++;
-                        } catch (Exception e) {
-                            pulados++;
-                            jdbcTemplate.update(
-                                    """
-                                    INSERT INTO gold.publicacao_camada_mapa_erro
-                                        (publicacao_camada_mapa_id, origem_silver_id, identificador, motivo)
-                                    VALUES (?, ?, ?, ?)
-                                    """,
-                                    publicacaoId, linha.id(), linha.codNatural(), truncar(e.getMessage(), 500));
-                        }
-                    }
-
-                    atualizarProgresso(publicacaoId, linhas.size(), publicados, pulados);
-                    offset += TAMANHO_PAGINA;
-                }
+                publicarCamadaEmParalelo(codigoCamada, selectSql, mapaCamadaId, novaVersao, publicacaoId);
             }
 
             jdbcTemplate.update(
@@ -370,6 +482,71 @@ public class GoldPublicacaoService {
                     "DELETE FROM gold.feature_publicada WHERE mapa_camada_id = ? AND versao_publicacao = ?",
                     mapaCamadaId, novaVersao);
             throw new IllegalStateException("Falha publicando camada " + codigoCamada, e);
+        }
+    }
+
+    /**
+     * Processa 1 página de linhas da Silver por vez, mas cada página em
+     * {@link #paralelismo} threads — a simplificação JTS é CPU pura (sem a mesma
+     * disputa de PGA do Oracle que dominava o cálculo de indicadores, §3.2 de
+     * docs/publicacao-gold-paralela.md), então paraleliza bem. A leitura paginada
+     * em si continua sequencial (1 SELECT por página, OFFSET/FETCH); só o trabalho
+     * por linha dentro da página (simplificar + inserir) roda em paralelo. O item
+     * mais pesado isolado (1 polígono muito complexo) ainda limita o piso do tempo
+     * da página em que ele cai — paraleliza o conjunto, não o pior caso.
+     */
+    private void publicarCamadaEmParalelo(
+            String codigoCamada, String selectSql, Long mapaCamadaId, long novaVersao, long publicacaoId) {
+        ExecutorService executor = Executors.newFixedThreadPool(
+                paralelismo, Thread.ofPlatform().name("gold-mapa-", 1).factory());
+        try {
+            long offset = 0;
+            while (true) {
+                List<LinhaSilver> linhas = jdbcTemplate.query(selectSql, GoldPublicacaoService::mapearLinha, offset, TAMANHO_PAGINA);
+                if (linhas.isEmpty()) {
+                    break;
+                }
+
+                AtomicInteger publicados = new AtomicInteger();
+                AtomicInteger pulados = new AtomicInteger();
+                List<Future<?>> tarefas = linhas.stream()
+                        .<Future<?>>map(linha -> executor.submit(() -> {
+                            try {
+                                String wktSimplificado = CAMADA_LIMITE_PR.equals(codigoCamada)
+                                        ? simplificador.simplificarContornoExterno(linha.wkt(), TOLERANCIA_LIMITE_PR_GRAUS)
+                                        : simplificador.simplificar(linha.wkt());
+                                inserirFeaturePublicada(mapaCamadaId, linha, wktSimplificado, novaVersao);
+                                publicados.incrementAndGet();
+                            } catch (Exception e) {
+                                pulados.incrementAndGet();
+                                jdbcTemplate.update(
+                                        """
+                                        INSERT INTO gold.publicacao_camada_mapa_erro
+                                            (publicacao_camada_mapa_id, origem_silver_id, identificador, motivo)
+                                        VALUES (?, ?, ?, ?)
+                                        """,
+                                        publicacaoId, linha.id(), linha.codNatural(), truncar(e.getMessage(), 500));
+                            }
+                        }))
+                        .toList();
+
+                for (Future<?> tarefa : tarefas) {
+                    try {
+                        tarefa.get();
+                    } catch (Exception e) {
+                        // Falha de infraestrutura real (falha de 1 registro já foi
+                        // tratada dentro da tarefa acima e nunca chega aqui) - cancela
+                        // o resto e deixa o chamador marcar a publicação como FALHOU.
+                        tarefas.forEach(t -> t.cancel(true));
+                        throw new IllegalStateException("Falha publicando página da camada " + codigoCamada, e);
+                    }
+                }
+
+                atualizarProgresso(publicacaoId, linhas.size(), publicados.get(), pulados.get());
+                offset += TAMANHO_PAGINA;
+            }
+        } finally {
+            executor.shutdown();
         }
     }
 

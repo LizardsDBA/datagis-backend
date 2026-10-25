@@ -46,6 +46,18 @@ public class ImovelPublicado {
     @Column(name = "VALOR_IFC")
     private Double valorIfc;
 
+    /** Déficit (negativo) ou excedente (positivo) de Reserva Legal em hectares,
+     *  comparado ao mínimo de 20% exigido pro bioma Mata Atlântica — pág. 6 do
+     *  slide oficial do desafio ("IRL... comparada ao mínimo do bioma; déficit
+     *  ou excedente em hectares"). */
+    @Column(name = "VALOR_IRL_DEFICIT_HA")
+    private Double valorIrlDeficitHa;
+
+    /** Área de APP declarada sem vegetação nativa, em hectares (sempre >= 0) —
+     *  pág. 6 do slide oficial ("IAPP... passivo a recuperar em hectares"). */
+    @Column(name = "VALOR_IAPP_PASSIVO_HA")
+    private Double valorIappPassivoHa;
+
     @Column(name = "DATA_PUBLICACAO")
     private LocalDateTime dataPublicacao;
 }

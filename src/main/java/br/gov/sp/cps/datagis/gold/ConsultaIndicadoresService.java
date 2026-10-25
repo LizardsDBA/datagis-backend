@@ -53,7 +53,8 @@ public class ConsultaIndicadoresService {
     public List<ConsultaImovelResponse> listarPorImovel() {
         String sql = "SELECT i.cod_imovel, i.municipio_cod_ibge, m.nome AS municipio_nome, i.area_ha, "
                 + "i.valor_icv, i.valor_irl, i.valor_iapp, i.valor_isap, "
-                + "i.valor_iae, i.valor_idesmat, i.valor_ifc, i.data_publicacao "
+                + "i.valor_iae, i.valor_idesmat, i.valor_ifc, "
+                + "i.valor_irl_deficit_ha, i.valor_iapp_passivo_ha, i.data_publicacao "
                 + "FROM " + versaoAtualDeCadaImovel() + " "
                 // LEFT JOIN de proposito: imovel com municipio ainda nao semeado na Silver
                 // continua aparecendo na tela, so sem o nome.
@@ -73,6 +74,8 @@ public class ConsultaIndicadoresService {
                 lerDouble(rs, "valor_iae"),
                 lerDouble(rs, "valor_idesmat"),
                 lerDouble(rs, "valor_ifc"),
+                lerDouble(rs, "valor_irl_deficit_ha"),
+                lerDouble(rs, "valor_iapp_passivo_ha"),
                 rs.getTimestamp("data_publicacao") == null
                         ? null
                         : rs.getTimestamp("data_publicacao").toLocalDateTime()));
@@ -93,7 +96,9 @@ public class ConsultaIndicadoresService {
                 + mediaPonderada("valor_isap") + ", "
                 + mediaPonderada("valor_iae") + ", "
                 + mediaPonderada("valor_idesmat") + ", "
-                + mediaPonderada("valor_ifc") + " "
+                + mediaPonderada("valor_ifc") + ", "
+                + "ROUND(SUM(i.valor_irl_deficit_ha), 2) AS valor_irl_deficit_ha, "
+                + "ROUND(SUM(i.valor_iapp_passivo_ha), 2) AS valor_iapp_passivo_ha "
                 + "FROM " + versaoAtualDeCadaImovel() + " "
                 + "LEFT JOIN " + silverSchema + ".municipio m ON m.cod_ibge = i.municipio_cod_ibge "
                 + "WHERE i.ordem_versao = 1 "
@@ -112,7 +117,9 @@ public class ConsultaIndicadoresService {
                 lerDouble(rs, "valor_isap"),
                 lerDouble(rs, "valor_iae"),
                 lerDouble(rs, "valor_idesmat"),
-                lerDouble(rs, "valor_ifc")));
+                lerDouble(rs, "valor_ifc"),
+                lerDouble(rs, "valor_irl_deficit_ha"),
+                lerDouble(rs, "valor_iapp_passivo_ha")));
     }
 
     /**
