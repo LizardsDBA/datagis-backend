@@ -173,6 +173,96 @@ public class GoldPublicacaoService {
     private static final int LOTE_PROGRESSO_INDICADORES = 50;
 
     /**
+     * MUITO maior que a do mapa ({@link SimplificadorGeometriaMapa#TOLERANCIA_GRAUS},
+     * ~5 m) — aqui o uso é cálculo de indicador (percentual de área de um imóvel),
+     * não desenho visual. Achado ao vivo (docs/publicacao-gold-paralela.md §3.2):
+     * ~11 m (0.0001) só reduziu o polígono mais pesado do PRODES de 317 mil pra 123
+     * mil vértices — e {@code SDO_GEOM.SDO_INTERSECTION} contra ele ainda levava
+     * ~30 s **por imóvel candidato**. Decompor em sub-polígonos não ajudou porque o
+     * vértice-count mora majoritariamente num único anel conectado, não espalhado em
+     * partes desconexas. ~555 m de folga na borda é pequeno contra imóvel medido em
+     * hectares — o indicador é percentual de área, não desenho de precisão.
+     */
+    private static final double TOLERANCIA_DESMATAMENTO_CALCULO_GRAUS = 0.005;
+
+    private static final String INSERT_DESMATAMENTO_OTIMIZADO_SQL = """
+            INSERT INTO gold.desmatamento_otimizado (desmatamento_id, fonte_dado_id, lote_ingestao_id, geometria)
+            VALUES (?, ?, ?, SDO_GEOMETRY(?, 4674))
+            """;
+
+    /**
+     * Reconstrói {@code gold.desmatamento_otimizado} (V083) com geometria simplificada
+     * em JTS, em vez de ler {@code silver.desmatamento} direto — achado na seção 3.2 de
+     * {@code docs/publicacao-gold-paralela.md}: {@code calcular_idesmat} consumia 94% do
+     * tempo de recálculo de 1 imóvel, não por volume (desmatamento só tem 1.428 linhas,
+     * bem menos que {@code area_protegida}) mas por 1 polígono do PRODES com 317 mil
+     * vértices — mesma classe de problema do LIZARDS-50 (SDO_GEOM.SDO_INTERSECTION
+     * contra geometria assim é caro, não importa quantas vezes ela seja candidata).
+     * Chamado 1x no início de {@link #publicarTudo()}, antes do loop por imóvel — o
+     * custo de simplificar sai do caminho quente (por imóvel) e passa a ser pago 1x
+     * por publicação inteira.
+     */
+    public int prepararDesmatamentoOtimizado() {
+        // DELETE, não TRUNCATE: tabela com índice de domínio espacial (R-tree) e o
+        // volume é pequeno (~1.400 linhas) - não vale o risco de TRUNCATE interagir
+        // mal com o índice (mesma classe de pegadinha de privilégio/estado documentada
+        // na V049/V081), por uma economia de tempo irrelevante nesse volume.
+        jdbcTemplate.update("DELETE FROM gold.desmatamento_otimizado");
+        String selectSql = SELECT_POR_CAMADA.get("DESMATAMENTO");
+        long offset = 0;
+        int total = 0;
+        while (true) {
+            List<LinhaSilver> linhas = jdbcTemplate.query(selectSql, GoldPublicacaoService::mapearLinha, offset, TAMANHO_PAGINA);
+            if (linhas.isEmpty()) {
+                break;
+            }
+            for (LinhaSilver linha : linhas) {
+                try {
+                    List<String> partes = simplificador.decomporEsimplificar(linha.wkt(), TOLERANCIA_DESMATAMENTO_CALCULO_GRAUS);
+                    for (String parteWkt : partes) {
+                        inserirDesmatamentoOtimizado(linha, parteWkt);
+                        total++;
+                    }
+                } catch (Exception e) {
+                    log.warn("prepararDesmatamentoOtimizado: falhou o registro {}: {}", linha.id(), e.getMessage());
+                }
+            }
+            offset += TAMANHO_PAGINA;
+        }
+        log.info("prepararDesmatamentoOtimizado: {} geometrias simplificadas e cacheadas em gold.desmatamento_otimizado", total);
+        return total;
+    }
+
+    private void inserirDesmatamentoOtimizado(LinhaSilver linha, String wktSimplificado) {
+        jdbcTemplate.execute((Connection con) -> {
+            java.sql.Clob clob = con.createClob();
+            try (var ps = con.prepareStatement(INSERT_DESMATAMENTO_OTIMIZADO_SQL)) {
+                clob.setString(1, wktSimplificado);
+                ps.setLong(1, linha.id());
+                if (linha.fonteDadoId() == null) {
+                    ps.setNull(2, Types.NUMERIC);
+                } else {
+                    ps.setLong(2, linha.fonteDadoId());
+                }
+                if (linha.loteIngestaoId() == null) {
+                    ps.setNull(3, Types.NUMERIC);
+                } else {
+                    ps.setLong(3, linha.loteIngestaoId());
+                }
+                ps.setClob(4, clob);
+                ps.executeUpdate();
+                return null;
+            } finally {
+                try {
+                    clob.free();
+                } catch (Exception ignored) {
+                    // nada a fazer
+                }
+            }
+        });
+    }
+
+    /**
      * Recalcula todo {@code silver.imovel_rural} e publica todas as camadas de mapa
      * ativas. Pode levar minutos num volume real - pensado pra disparo manual ou
      * agendado, não pra resposta HTTP instantânea. Status/andamento consultável em
@@ -188,6 +278,7 @@ public class GoldPublicacaoService {
         AtomicInteger sucesso = new AtomicInteger();
         List<String> falhas = Collections.synchronizedList(new ArrayList<>());
         try {
+            prepararDesmatamentoOtimizado();
             calcularIndicadoresEmParalelo(codigosImovel, publicacaoIndicadoresId, sucesso, falhas);
 
             jdbcTemplate.update(
