@@ -66,9 +66,23 @@ Carrega os metadados de `controle.mapeamento_coluna` para a coluna em processame
 | `referenciaEntidadeSilver` | `String` | Integridade cruzada |
 | `validarCpfCnpj` | `boolean` | Ativa `ValidadorCpfCnpj` |
 | `validarGeometria` | `boolean` | Ativa validador de geometria |
-| `validarRecortePr` | `boolean` | Ativa validador de recorte PR |
+| `validarRecortePr` | `boolean` | *(Descontinuado no motor ativo)* Mantido no modelo por compatibilidade; geometrias não são mais restritas aos limites do Paraná |
 | `impedirRegressao` | `boolean` | Ativa validador de regressão |
 | `regrasExtras` | `String` | JSON para regras futuras |
+
+### 3.1. Suporte a Múltiplas Colunas de Origem (1:N) e Resolução de Grupo
+
+A partir da evolução `LIZARDS-49`, o sistema suporta o mapeamento de **múltiplas colunas de origem (Bronze) para um mesmo atributo de destino (Silver)**:
+- Cada par `(coluna_origem, atributo_destino)` é cadastrado como um registro em `controle.mapeamento_coluna`.
+- O `OrquestradorValidacao` agrupa todos os mapeamentos cadastrados para a fonte pelo `atributoDestino` (`agruparMapeamentosPorDestino`).
+- Para cada grupo de mapeamentos de um atributo:
+  1. O motor avalia as colunas candidatas no payload bruto em ordem (`resolverValorDoGrupo`).
+  2. Adota o **primeiro valor não-nulo e não-vazio** encontrado.
+  3. Utiliza as regras do respectivo mapeamento como base de validação (`prepararContexto`).
+  4. Caso nenhuma das colunas candidatas esteja presente no payload, utiliza o primeiro mapeamento do grupo como referência (acionando validações como obrigatoriedade, se aplicável).
+- **APIs REST (`MapeamentoColunaController`)**:
+  - `PUT /api/fontes/{id}/mapeamentos/atributo/{atributoDestino}`: Sincroniza em lote todos os mapeamentos vinculados ao atributo destino (atualiza existentes, insere novos e remove mapeamentos omitidos daquele atributo).
+  - `DELETE /api/fontes/{id}/mapeamentos/atributo/{atributoDestino}`: Exclui todos os mapeamentos atrelados ao atributo destino informado.
 
 ### `ResultadoValidacao` (record imutável)
 
@@ -188,9 +202,11 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 
 **Testes:** `ValidadorFaixaMinimaTest` — 23 cenários.
 
-### 4.6. `ValidadorGeometria` — [FEITO, 2026-09-13, Fase 2.6 | EVOLUÍDO 2026-09-24]
+### 4.6. `ValidadorGeometria` — [FEITO, 2026-09-13, Fase 2.6 | EVOLUÍDO 2026-09-24 | ATUALIZADO 2026-10-24, LIZARDS-49]
 
-**Ativa quando** `validarGeometria = true`, `validarRecortePr = true`, `destinoTipo = 'GEOMETRIA'` ou `tipoDado` ∈ `{wkt, geojson}`.
+**Ativa quando** `validarGeometria = true`, `destinoTipo = 'GEOMETRIA'` ou `tipoDado` ∈ `{wkt, geojson}`.
+
+> **Nota sobre Recorte PR (LIZARDS-49):** A validação estrita de recorte territorial do Paraná (`validarRecortePr = true`) foi desativada do motor. O validador não restringe mais geometrias pelo Bounding Box do Paraná e não emite mais o erro `FORA_DO_RECORTE_TERRITORIAL`, permitindo a admissão de dados com extensões geográficas além do limite simplificado do estado. O método `suporta(contexto)` não ativa mais a validação apenas por essa flag.
 
 **Mecanismo de funcionamento:**
 1. `null` ou string em branco:
@@ -207,10 +223,7 @@ Se `obrigatorio = true` e o valor sanitizado resultar em `null` → erro `CAMPO_
 4. **Compatibilidade de Primitivo**:
    - Compara o tipo real com a exigência configurada em `regrasExtras` ou `tipoDado` (ex.: `POLYGON`, `POINT`, `LINESTRING`).
    - Se incompatível → erro `GEOMETRIA_TIPO_INCOMPATIVEL`.
-5. **Recorte Territorial do Paraná (`validarRecortePr = true`)**:
-   - Verifica se o envelope da geometria intercepta os limites oficiais do Paraná (SRID 4674 - Bounding Box `[-55.00, -47.50]` lon / `[-27.20, -22.00]` lat).
-   - Se estiver fora → erro `FORA_DO_RECORTE_TERRITORIAL`.
-6. Sucesso → `sucesso(wktPadronizado)`.
+5. Sucesso → `sucesso(wktPadronizado)`.
 
 ### 4.7. `ValidadorRegressao` — [FEITO, 2026-09-13, Fase 2.7]
 
@@ -324,7 +337,7 @@ Coordena a passagem segura dos dados aprovados para a Silver e a governança de 
 | `GEOMETRIA_MALFORMADA` | Sintaxe WKT ou GeoJSON corrompida |
 | `GEOMETRIA_INVALIDA` | Geometria presente mas topologicamente inválida (auto-interseção, etc.) |
 | `GEOMETRIA_TIPO_INCOMPATIVEL` | Primitivo geométrico incompatível com a entidade alvo |
-| `FORA_DO_RECORTE_TERRITORIAL` | Geometria localizada fora dos limites territoriais do Paraná |
+| `FORA_DO_RECORTE_TERRITORIAL` | *(Descontinuado/Inativo)* Geometria fora dos limites do Paraná. Mantido no catálogo por histórico; não é mais gerado pelo motor ativo |
 | `REGRESSAO_DE_VALOR` | Campo preenchido no snapshot anterior veio nulo/vazio no lote mais recente |
 | `CAMPO_EM_BRANCO` | *(mapeado na V030; produzido pelo SanitizadorEntrada via CAMPO_OBRIGATORIO_AUSENTE)* |
 
@@ -339,16 +352,18 @@ Coordena a passagem segura dos dados aprovados para a Silver e a governança de 
 | 2.3 | `ValidadorDominio` — lookup em cache de `tabela_referencia` da Silver + normalização fonética + sinônimos | FEITO |
 | 2.4 | `ValidadorIntegridadeCruzada` — integridade relacional em `referencia_entidade_silver` (V036) | FEITO |
 | 2.5 | `ValidadorFaixaMinima` — valor numérico >= `valor_minimo` | FEITO |
-| 2.6 | `ValidadorGeometria` — tipo primitivo + topologia + recorte PR + parsing de lista de coordenadas JSON | FEITO |
+| 2.6 | `ValidadorGeometria` — tipo primitivo + topologia + parsing de lista de coordenadas JSON (recorte PR descontinuado em `LIZARDS-49`) | FEITO |
 | 2.7 | `ValidadorRegressao` — campo preenchido no snapshot anterior, veio null agora | FEITO |
 | 2.8 | `DeduplicadorRegistros` — deduplicação de chaves naturais e seleção do mais novo para Silver | FEITO |
-| 3.1 | `OrquestradorValidacao` — encadeia todos os validadores por campo e lote (Bronze -> Silver/Quarentena) | FEITO |
-| 3.2 | `TransicaoBronzeSilverService` & `PersistidorSilverService` — All-or-Nothing estrito, liberação/descarte e persistência Silver | FEITO |
+| 3.1 | `OrquestradorValidacao` — encadeia todos os validadores por campo e lote (Bronze -> Silver/Quarentena) com suporte a múltiplas colunas de origem (1:N) | FEITO |
+| 3.2 | `TransicaoBronzeSilverService` & `PersistidorSilverService` — All-or-Nothing estrito, liberação/descarte e persistência Silver com suporte a `TransactionTemplate` assíncrono | FEITO |
 | 3.3 | `QuarentenaController` & `QuarentenaService` — APIs REST de auditoria, revalidação com múltiplos erros, adição de domínios e resolução de inconsistências | FEITO |
 | 3.4 | Frontend: Telas de Quarentena (`/quarentena`), Gestão de Lotes (`/lotes`) e Modal especializado de Geometria | FEITO |
 | 3.5 | Migrações Flyway: Unificação de `V033` e `V034` na migração `V036` (Domínios + Integridade Cruzada) | FEITO |
 | 3.6 | `CatalogoSilverService` e Bloqueio de Ingestão por Mapeamento NOT NULL (`LIZARDS-49` e `LIZARDS-29`) | FEITO |
 | 3.7 | Liberação de Lote com Revalidação Estrita All-or-Nothing em Quarentena (`LIZARDS-49`) | FEITO |
+| 3.8 | Múltiplas Colunas de Origem no Mapeamento (1:N) e Sincronização por Atributo (`LIZARDS-49`) | FEITO |
+| 3.9 | Desativação da Validação Territorial do Paraná (`validarRecortePr`) no Motor de Validação (`LIZARDS-49`) | FEITO |
 
 
 

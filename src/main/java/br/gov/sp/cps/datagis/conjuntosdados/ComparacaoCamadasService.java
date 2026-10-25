@@ -7,6 +7,7 @@ import br.gov.sp.cps.datagis.controle.MapeamentoColuna;
 import br.gov.sp.cps.datagis.controle.MapeamentoColunaRepository;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -75,10 +76,33 @@ public class ComparacaoCamadasService {
 
         List<DiferencaCampo> campos = new ArrayList<>();
         Set<String> colunasMapeadas = new HashSet<>();
-        for (MapeamentoColuna mapeamento : mapeamentoColunaRepository.findByFonteDadoId(registroBruto.getFonteDadoId())) {
-            colunasMapeadas.add(mapeamento.getColunaOrigem());
+        List<MapeamentoColuna> todosMapeamentos = mapeamentoColunaRepository.findByFonteDadoId(registroBruto.getFonteDadoId());
+
+        Map<String, List<MapeamentoColuna>> mapeamentosPorDestino = new LinkedHashMap<>();
+        for (MapeamentoColuna m : todosMapeamentos) {
+            colunasMapeadas.add(m.getColunaOrigem());
+            String chave = m.getAtributoDestino() != null ? m.getAtributoDestino().toLowerCase(Locale.ROOT) : m.getColunaOrigem();
+            mapeamentosPorDestino.computeIfAbsent(chave, k -> new ArrayList<>()).add(m);
+        }
+
+        for (List<MapeamentoColuna> grupo : mapeamentosPorDestino.values()) {
+            MapeamentoColuna mapeamento = grupo.get(0);
+            Object valorOrigem = null;
             boolean geometria = "GEOMETRIA".equals(mapeamento.getDestinoTipo());
-            Object valorOrigem = geometria ? bronze.geometriaWkt() : bronze.dados().get(mapeamento.getColunaOrigem());
+
+            if (geometria) {
+                valorOrigem = bronze.geometriaWkt();
+            } else {
+                for (MapeamentoColuna m : grupo) {
+                    Object v = bronze.dados().get(m.getColunaOrigem());
+                    if (v != null) {
+                        valorOrigem = v;
+                        mapeamento = m;
+                        break;
+                    }
+                }
+            }
+
             Object valorDestino = valorNaSilver(silver, mapeamento, geometria);
             boolean iguais = geometria
                     ? ComparadorValores.geometriasIguais(textoOuNulo(valorOrigem), textoOuNulo(valorDestino))

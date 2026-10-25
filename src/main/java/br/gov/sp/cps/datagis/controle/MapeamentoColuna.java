@@ -111,7 +111,7 @@ public class MapeamentoColuna {
                 .referenciaEntidadeSilver(referenciaEntidadeSilver)
                 .validarCpfCnpj(Boolean.TRUE.equals(validarCpfCnpj))
                 .validarGeometria(Boolean.TRUE.equals(validarGeometria))
-                .validarRecortePr(Boolean.TRUE.equals(validarRecortePr))
+                .validarRecortePr(false)
                 .impedirRegressao(impedirRegressao == null || Boolean.TRUE.equals(impedirRegressao))
                 .regrasExtras(regrasExtras)
                 .valorAnterior(valorAnterior)

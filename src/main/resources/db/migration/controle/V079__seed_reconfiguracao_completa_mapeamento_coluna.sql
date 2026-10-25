@@ -86,7 +86,7 @@ UNION ALL
 SELECT f.id, 'imovel_rural', 'dat_criacao', 'data_registro', 'COLUNA', 'data_iso', 0, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'CAR - Imóveis (PR)'
 UNION ALL
-SELECT f.id, 'imovel_rural', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1
+SELECT f.id, 'imovel_rural', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'CAR - Imóveis (PR)'
 
 -- 4. CAR - Imóveis (PR) via Shapefile (upload) -> imovel_rural
@@ -115,7 +115,7 @@ UNION ALL
 SELECT f.id, 'imovel_rural', 'DAT_CRIACAO', 'data_registro', 'COLUNA', 'data_iso', 0, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'CAR - Imóveis (PR) via Shapefile (upload)'
 UNION ALL
-SELECT f.id, 'imovel_rural', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1
+SELECT f.id, 'imovel_rural', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'CAR - Imóveis (PR) via Shapefile (upload)'
 
 -- 5. IAT/PR - APP Total (CAR) -> app_declarada
@@ -135,7 +135,7 @@ UNION ALL
 SELECT f.id, 'app_declarada', 'des_condic', 'condicao_bruto', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - APP Total (CAR)'
 UNION ALL
-SELECT f.id, 'app_declarada', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1
+SELECT f.id, 'app_declarada', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - APP Total (CAR)'
 
 -- 6. IAT/PR - Reserva Legal (CAR) -> reserva_legal
@@ -155,7 +155,7 @@ UNION ALL
 SELECT f.id, 'reserva_legal', 'des_condic', 'condicao_bruto', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - Reserva Legal (CAR)'
 UNION ALL
-SELECT f.id, 'reserva_legal', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1
+SELECT f.id, 'reserva_legal', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - Reserva Legal (CAR)'
 
 -- 7. IAT/PR - Vegetação Nativa (CAR) -> vegetacao_nativa_declarada
@@ -175,7 +175,7 @@ UNION ALL
 SELECT f.id, 'vegetacao_nativa_declarada', 'des_condic', 'condicao_bruto', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - Vegetação Nativa (CAR)'
 UNION ALL
-SELECT f.id, 'vegetacao_nativa_declarada', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1
+SELECT f.id, 'vegetacao_nativa_declarada', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - Vegetação Nativa (CAR)'
 
 -- 8. ICMBio - Unidades de Conservação (PR) -> area_protegida
@@ -198,7 +198,7 @@ UNION ALL
 SELECT f.id, 'area_protegida', 'criacaoato', 'ato_legal', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'ICMBio - Unidades de Conservação (PR)'
 UNION ALL
-SELECT f.id, 'area_protegida', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1
+SELECT f.id, 'area_protegida', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'ICMBio - Unidades de Conservação (PR)'
 
 -- 9. IAT/PR - Terras Indígenas (FUNAI) -> area_protegida
@@ -215,12 +215,15 @@ UNION ALL
 SELECT f.id, 'area_protegida', 'modalidade', 'categoria_area_protegida', 'COLUNA', 'texto', 0, NULL, 'categoria_area_protegida', NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - Terras Indígenas (FUNAI)'
 UNION ALL
-SELECT f.id, 'area_protegida', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1
+SELECT f.id, 'area_protegida', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'IAT/PR - Terras Indígenas (FUNAI)'
 
 -- 10. MMA - Unidades de Conservacao (CNUC nacional) -> area_protegida
 UNION ALL
 SELECT f.id, 'area_protegida', 'cd_cnuc', 'codigo_origem', 'COLUNA', 'texto', 1, NULL, NULL, NULL, 0, 0, 0, 1
+FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
+UNION ALL
+SELECT f.id, 'area_protegida', 'codigo_uc', 'codigo_origem', 'COLUNA', 'texto', 1, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
 UNION ALL
 SELECT f.id, 'area_protegida', 'nome_uc', 'nome', 'COLUNA', 'texto', 1, NULL, NULL, NULL, 0, 0, 0, 1
@@ -229,13 +232,16 @@ UNION ALL
 SELECT f.id, 'area_protegida', 'ha_total', 'area_ha', 'COLUNA', 'numero', 0, 0.0, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
 UNION ALL
-SELECT f.id, 'area_protegida', 'categoria', 'categoria_area_protegida', 'COLUNA', 'texto', 0, NULL, 'categoria_area_protegida', NULL, 0, 0, 0, 1
+SELECT f.id, 'area_protegida', 'categoria', 'categoria_area_protegida', 'COLUNA', 'texto', 1, NULL, 'categoria_area_protegida', NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
 UNION ALL
 SELECT f.id, 'area_protegida', 'cria_ato', 'ato_legal', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
 UNION ALL
-SELECT f.id, 'area_protegida', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1
+SELECT f.id, 'area_protegida', 'ato_criaca', 'ato_legal', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 1
+FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
+UNION ALL
+SELECT f.id, 'area_protegida', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'MMA - Unidades de Conservacao (CNUC nacional)'
 
 -- 11. SFB - Cadastro Nacional de Florestas Publicas (CNFP) -> area_protegida
@@ -258,7 +264,7 @@ UNION ALL
 SELECT f.id, 'area_protegida', 'atolegal', 'ato_legal', 'COLUNA', 'texto', 0, NULL, NULL, NULL, 0, 0, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'SFB - Cadastro Nacional de Florestas Publicas (CNFP)'
 UNION ALL
-SELECT f.id, 'area_protegida', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 1, 1
+SELECT f.id, 'area_protegida', 'geometry', 'geometria', 'GEOMETRIA', 'wkt', 0, NULL, NULL, NULL, 0, 1, 0, 1
 FROM ${controleSchema}.fonte_dado f WHERE f.nome = 'SFB - Cadastro Nacional de Florestas Publicas (CNFP)'
 
 -- 12. IAT/PR - Embargos IBAMA -> embargo_ambiental

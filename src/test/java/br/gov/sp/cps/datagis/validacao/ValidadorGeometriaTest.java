@@ -26,13 +26,13 @@ class ValidadorGeometriaTest {
     }
 
     @Test
-    @DisplayName("Deve suportar coluna com flag validarRecortePr = true")
-    void deveSuportarPorFlagRecortePr() {
+    @DisplayName("Não deve suportar apenas por flag validarRecortePr")
+    void naoDeveSuportarPorFlagRecortePr() {
         ContextoValidacaoCampo ctx = ContextoValidacaoCampo.builder()
                 .colunaOrigem("coordenadas")
                 .validarRecortePr(true)
                 .build();
-        assertThat(validador.suporta(ctx)).isTrue();
+        assertThat(validador.suporta(ctx)).isFalse();
     }
 
     @ParameterizedTest
@@ -222,7 +222,7 @@ class ValidadorGeometriaTest {
     }
 
     // -------------------------------------------------------------------------
-    // validar() — Erro: FORA_DO_RECORTE_TERRITORIAL
+    // validar() — Remoção do erro FORA_DO_RECORTE_TERRITORIAL
     // -------------------------------------------------------------------------
 
     @ParameterizedTest
@@ -234,19 +234,17 @@ class ValidadorGeometriaTest {
             "POINT (-60.02 -3.11)",  // Manaus (AM)
             "POLYGON ((-46.7 -23.6, -46.6 -23.6, -46.6 -23.5, -46.7 -23.5, -46.7 -23.6))" // Polígono em SP
     })
-    @DisplayName("Deve rejeitar geometria fora dos limites territoriais do Paraná")
-    void deveRejeitarForaDoRecorteParana(String wktFora) {
+    @DisplayName("Não deve rejeitar geometria fora dos limites territoriais do Paraná após remoção da restrição")
+    void naoDeveRejeitarForaDoRecorteParana(String wktFora) {
         ContextoValidacaoCampo ctx = ContextoValidacaoCampo.builder()
                 .colunaOrigem("localizacao")
+                .validarGeometria(true)
                 .validarRecortePr(true)
                 .build();
 
         ResultadoValidacao resultado = validador.validar(wktFora, ctx);
 
-        assertThat(resultado.isValido()).isFalse();
-        assertThat(resultado.tipoErro()).isEqualTo("FORA_DO_RECORTE_TERRITORIAL");
-        assertThat(resultado.campoProblema()).isEqualTo("localizacao");
-        assertThat(resultado.motivoRejeicao()).contains("fora dos limites territoriais do Paraná");
+        assertThat(resultado.isValido()).isTrue();
     }
 
     // -------------------------------------------------------------------------

@@ -175,7 +175,7 @@ Tabelas (`V015`): `q_municipio`, `q_imovel_rural`, `q_area_protegida`,
 Referências (schema `quarentena`):
 - `tipo_erro_quarentena`: `GEOMETRIA_NULA`, `GEOMETRIA_INVALIDA`, `GEOMETRIA_MALFORMADA`,
   `CAMPO_OBRIGATORIO_AUSENTE`, `TIPO_DE_DADO_INVALIDO`, `VALOR_FORA_DO_DOMINIO`,
-  `CHAVE_NATURAL_DUPLICADA`, `REFERENCIA_NAO_ENCONTRADA`, `FORA_DO_RECORTE_TERRITORIAL`,
+  `CHAVE_NATURAL_DUPLICADA`, `REFERENCIA_NAO_ENCONTRADA`, `FORA_DO_RECORTE_TERRITORIAL` *(histórico/legado; inativo no motor atual)*,
   `REGRESSAO_DE_VALOR` (`V017`),
   `CPF_CNPJ_INVALIDO`, `VALOR_ABAIXO_DO_MINIMO`, `CAMPO_EM_BRANCO`, `GEOMETRIA_TIPO_INCOMPATIVEL` (`V030`).
 - `status_analise_quarentena`: `PENDENTE`, `EM_ANALISE`, `CORRIGIDO_REPROCESSADO`,
@@ -323,12 +323,13 @@ Pra uma fonte nova (mesmo tema) entrar sem criar tabela:
    referencia_entidade_silver → 'municipio' (integridade relacional cruzada com Silver)
    validar_cpf_cnpj           → 0 | 1 (validação algorítmica de CPF/CNPJ módulo 11)
    validar_geometria          → 0 | 1 (validade topológica e tipo de primitiva)
-   validar_recorte_pr         → 0 | 1 (coordenadas/polígono dentro do Paraná)
+   validar_recorte_pr         → 0 | 1 (descontinuado no motor ativo; padrão 0)
    impedir_regressao          → 0 | 1 (impede que campo preenchido regrida para nulo)
    regras_extras              → JSON livre para regras futuras de fontes desconhecidas
    ```
 
 Cadastrar uma fonte nova = 1 linha em `fonte_dado` + N linhas em `mapeamento_coluna`.
+A partir da evolução `LIZARDS-49`, a modelagem suporta mapeamentos **1:N** (múltiplas colunas de origem compartilhando o mesmo `atributo_destino`), permitindo absorver variações de layouts de fontes externas (ex.: `cd_cnuc` e `codigo_uc` mapeando para `codigo_origem` em `area_protegida`). O motor de transição agrupa por atributo de destino e elege a primeira coluna não-nula/não-vazia no payload.
 As regras de validação por coluna orientam a triagem automatizada da transição
 Bronze → Silver; qualquer quebra desvia o registro para as tabelas `quarentena.q_*`.
 Nenhuma migration é necessária para fontes que se enquadrem nos fenômenos existentes.
