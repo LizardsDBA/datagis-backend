@@ -85,6 +85,10 @@ public class SecurityConfig {
                 // Log de auditoria (so consulta - nao existe escrita pela API)
                 .requestMatchers(GET, "/api/auditoria/**").hasAuthority(AUDITORIA_VISUALIZAR.codigo())
 
+                // Favoritos da tela inicial: qualquer usuario logado, so os proprios (o
+                // usuario vem do token, nunca da requisicao - FavoritoController)
+                .requestMatchers("/api/favoritos/**").authenticated()
+
                 .anyRequest().denyAll())
             .oauth2ResourceServer(rs -> rs.jwt(jwt -> jwt.jwtAuthenticationConverter(new ConversorRolesKeycloak())));
         return http.build();
