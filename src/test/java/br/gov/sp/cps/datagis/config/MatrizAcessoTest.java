@@ -157,6 +157,15 @@ class MatrizAcessoTest {
                 && "Executar ingestao da fonte".equals(r.acao())));
     }
 
+    /** Favoritos sao do proprio usuario: basta estar logado, mesmo sem nenhuma permissao. */
+    @Test
+    void favoritosSoExigemLogin() throws Exception {
+        mvc.perform(request(HttpMethod.GET, "/api/favoritos").with(comPermissoes())).andExpect(status().isOk());
+        mvc.perform(request(HttpMethod.PUT, "/api/favoritos").with(comPermissoes())).andExpect(status().isOk());
+        mvc.perform(request(HttpMethod.GET, "/api/favoritos")).andExpect(status().isUnauthorized());
+        mvc.perform(request(HttpMethod.PUT, "/api/favoritos")).andExpect(status().isUnauthorized());
+    }
+
     @Test
     void semTokenDevolve401() throws Exception {
         mvc.perform(request(HttpMethod.GET, "/api/fontes")).andExpect(status().isUnauthorized());
