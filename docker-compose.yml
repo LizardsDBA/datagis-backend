@@ -12,6 +12,12 @@ services:
     # pra esta digest em 2026-10-10, Oracle Database 26ai (Oracle Linux 8.10).
     image: container-registry.oracle.com/database/enterprise@sha256:224c51ce1555ff7b75882a84b621c52b6d5ece00c96b0c5cd84e667333ad5cd7
     environment:
+      # Container nasce em UTC por padrao - SYSTIMESTAMP/SYSDATE refletem o relogio
+      # do SO, nao um config do Oracle (DBTIMEZONE so afeta TIMESTAMP WITH LOCAL
+      # TIME ZONE, que este projeto nao usa - tudo e TIMESTAMP puro). Sem isso, toda
+      # data_add/ultima_execucao_em etc. grava 3h a frente de Brasilia (CLAUDE.md
+      # §9.47, achado nunca corrigido ate agora).
+      TZ: America/Sao_Paulo
       ORACLE_PWD: ${ORACLE_PASSWORD}
       # Mesmo nome de sempre (FREEPDB1) de proposito - evita precisar trocar
       # SPRING_DATASOURCE_URL e todo o resto do codigo/testes que ja referencia esse
@@ -118,6 +124,10 @@ services:
       keycloak:
         condition: service_started
     environment:
+      # Mesmo motivo do oracle acima (CLAUDE.md §9.47) - sem isso, qualquer
+      # LocalDateTime.now()/new Date() do backend tambem fica 3h a frente de
+      # Brasilia (a JVM pega o fuso padrao do SO do container na subida).
+      TZ: America/Sao_Paulo
       SPRING_PROFILES_ACTIVE: docker
       SPRING_DATASOURCE_URL: jdbc:oracle:thin:@oracle:1521/FREEPDB1
       SPRING_DATASOURCE_USERNAME: ${APP_USER}
