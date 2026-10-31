@@ -138,7 +138,12 @@ services:
       GEOSERVER_URL: http://geoserver:8080/geoserver
       APP_KEYCLOAK_PROVISIONAR: "true"
       APP_KEYCLOAK_USUARIOS_DEV: "true"
-      JAVA_TOOL_OPTIONS: "-Xmx8g"
+      # [2026-10-31] Era -Xmx8g: OutOfMemoryError ingerindo fontes do CAR (APP/RL/
+      # Vegetacao Nativa, IAT/PR) pra todo o Paraná - a ingestao GeoJSON busca todas as
+      # paginas antes de gravar (PaginadorUrlGeoJson), e geometria densa em ~380 mil
+      # features estourava 8g no meio do caminho. Subido pra 16g (testado contra os
+      # ~393 mil registros da Vegetacao Nativa, maior volume do catalogo).
+      JAVA_TOOL_OPTIONS: "-Xmx16g"
       # Otimizacao da publicacao Gold (docs/publicacao-gold-paralela.md, secao 5.2).
       # A decisao original da equipe era deixar o ambiente local em 1 (sequencial,
       # igual sempre foi). Default ajustado pra 2 a pedido do time - ganho pequeno,
