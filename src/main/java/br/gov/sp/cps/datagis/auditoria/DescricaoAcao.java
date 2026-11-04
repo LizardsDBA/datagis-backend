@@ -56,6 +56,9 @@ public final class DescricaoAcao {
         ACOES.put("PUT /api/admin/usuarios/{id}/roles", "Alterar perfis e permissoes do usuario");
         ACOES.put("PUT /api/admin/usuarios/{id}/senha", "Redefinir senha do usuario");
         ACOES.put("PUT /api/favoritos", "Salvar favoritos da tela inicial");
+        ACOES.put("PUT /api/minha-conta", "Editar o proprio nome");
+        ACOES.put("PUT /api/minha-conta/senha", "Trocar a propria senha");
+        ACOES.put("PUT /api/admin/usuarios/{id}/token-acesso", "Liberar ou bloquear token de acesso do usuario");
     }
 
     private static final Map<String, PathPattern> MOLDES = new LinkedHashMap<>();
