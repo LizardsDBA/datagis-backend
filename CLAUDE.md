@@ -2863,6 +2863,97 @@ para o antes e depois (sem a V082 o resto funciona, só não aparece antes/depoi
   vírgula abre numa coluna só no Excel em padrão brasileiro (`;`) — se incomodar, exportar
   `.xlsx`.
 
+### 9.50. Home com favoritos — backend — **[FEITO e validado contra o Oracle real, 2026-10-28, `LIZARDS-58`]**
+Branch `feat/homepage-dashboard`, a partir da `sprint-3`. A tela está na §9.51.
+
+- **Objetivo:** a tela inicial (Home) guarda as telas favoritas de cada usuário. Decisão do
+  usuário: favorito fica **no banco**, não no navegador, para seguir a pessoa em qualquer
+  computador.
+- **`V089__criar_favorito_usuario.sql`:** `controle.favorito_usuario` (`usuario_id`, `rota`,
+  `ordem`, `data_add`, único por `usuario_id + rota`). O usuário é o `sub` do token do
+  Keycloak (texto, sem FK, como no `log_auditoria`). Guarda só a **rota** da tela, não o
+  título: renomear uma tela não deixa favorito desatualizado, e tela que o usuário deixou de
+  poder abrir some sozinha da Home (o frontend filtra pelas permissões).
+- **`GET`/`PUT /api/favoritos`** (`favorito/FavoritoController` + `FavoritoRepositorio`,
+  JdbcTemplate). O usuário vem **sempre do token**, nunca da URL ou do corpo: cada um lê e
+  troca só os próprios. O `PUT` troca a lista inteira na ordem recebida, numa transação.
+  Validação (400 pelo `TratadorDeErro`): lista obrigatória (pode ser vazia), no máximo 20,
+  rota no formato de tela do frontend (`^/[a-z0-9/-]{0,199}$`) e sem repetição.
+- **`SecurityConfig`:** `/api/favoritos/**` exige **só login** (`authenticated()`), sem
+  permissão — qualquer perfil tem Home. `DescricaoAcao`: `PUT /api/favoritos` = "Salvar
+  favoritos da tela inicial" no log de auditoria.
+- **Testes:** `FavoritoControllerTest` (8: usuário do token, ordem, lista vazia, rota com
+  subpasta, recusas), `FavoritoOracleIT` (2, Oracle real: ordem e troca da lista, isolamento
+  por usuário), `MatrizAcessoTest` +1 (favoritos com login e sem permissão nenhuma → 200, sem
+  token → 401). Suíte: 782 unitários, só o `DatagisApplicationTests` de sempre (§9.3).
+- **Ao vivo (tokens reais):** `analista` grava e lê; `operador` não vê os favoritos do
+  `analista`; rota inválida → 400; sem token → 401; cada gravação no log de auditoria.
+
+### 9.51. Home, pesquisa de telas e Controle de Acesso no menu — frontend — **[FEITO e validado no navegador, 2026-11-03, `LIZARDS-58`]**
+Repositório `datagis-frontend`, branch `feat/homepage-dashboard`, a partir da `sprint-3`.
+Depende da §9.50.
+
+- **Home (`/`, `InicioView.vue`)** — antes `/` só redirecionava para a primeira tela
+  permitida. Item **Home** na seção **Tela inicial** do menu, para qualquer usuário logado.
+  Só informação leve, para abrir rápido:
+  - saudação com o nome e os perfis (do token, sem chamada);
+  - **Processamentos agora** (lido do painel de Processamentos, que já consulta o backend —
+    nenhuma chamada a mais; clicar abre o painel);
+  - **Última publicação da Gold** (`/api/gold/status`, só com `indicador:visualizar`);
+  - **Indicadores e resultados**: totais (imóveis, municípios, com sobreposição, hectares) e
+    tabela por município com os 7 indicadores, na ordem e unidade do catálogo e com as
+    **mesmas faixas de cor** da tela Indicadores e Resultados (`badge-tag--*`, mesma regra
+    `faixaDoValor`); "—" para indicador sem cálculo; botão "Ver em tabela". Duas chamadas
+    pequenas (`/api/indicadores/municipios`, uma linha por município, e
+    `/api/indicadores/tipos`); sem mapa e sem a lista de imóveis;
+  - **Favoritos** em atalhos (ícone da tela num quadrado colorido + nome), marcados pela
+    estrela em **Todas as telas**;
+  - **Todas as telas** que o perfil pode abrir, com estrela e botão **ocultar** ("Telas
+    ocultas (N)" → "Mostrar de novo").
+  - O **título de cada seção é uma barra clicável** com seta que abre e minimiza a seção.
+    Seção minimizada e tela oculta ficam no `localStorage` por usuário (preferência de tela);
+    o favorito, que é dado, fica no banco.
+- **Catálogo de telas (`navegacao/catalogoTelas.js`)** — fonte única de telas e botões para a
+  pesquisa e a Home: rota, título, descrição, ícone, cor e permissão de cada tela, e os botões
+  principais de cada uma com a permissão que a própria tela exige para mostrá-los. **Tela ou
+  botão novo entra aqui**, senão não aparece na pesquisa nem na Home. `IconeTela.vue` desenha
+  os ícones (os mesmos da barra lateral). A tela Conjunto de Dados (`/conjuntos-dados/:fonteId`)
+  fica fora porque só abre a partir de uma fonte escolhida.
+- **Pesquisa (`PesquisaTelas.vue` + `navegacao/pesquisa.js`)** — logo abaixo do nome do
+  projeto. Acha tela pelo título/descrição e botão pelo rótulo, sem acento e sem
+  maiúscula, só entre o que o perfil pode ver; ícone da tela na frente de cada resultado.
+  Escolher um botão abre a tela dele e **destaca o botão** (procura pelo texto, `aria-label` ou
+  `title`, espera a tela carregar, rola até ele e pisca o contorno verde `.destaque-pesquisa`).
+  Teclado: ↑/↓, Enter, Esc.
+- **X na publicação da Gold (`LotesView.vue`)** — na fase de processamento o X só **esconde a
+  janela**: a publicação continua no backend, o acompanhamento segue, a lista de lotes
+  atualiza ao terminar e o botão "Migrar para Gold" reabre o andamento. Clicar fora continua
+  não fechando.
+- **Controle de Acesso como grupo no menu (`Sidebar.vue`)** — o item abre no próprio menu
+  com Visão geral, Usuários, Perfis e Matriz de Acesso (ícones próprios), atalho ↗ de nova aba
+  ao passar o mouse, e abre sozinho nas telas `/admin/`. **Barra recolhida:** passar o mouse
+  num ícone mostra o nome da tela ao lado (e, num grupo, as telas dele embaixo, com a barra de
+  destaque); o menu flutuante vai para o `<body>` (`Teleport`) para não ser cortado pela
+  rolagem da barra, fica aberto enquanto o mouse está no ícone ou nele e fecha ~0,2 s depois
+  de sair, com Esc, ao escolher, ao trocar de rota ou ao expandir a barra. O clique no ícone do
+  grupo também abre (teclado e toque).
+- **Pegadinhas:**
+  - Link (`<a>`/`router-link`) com estilo de botão precisa de regra no bloco escuro: a regra
+    global `:root[data-tema="escuro"] a` é mais específica que a classe e troca a cor.
+  - Botão com `class="item-menu"` herda o fundo do navegador: tirar o fundo só quando **não**
+    está ativo (`:not(.item-menu--ativo)`), senão some o fundo verde do item ativo.
+  - Em teste, o menu flutuante com `Teleport` precisa de `stubs: { teleport: true }`.
+- **Testes:** `pesquisa.test.js` (14), `PesquisaTelas.test.js` (8), `InicioView.test.js`
+  (favoritos, permissões, indicadores e faixas, barra que abre e minimiza, ocultar),
+  `favoritoService.test.js` (3), `LotesView.test.js` +2 (X da Gold), `Sidebar.test.js` (Home no
+  topo, grupo, menu flutuante, passar o mouse). Suíte do frontend: **441 testes, 0 falhas**;
+  build ok. Conferido no navegador nos dois temas, como `analista` e `admin`.
+- **[EM ABERTO]**
+  - A pesquisa não acha botões da tela Conjunto de Dados (ex.: "Comparar lotes"), porque ela
+    precisa de uma fonte escolhida. Proposta: resultado que abre o Cadastro de Fontes e
+    destaca "Ver conjunto de dados".
+  - Datas da Home seguem o fuso UTC do servidor, como as outras telas (§9.47).
+
 ### 9.42. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
 Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
 todas as telas do sistema. A tela de login não entra: ela é do Keycloak, outro container,
