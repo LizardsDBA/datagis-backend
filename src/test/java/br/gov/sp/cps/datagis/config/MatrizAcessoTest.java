@@ -95,6 +95,7 @@ class MatrizAcessoTest {
                 Arguments.of("PUT", "/api/indicadores/tipos/1", Permissao.INDICADOR_PUBLICAR),
                 Arguments.of("GET", "/api/admin/usuarios", Permissao.USUARIO_GERENCIAR),
                 Arguments.of("PUT", "/api/admin/usuarios/abc/roles", Permissao.USUARIO_GERENCIAR),
+                Arguments.of("PUT", "/api/admin/usuarios/abc/token-acesso", Permissao.USUARIO_GERENCIAR),
                 Arguments.of("GET", "/api/auditoria", Permissao.AUDITORIA_VISUALIZAR));
     }
 
@@ -164,6 +165,16 @@ class MatrizAcessoTest {
         mvc.perform(request(HttpMethod.PUT, "/api/favoritos").with(comPermissoes())).andExpect(status().isOk());
         mvc.perform(request(HttpMethod.GET, "/api/favoritos")).andExpect(status().isUnauthorized());
         mvc.perform(request(HttpMethod.PUT, "/api/favoritos")).andExpect(status().isUnauthorized());
+    }
+
+    /** Minha conta e do proprio usuario: basta estar logado, mesmo sem nenhuma permissao. */
+    @Test
+    void minhaContaSoExigeLogin() throws Exception {
+        mvc.perform(request(HttpMethod.GET, "/api/minha-conta").with(comPermissoes())).andExpect(status().isOk());
+        mvc.perform(request(HttpMethod.PUT, "/api/minha-conta").with(comPermissoes())).andExpect(status().isOk());
+        mvc.perform(request(HttpMethod.PUT, "/api/minha-conta/senha").with(comPermissoes())).andExpect(status().isOk());
+        mvc.perform(request(HttpMethod.GET, "/api/minha-conta")).andExpect(status().isUnauthorized());
+        mvc.perform(request(HttpMethod.PUT, "/api/minha-conta/senha")).andExpect(status().isUnauthorized());
     }
 
     @Test
