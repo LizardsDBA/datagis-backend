@@ -67,7 +67,7 @@ class UsuarioAdminServiceTest {
         when(keycloak.criarUsuario("maria", "Maria", "Silva", "maria@x.com")).thenReturn("u1");
 
         service.criar(new UsuarioNovoRequest(" maria ", "Maria", "Silva", "maria@x.com", "Senha@123",
-                List.of("perfil-administrador", "lote:gerenciar")));
+                List.of("perfil-administrador", "lote:gerenciar"), null));
 
         verify(keycloak).definirSenha("u1", "Senha@123", true);
         verify(keycloak).adicionarRoles("u1", List.of(ADMIN, LOTE_GERENCIAR));
@@ -76,7 +76,7 @@ class UsuarioAdminServiceTest {
     @Test
     void recusaRoleForaDoCatalogoAntesDeCriarQualquerCoisa() {
         assertThatThrownBy(() -> service.criar(new UsuarioNovoRequest("maria", "Maria", "Silva", "maria@x.com",
-                "Senha@123", List.of("perfil-inexistente"))))
+                "Senha@123", List.of("perfil-inexistente"), null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("perfil-inexistente");
 
@@ -157,7 +157,7 @@ class UsuarioAdminServiceTest {
     void cadastroNovoTemSoODepoisESemSenha() {
         when(keycloak.criarUsuario(anyString(), anyString(), anyString(), anyString())).thenReturn("u1");
 
-        service.criar(new UsuarioNovoRequest("maria", "Maria", "Silva", "maria@x.com", "Senha@123", List.of()));
+        service.criar(new UsuarioNovoRequest("maria", "Maria", "Silva", "maria@x.com", "Senha@123", List.of(), null));
 
         assertThat(MudancaAuditadaAcesso.antes(request)).isNull();
         assertThat(MudancaAuditadaAcesso.depois(request)).contains("\"login\":\"maria\"").doesNotContain("Senha@123");
