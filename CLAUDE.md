@@ -2954,9 +2954,9 @@ Depende da §9.50.
     destaca "Ver conjunto de dados".
   - Datas da Home seguem o fuso UTC do servidor, como as outras telas (§9.47).
 
-### 9.52. Minha conta e liberação do token de acesso — backend — **[FEITO e validado contra o Oracle real, 2026-11-03, task a confirmar]**
-Branch `feat/minha-conta`, a partir da `feat/homepage-dashboard` (LIZARDS-58, ainda não
-integrada). A tela está na §9.53.
+### 9.52. Minha conta e liberação do token de acesso — backend — **[FEITO e validado contra o Oracle real, 2026-11-03, `LIZARDS-58`]**
+Desenvolvida na branch `feat/minha-conta` e entregue junto com a Home, na
+`feat/homepage-dashboard` (PR #44 do backend, #35 do frontend). A tela está na §9.53.
 
 - **Objetivo:** clicar no nome, no rodapé do menu, abre os dados do usuário. Ele troca o
   **nome e a senha**; os outros campos são só de leitura. Decisões do usuário: a senha troca
@@ -3019,9 +3019,9 @@ integrada). A tela está na §9.53.
   perfil Analista → 400 (nada criado); Administrador com senha comum → 201 e token ligado;
   virar Analista → token desligado e não religa (400). Usuários de teste apagados depois.
 
-### 9.53. Minha conta e liberação do token de acesso — frontend — **[FEITO e validado no navegador, 2026-11-03, task a confirmar]**
-Repositório `datagis-frontend`, branch `feat/minha-conta`, a partir da
-`feat/homepage-dashboard`. Depende da §9.52.
+### 9.53. Minha conta e liberação do token de acesso — frontend — **[FEITO e validado no navegador, 2026-11-03, `LIZARDS-58`]**
+Repositório `datagis-frontend`, entregue na `feat/homepage-dashboard` (PR #35). Depende da
+§9.52.
 
 - **Nome no rodapé do menu vira link** (`Sidebar.vue`, `.link-conta`): avatar + nome abrem
   `/minha-conta`; com a barra recolhida, o avatar sozinho. Fica marcado com a tela aberta.
