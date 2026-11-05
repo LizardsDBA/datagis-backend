@@ -136,6 +136,40 @@ public class KeycloakAdminClient {
                 .retrieve().toBodilessEntity());
     }
 
+    /**
+     * Confere a senha de um usuario pedindo um login (grant {@code password}) com o client
+     * do backend. Serve so pra conferir a senha atual antes da troca na tela "Minha conta":
+     * o token devolvido e descartado. Exige "Direct access grants" ligado no client
+     * {@code datagis-backend} (realm-datagis.json; em Keycloak ja existente, ver CLAUDE.md).
+     */
+    public boolean senhaConfere(String login, String senha) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("grant_type", "password");
+        form.add("client_id", props.clientId());
+        form.add("client_secret", props.clientSecret());
+        form.add("username", login);
+        form.add("password", senha);
+        try {
+            http.post()
+                    .uri("/realms/" + props.realm() + "/protocol/openid-connect/token")
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .body(form)
+                    .retrieve()
+                    .toBodilessEntity();
+            return true;
+        } catch (HttpClientErrorException e) {
+            String corpo = e.getResponseBodyAsString();
+            if (corpo.contains("unauthorized_client")) {
+                throw new IllegalStateException("O client " + props.clientId()
+                        + " do Keycloak nao aceita login por senha (Direct access grants desligado)", e);
+            }
+            // invalid_grant: senha errada (ou conta bloqueada pelo Keycloak)
+            return false;
+        } catch (RestClientException e) {
+            throw new IllegalStateException("Falha ao falar com o Keycloak em " + props.urlInterna(), e);
+        }
+    }
+
     /** Roles atribuidas DIRETAMENTE ao usuario (perfis e permissoes avulsas). */
     public List<KcRole> rolesDiretas(String id) {
         return executar(() -> admin(HttpMethod.GET, "/users/{id}/role-mappings/realm", id).retrieve().body(LISTA_ROLES));

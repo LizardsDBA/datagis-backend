@@ -2863,6 +2863,197 @@ para o antes e depois (sem a V082 o resto funciona, só não aparece antes/depoi
   vírgula abre numa coluna só no Excel em padrão brasileiro (`;`) — se incomodar, exportar
   `.xlsx`.
 
+### 9.50. Home com favoritos — backend — **[FEITO e validado contra o Oracle real, 2026-10-28, `LIZARDS-58`]**
+Branch `feat/homepage-dashboard`, a partir da `sprint-3`. A tela está na §9.51.
+
+- **Objetivo:** a tela inicial (Home) guarda as telas favoritas de cada usuário. Decisão do
+  usuário: favorito fica **no banco**, não no navegador, para seguir a pessoa em qualquer
+  computador.
+- **`V089__criar_favorito_usuario.sql`:** `controle.favorito_usuario` (`usuario_id`, `rota`,
+  `ordem`, `data_add`, único por `usuario_id + rota`). O usuário é o `sub` do token do
+  Keycloak (texto, sem FK, como no `log_auditoria`). Guarda só a **rota** da tela, não o
+  título: renomear uma tela não deixa favorito desatualizado, e tela que o usuário deixou de
+  poder abrir some sozinha da Home (o frontend filtra pelas permissões).
+- **`GET`/`PUT /api/favoritos`** (`favorito/FavoritoController` + `FavoritoRepositorio`,
+  JdbcTemplate). O usuário vem **sempre do token**, nunca da URL ou do corpo: cada um lê e
+  troca só os próprios. O `PUT` troca a lista inteira na ordem recebida, numa transação.
+  Validação (400 pelo `TratadorDeErro`): lista obrigatória (pode ser vazia), no máximo 20,
+  rota no formato de tela do frontend (`^/[a-z0-9/-]{0,199}$`) e sem repetição.
+- **`SecurityConfig`:** `/api/favoritos/**` exige **só login** (`authenticated()`), sem
+  permissão — qualquer perfil tem Home. `DescricaoAcao`: `PUT /api/favoritos` = "Salvar
+  favoritos da tela inicial" no log de auditoria.
+- **Testes:** `FavoritoControllerTest` (8: usuário do token, ordem, lista vazia, rota com
+  subpasta, recusas), `FavoritoOracleIT` (2, Oracle real: ordem e troca da lista, isolamento
+  por usuário), `MatrizAcessoTest` +1 (favoritos com login e sem permissão nenhuma → 200, sem
+  token → 401). Suíte: 782 unitários, só o `DatagisApplicationTests` de sempre (§9.3).
+- **Ao vivo (tokens reais):** `analista` grava e lê; `operador` não vê os favoritos do
+  `analista`; rota inválida → 400; sem token → 401; cada gravação no log de auditoria.
+
+### 9.51. Home, pesquisa de telas e Controle de Acesso no menu — frontend — **[FEITO e validado no navegador, 2026-11-03, `LIZARDS-58`]**
+Repositório `datagis-frontend`, branch `feat/homepage-dashboard`, a partir da `sprint-3`.
+Depende da §9.50.
+
+- **Home (`/`, `InicioView.vue`)** — antes `/` só redirecionava para a primeira tela
+  permitida. Item **Home** na seção **Tela inicial** do menu, para qualquer usuário logado.
+  Só informação leve, para abrir rápido:
+  - saudação com o nome e os perfis (do token, sem chamada);
+  - **Processamentos agora** (lido do painel de Processamentos, que já consulta o backend —
+    nenhuma chamada a mais; clicar abre o painel);
+  - **Última publicação da Gold** (`/api/gold/status`, só com `indicador:visualizar`);
+  - **Indicadores e resultados**: totais (imóveis, municípios, com sobreposição, hectares) e
+    tabela por município com os 7 indicadores, na ordem e unidade do catálogo e com as
+    **mesmas faixas de cor** da tela Indicadores e Resultados (`badge-tag--*`, mesma regra
+    `faixaDoValor`); "—" para indicador sem cálculo; botão "Ver em tabela". Duas chamadas
+    pequenas (`/api/indicadores/municipios`, uma linha por município, e
+    `/api/indicadores/tipos`); sem mapa e sem a lista de imóveis;
+  - **Favoritos** em atalhos (ícone da tela num quadrado colorido + nome), marcados pela
+    estrela em **Todas as telas**;
+  - **Todas as telas** que o perfil pode abrir, com estrela e botão **ocultar** ("Telas
+    ocultas (N)" → "Mostrar de novo").
+  - O **título de cada seção é uma barra clicável** com seta que abre e minimiza a seção.
+    Seção minimizada e tela oculta ficam no `localStorage` por usuário (preferência de tela);
+    o favorito, que é dado, fica no banco.
+- **Catálogo de telas (`navegacao/catalogoTelas.js`)** — fonte única de telas e botões para a
+  pesquisa e a Home: rota, título, descrição, ícone, cor e permissão de cada tela, e os botões
+  principais de cada uma com a permissão que a própria tela exige para mostrá-los. **Tela ou
+  botão novo entra aqui**, senão não aparece na pesquisa nem na Home. `IconeTela.vue` desenha
+  os ícones (os mesmos da barra lateral). A tela Conjunto de Dados (`/conjuntos-dados/:fonteId`)
+  fica fora porque só abre a partir de uma fonte escolhida.
+- **Pesquisa (`PesquisaTelas.vue` + `navegacao/pesquisa.js`)** — logo abaixo do nome do
+  projeto. Acha tela pelo título/descrição e botão pelo rótulo, sem acento e sem
+  maiúscula, só entre o que o perfil pode ver; ícone da tela na frente de cada resultado.
+  Escolher um botão abre a tela dele e **destaca o botão** (procura pelo texto, `aria-label` ou
+  `title`, espera a tela carregar, rola até ele e pisca o contorno verde `.destaque-pesquisa`).
+  Teclado: ↑/↓, Enter, Esc.
+- **X na publicação da Gold (`LotesView.vue`)** — na fase de processamento o X só **esconde a
+  janela**: a publicação continua no backend, o acompanhamento segue, a lista de lotes
+  atualiza ao terminar e o botão "Migrar para Gold" reabre o andamento. Clicar fora continua
+  não fechando.
+- **Controle de Acesso como grupo no menu (`Sidebar.vue`)** — o item abre no próprio menu
+  com Visão geral, Usuários, Perfis e Matriz de Acesso (ícones próprios), atalho ↗ de nova aba
+  ao passar o mouse, e abre sozinho nas telas `/admin/`. **Barra recolhida:** passar o mouse
+  num ícone mostra o nome da tela ao lado (e, num grupo, as telas dele embaixo, com a barra de
+  destaque); o menu flutuante vai para o `<body>` (`Teleport`) para não ser cortado pela
+  rolagem da barra, fica aberto enquanto o mouse está no ícone ou nele e fecha ~0,2 s depois
+  de sair, com Esc, ao escolher, ao trocar de rota ou ao expandir a barra. O clique no ícone do
+  grupo também abre (teclado e toque).
+- **Pegadinhas:**
+  - Link (`<a>`/`router-link`) com estilo de botão precisa de regra no bloco escuro: a regra
+    global `:root[data-tema="escuro"] a` é mais específica que a classe e troca a cor.
+  - Botão com `class="item-menu"` herda o fundo do navegador: tirar o fundo só quando **não**
+    está ativo (`:not(.item-menu--ativo)`), senão some o fundo verde do item ativo.
+  - Em teste, o menu flutuante com `Teleport` precisa de `stubs: { teleport: true }`.
+- **Testes:** `pesquisa.test.js` (14), `PesquisaTelas.test.js` (8), `InicioView.test.js`
+  (favoritos, permissões, indicadores e faixas, barra que abre e minimiza, ocultar),
+  `favoritoService.test.js` (3), `LotesView.test.js` +2 (X da Gold), `Sidebar.test.js` (Home no
+  topo, grupo, menu flutuante, passar o mouse). Suíte do frontend: **441 testes, 0 falhas**;
+  build ok. Conferido no navegador nos dois temas, como `analista` e `admin`.
+- **[EM ABERTO]**
+  - A pesquisa não acha botões da tela Conjunto de Dados (ex.: "Comparar lotes"), porque ela
+    precisa de uma fonte escolhida. Proposta: resultado que abre o Cadastro de Fontes e
+    destaca "Ver conjunto de dados".
+  - Datas da Home seguem o fuso UTC do servidor, como as outras telas (§9.47).
+
+### 9.52. Minha conta e liberação do token de acesso — backend — **[FEITO e validado contra o Oracle real, 2026-11-03, `LIZARDS-58`]**
+Desenvolvida na branch `feat/minha-conta` e entregue junto com a Home, na
+`feat/homepage-dashboard` (PR #44 do backend, #35 do frontend). A tela está na §9.53.
+
+- **Objetivo:** clicar no nome, no rodapé do menu, abre os dados do usuário. Ele troca o
+  **nome e a senha**; os outros campos são só de leitura. Decisões do usuário: a senha troca
+  num formulário do DataGIS que **pede a senha atual**; o token de acesso (buscar dados da
+  Gold pela API, entregue depois) **só o administrador libera**, e **só usuário com o perfil
+  Administrador pode ter token** — e só ele vê a opção. **Não há senha própria do token**:
+  basta o login de um Administrador (alinhado com a equipe em 2026-11-03; uma senha padrão
+  fixa e depois uma regra de senha forte chegaram a ser discutidas e foram descartadas).
+- **`GET`/`PUT /api/minha-conta` e `PUT /api/minha-conta/senha`** (`MinhaContaController` +
+  `MinhaContaService`, pacote `seguranca`). O usuário vem **sempre do token** (`sub`), como
+  nos favoritos (§9.50). `SecurityConfig`: `/api/minha-conta/**` exige **só login**.
+  - Trocar nome mantém e-mail e situação (`atualizarUsuario` com os valores atuais).
+  - Trocar senha: nova igual à atual → 400; senha atual errada → 400 "Senha atual incorreta";
+    nova com menos de 8 → 400. A nova senha **não é temporária** (`definirSenha(..., false)`).
+  - Log de auditoria (§9.48): antes/depois do nome; na senha, só que ela foi trocada — **o
+    valor nunca é gravado** (teste trava isso).
+- **Conferir a senha atual (`KeycloakAdminClient.senhaConfere`):** o backend pede um token
+  com `grant_type=password` no client `datagis-backend`. Isso exige **Direct access grants**
+  ligado nesse client: entrou no `infra/keycloak/realm-datagis.json`, mas o realm só é
+  importado na 1ª subida. **Ambiente que já existia roda uma vez** (a senha do admin do
+  Keycloak já está no container, em `KC_BOOTSTRAP_ADMIN_PASSWORD`):
+  ```
+  docker compose exec keycloak sh -c '
+    kc=/opt/keycloak/bin/kcadm.sh
+    $kc config credentials --server http://localhost:8080 --realm master --user admin --password "$KC_BOOTSTRAP_ADMIN_PASSWORD"
+    ID=$($kc get clients -r datagis -q clientId=datagis-backend --fields id --format csv --noquotes)
+    $kc update clients/$ID -r datagis -s directAccessGrantsEnabled=true'
+  ```
+  Sem isso a troca de senha responde 502 com a mensagem "Direct access grants desligado". A
+  conta de serviço não altera client sozinha (não tem `manage-clients`), por isso não dá pra
+  o `KeycloakProvisionador` ligar.
+- **Token de acesso — `V090__criar_token_acesso_usuario.sql`:** `controle.token_acesso_usuario`
+  (`usuario_id` = `sub` do Keycloak, `habilitado`, `alterado_por`, `data_alt`). Sem linha =
+  não liberado. Fica no Oracle e não em atributo do Keycloak porque o Keycloak 26 descarta
+  atributo que não está declarado no perfil de usuário dele. **Por enquanto só guarda a
+  liberação**: o token em si (criar, revogar, usar no entry point da Gold) é entrega futura.
+  - `GET`/`PUT /api/admin/usuarios/{id}/token-acesso` (`TokenAcessoAdminController`): cai na
+    regra de `/api/admin/**` (`usuario:gerenciar`). Grava quem liberou e o antes/depois no log.
+  - `GET /api/minha-conta` devolve `tokenAcessoHabilitado` pra tela mostrar.
+- **Regras do token — `TokenAcessoService`** (os controllers chamam; `UsuarioAdminService`
+  não mudou):
+  - Ligar exige o perfil `perfil-administrador` (role direta) → senão 400 "So usuario com o
+    perfil Administrador pode ter token de acesso". Desligar vale para qualquer um.
+  - A liberação gravada só vale enquanto o usuário for Administrador (`ativo(...)`); trocar
+    os perfis sem o Administrador desliga o token (`PUT .../roles`).
+  - Cadastro já com token: `POST /api/admin/usuarios` ganhou `tokenAcesso` (opcional). Confere
+    o perfil **antes** de criar no Keycloak (não fica usuário pela metade).
+- **`DescricaoAcao`:** "Editar o proprio nome", "Trocar a propria senha", "Liberar ou
+  bloquear token de acesso do usuario".
+- **Testes:** `MinhaContaServiceTest` (6: dados e token, troca só o nome, senha certa/errada/
+  igual, senha nunca no log), `TokenAcessoServiceTest` (6: só Administrador, desligar, vale só
+  enquanto for Administrador, tirar o perfil desliga, cadastro com token),
+  `TokenAcessoAdminControllerTest` (2), `TokenAcessoOracleIT` (2, Oracle real: sem linha =
+  bloqueado, libera e bloqueia na mesma linha), `MatrizAcessoTest` +1 (minha conta com login e
+  sem permissão → 200, sem token → 401) e a rota do token na lista. Suíte: **803 testes, 0
+  falhas**, fora o `DatagisApplicationTests` de sempre (§9.3).
+- **Ao vivo (tokens reais):** `operador` vê os dados e troca o nome; senha errada 400; curta
+  400; certa 204 e o login com a nova funciona (senha devolvida depois); sem token 401;
+  `operador` tentando liberar → 403; cada ação no log de auditoria. Cadastro com token:
+  perfil Analista → 400 (nada criado); Administrador com senha comum → 201 e token ligado;
+  virar Analista → token desligado e não religa (400). Usuários de teste apagados depois.
+
+### 9.53. Minha conta e liberação do token de acesso — frontend — **[FEITO e validado no navegador, 2026-11-03, `LIZARDS-58`]**
+Repositório `datagis-frontend`, entregue na `feat/homepage-dashboard` (PR #35). Depende da
+§9.52.
+
+- **Nome no rodapé do menu vira link** (`Sidebar.vue`, `.link-conta`): avatar + nome abrem
+  `/minha-conta`; com a barra recolhida, o avatar sozinho. Fica marcado com a tela aberta.
+- **Tela `/minha-conta` (`MinhaContaView.vue`)**, sem permissão (qualquer logado), 3 cartões:
+  - *Dados:* nome e sobrenome editáveis; login, e-mail, perfis e situação só leitura.
+    "Salvar nome" só habilita com mudança e já atualiza o nome do rodapé (o token só traz o
+    nome novo no próximo login).
+  - *Senha:* senha atual, nova e confirmação; confirmação diferente avisa e não chama o
+    backend; erro do backend ("Senha atual incorreta") aparece no cartão.
+  - *Token de acesso:* **só aparece para quem tem o perfil Administrador**. Interruptor **só
+    leitura** com o estado ("Liberado pelo administrador"/"Não liberado") e o selo
+    **"Disponível em breve"**.
+  - Estilo do `controleAcesso.css` + variáveis do tema: o escuro funciona sem bloco próprio
+    (só o texto do botão verde).
+- **Usuários (`UsuariosView.vue`):** linha **Ativar token** no fim do formulário, no
+  cadastro e na edição (Ativado/Desativado). **Só aparece com o perfil Administrador
+  escolhido**; tirar o perfil esconde e desliga. No cadastro, o `POST` leva `tokenAcesso`. Na
+  edição é lido de `GET .../token-acesso`; "Salvar" grava só o que mudou (token sozinho chama
+  só `PUT .../token-acesso`). Senha temporária segue com mínimo de 8, com ou sem token.
+- **`Interruptor.vue`** (novo, `role="switch"`, prop `somenteLeitura`), usado nas duas telas.
+- **Pesquisa/Home:** "Minha conta" entrou no `catalogoTelas.js` (sem permissão, ícone `conta`
+  novo no `IconeTela.vue`), com os botões "Trocar senha" e "Salvar nome".
+- **Testes:** `MinhaContaView.test.js` (9, inclui "quem não é Administrador não vê o
+  token"), `minhaContaService.test.js` (4), `UsuariosView.test.js` +6 (token lido, ativar
+  grava só o token, não aparece sem Administrador, só aparece com o perfil, cadastro manda
+  `tokenAcesso`, tirar o perfil desliga), `Sidebar.test.js` +2 (link e marcação). Suíte:
+  **466, 0 falhas**; build ok. Conferido no navegador: o analista não vê o cartão do token. Conferido no
+  navegador nos dois temas, como `operador` (senha errada mostra o erro) e `admin`.
+- **[EM ABERTO]** Criar, listar e revogar o token, e o entry point da Gold que o aceita —
+  próxima entrega. Quando chegar, o interruptor da Minha conta vira o lugar de gerar o token
+  (só para quem o admin liberou).
+
 ### 9.42. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
 Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
 todas as telas do sistema. A tela de login não entra: ela é do Keycloak, outro container,

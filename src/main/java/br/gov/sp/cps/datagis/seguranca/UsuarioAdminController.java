@@ -31,8 +31,10 @@ import org.springframework.web.bind.annotation.RestController;
 public class UsuarioAdminController {
 
     private final UsuarioAdminService service;
+    private final TokenAcessoService tokens;
 
-    public UsuarioAdminController(UsuarioAdminService service) {
+    public UsuarioAdminController(UsuarioAdminService service, TokenAcessoService tokens) {
+        this.tokens = tokens;
         this.service = service;
     }
 
@@ -54,8 +56,18 @@ public class UsuarioAdminController {
 
     @PostMapping("/usuarios")
     @ResponseStatus(HttpStatus.CREATED)
-    public UsuarioResponse criar(@Valid @RequestBody UsuarioNovoRequest dados) {
-        return service.criar(dados);
+    public UsuarioResponse criar(@Valid @RequestBody UsuarioNovoRequest dados,
+                                 @AuthenticationPrincipal Jwt solicitante) {
+        boolean comToken = Boolean.TRUE.equals(dados.tokenAcesso());
+        // Confere antes de criar: nao deixa usuario pela metade no Keycloak
+        if (comToken) {
+            tokens.validarCadastroComToken(dados.roles());
+        }
+        UsuarioResponse criado = service.criar(dados);
+        if (comToken) {
+            tokens.definir(criado.id(), true, solicitante.getClaimAsString("preferred_username"));
+        }
+        return criado;
     }
 
     @PutMapping("/usuarios/{id}")
@@ -67,7 +79,10 @@ public class UsuarioAdminController {
     @PutMapping("/usuarios/{id}/roles")
     public UsuarioResponse definirRoles(@PathVariable String id, @Valid @RequestBody RolesRequest dados,
                                         @AuthenticationPrincipal Jwt solicitante) {
-        return service.definirRoles(id, dados.roles(), solicitante.getSubject());
+        UsuarioResponse atualizado = service.definirRoles(id, dados.roles(), solicitante.getSubject());
+        // Sem o perfil Administrador, o token de acesso cai junto
+        tokens.desligarSeNaoAdministrador(id, solicitante.getClaimAsString("preferred_username"));
+        return atualizado;
     }
 
     @PutMapping("/usuarios/{id}/senha")

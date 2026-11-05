@@ -31,7 +31,7 @@ class UsuarioDtosTest {
     }
 
     private Set<ConstraintViolation<UsuarioNovoRequest>> violacoesDoLogin(String login) {
-        UsuarioNovoRequest dados = new UsuarioNovoRequest(login, "Maria", "Silva", "maria@x.com", "Senha@123", List.of());
+        UsuarioNovoRequest dados = new UsuarioNovoRequest(login, "Maria", "Silva", "maria@x.com", "Senha@123", List.of(), null);
         return validador.validateProperty(dados, "login");
     }
 }

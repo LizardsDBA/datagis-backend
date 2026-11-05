@@ -46,7 +46,10 @@ public final class UsuarioDtos {
             @NotBlank String sobrenome,
             @NotBlank @Email String email,
             @NotBlank @Size(min = 8, message = "a senha temporaria precisa ter pelo menos 8 caracteres") String senhaTemporaria,
-            List<String> roles) {
+            List<String> roles,
+            // Ja libera o token de acesso: so com o perfil Administrador
+            // (TokenAcessoService). Nulo = nao libera.
+            Boolean tokenAcesso) {
     }
 
     public record UsuarioAtualizacaoRequest(

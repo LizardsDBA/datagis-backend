@@ -43,14 +43,14 @@
     {
       "clientId": "datagis-backend",
       "name": "DataGIS - Backend (administracao de usuarios)",
-      "description": "Conta de servico usada pelo backend para cadastrar usuarios, atribuir roles e manter o catalogo de roles/perfis sincronizado com o codigo.",
+      "description": "Conta de servico usada pelo backend para cadastrar usuarios, atribuir roles e manter o catalogo de roles/perfis sincronizado com o codigo. O login por senha (directAccessGrants) serve so para conferir a senha atual na troca de senha da tela Minha conta.",
       "enabled": true,
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
       "secret": "datagis-backend-dev-secret",
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": false,
+      "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": true
     }
   ],
