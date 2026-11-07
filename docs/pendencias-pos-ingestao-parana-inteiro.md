@@ -9,12 +9,16 @@
 > Contexto: até esta sessão, o código só tinha sido testado/calibrado contra o circuito
 > de homologação (3 municípios, ~4.600 imóveis). A ingestão real do Paraná inteiro
 > (~558 mil imóveis) expôs vários limites que nunca apareceram nessa escala menor —
-> ver `CLAUDE.md` §9.50 para o primeiro achado dessa categoria (preparo de desmatamento
+> ver `CLAUDE.md` §9.54 para o primeiro achado dessa categoria (preparo de desmatamento
 > sem rastreio de progresso).
+>
+> **2026-11-07:** repositório atualizado pra `sprint-3`. Trabalho de correção segue na
+> branch `fix/paginacao-camadas-gold` (criada a partir de `origin/sprint-3`, carrega os
+> 2 commits de fix que estavam em `fix/fuso-horario-containers` + este documento).
 
 ---
 
-## 1. Já corrigido e **commitado localmente** (branch `fix/fuso-horario-containers`, sem push ainda)
+## 1. Já corrigido e **commitado localmente** (branch `fix/paginacao-camadas-gold`, a partir de `sprint-3`, sem push ainda)
 
 ### 1.1. Heap do backend: `-Xmx8g` → `-Xmx16g`
 - **Arquivo:** `docker-compose.yml` (serviço `backend`).
@@ -225,7 +229,79 @@
 
 ---
 
-## 5. Como usar este documento
+## 6. Correção da paginação `OFFSET/FETCH` (item 3.2) — linha de base local
+
+Metodologia (combinada com o usuário, 2026-11-07): publicar a Gold localmente (circuito
+de 3 municípios) **antes** da correção, registrar o máximo de detalhe possível, aplicar
+a correção, apagar a Gold local e publicar de novo, comparar. Ambiente: máquina de
+dev (15 GB RAM, 1 TB disco), branch `fix/paginacao-camadas-gold`. **Ressalva já
+registrada antes de medir:** em volume pequeno o ganho absoluto deve ser mínimo (o
+problema só fica dramático com muita linha **e** geometria complexa — item 3.2); isso
+testa **correção** (mesmo resultado antes/depois) e serve de teste de regressão, não
+prova de performance — a prova de performance já está nos números reais de produção
+(§3.2) e no `EXPLAIN PLAN`.
+
+### 6.1. Estado da Silver local antes de publicar (2026-11-07 11:22:27 -03:00)
+
+| Tabela | Linhas |
+|---|---|
+| `silver.municipio` | 399 |
+| `silver.imovel_rural` | 4.613 |
+| `silver.area_protegida` | 8.377 (inclui dado nacional das fontes 9/10, nunca limpado localmente — ver item 2.2, a limpeza só foi feita em produção) |
+| `silver.embargo_ambiental` | 124 |
+| `silver.auto_infracao` | 39 |
+| `silver.desmatamento` | 1.365 |
+| `silver.foco_calor` | 1.389 |
+
+Recursos do host antes de disparar: 15 GB RAM total, ~5,1 GB disponível; Oracle já
+usando 5,56 GB, backend 1,13 GB.
+
+### 6.2. Resultado — ANTES da correção (`POST /api/gold/publicar`, 2026-11-07)
+
+Log bruto completo (cada transição de status, com timestamp do host e os campos
+`iniciadoEm`/`concluidoEm`/`totalProcessado`/`totalPublicado`/`totalPulado` exatos da
+API): `docs/gold_local_baseline_antes.log`.
+
+**Duração total (indicadores + 7 camadas): 16min49s** (11:22:43,037 → 11:39:32,271).
+
+| Fase | Registros | Início | Fim | Duração |
+|---|---|---|---|---|
+| Indicadores | 4.613/4.613, **0 falha** | 11:22:43,037 | 11:32:40,646 | 9min57,6s |
+| MUNICIPIO | 399/399 | 11:32:40,700 | 11:32:45,311 | 4,6s |
+| LIMITE_PR | 1/1 | 11:32:45,323 | 11:33:14,810 | 29,5s |
+| AREA_PROTEGIDA | 8.377/8.377 (2 pulados) | 11:33:14,894 | 11:38:29,363 | 5min14,5s |
+| DESMATAMENTO | 1.365/1.365 | 11:38:29,386 | 11:39:01,207 | 31,8s |
+| EMBARGO | 124/124 | 11:39:01,215 | 11:39:01,918 | 0,7s |
+| **IMOVEL_RURAL** | 4.613/4.613, 0 pulados | 11:39:01,937 | 11:39:32,066 | **30,1s** |
+| FOCO_CALOR | 1.389/1.389 | 11:39:32,086 | 11:39:32,271 | 0,19s |
+
+Recursos do host ao final: RAM disponível caiu pra 4,5 GB (de 5,1 GB), Oracle subiu
+pra 5,72 GB, backend pra 1,64 GB — nada alarmante, segue folgado.
+
+**Observações:**
+- **Zero falha `ORA-12899`** nos indicadores (item 3.1) — o circuito pequeno não gera
+  nome de sobreposição >300 caracteres (poucas sobreposições por imóvel nesse recorte).
+  Confirma a hipótese do item 3.1: é um problema de escala, não reproduz localmente.
+- **`IMOVEL_RURAL` (a camada mais lenta em produção) levou só 30,1s aqui** contra
+  **42h59min em produção** — 4.613 linhas aqui vs 558.692 lá (121x mais linhas em
+  produção), mas o tempo cresceu ~5.160x, não 121x. Confirma o crescimento
+  super-linear já apontado pelo `EXPLAIN PLAN` (item 3.2) — bate razoavelmente com o
+  ajuste de curva feito antes (~N^1,73: 121^1,73 ≈ 4.015x, mesma ordem de grandeza do
+  5.160x observado).
+- **`AREA_PROTEGIDA` foi a camada mais lenta localmente** (5min14s, 8.377 linhas) —
+  mais linhas que `IMOVEL_RURAL` aqui (porque nunca limpamos o dado nacional das
+  fontes 9/10 localmente, item 2.2), então é o melhor candidato local pra visualizar
+  o ganho da correção, já que tem volume suficiente pra o efeito aparecer.
+- **`LIMITE_PR` (29,5s pra só 1 linha publicada) não é afetado pela paginação** — é a
+  simplificação do contorno do Paraná inteiro (união dos 399 municípios), sempre o
+  mesmo custo independente do circuito de ingestão. Não é alvo da correção.
+
+### 6.3. Resultado — DEPOIS da correção
+
+*(a preencher depois de implementar a paginação por chave e repetir o mesmo
+procedimento: apagar a Gold local e publicar de novo)*
+
+## 7. Como usar este documento
 
 Atualizar a cada novo achado, na seção 3 (se ainda não corrigido) ou movendo pra
 seção 1/2 assim que algo for de fato corrigido (local ou servidor, anotando onde).
