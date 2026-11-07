@@ -78,20 +78,36 @@ public class GoldPublicacaoService {
      * SELECT por camada (as 5 que passam por SIMPLIFY) - id (origem_silver_id),
      * cod_natural, rotulo, municipio_cod_ibge, wkt (via SDO_UTIL.TO_WKTGEOMETRY,
      * CLOB), fonte_dado_id, lote_ingestao_id, nessa ordem fixa (ver {@link #mapearLinha}).
-     * Paginado com OFFSET/FETCH (2 binds no fim: offset, tamanho da página).
      * FOCO_CALOR não entra aqui - geometria é só Point, não passa por SIMPLIFY, segue
      * como INSERT...SELECT em massa (ver {@link #publicarFocoCalorEmMassa}).
+     *
+     * <p><b>Paginação por chave (keyset), não OFFSET/FETCH</b> - 2 binds no fim:
+     * {@code ultimoId} (maior id já visto, começa em 0) e tamanho da página. Achado
+     * ao vivo publicando IMOVEL_RURAL contra o Paraná inteiro (558.692 registros,
+     * {@code docs/pendencias-pos-ingestao-parana-inteiro.md} §3.2): {@code ORDER BY id
+     * OFFSET ? ROWS FETCH NEXT ? ROWS ONLY} faz o Oracle fazer um {@code TABLE ACCESS
+     * FULL} + {@code WINDOW SORT} (Top-N limitado por {@code offset+fetch}) em TODA
+     * página, com custo crescendo com o offset - levou 42h59min pra terminar uma
+     * camada só. Com {@code WHERE id > :ultimoId ORDER BY id FETCH FIRST ? ROWS ONLY}
+     * o Oracle usa {@code INDEX RANGE SCAN} na PK direto a partir do ponto certo -
+     * custo por página deixa de crescer com o total já processado. {@link
+     * #CAMADA_LIMITE_PR} é a única exceção (ver comentário na entrada dela) - segue
+     * com {@code OFFSET/FETCH} de propósito, não é um "id > x" sobre uma tabela.
      */
     private static final Map<String, String> SELECT_POR_CAMADA = Map.of(
             "MUNICIPIO", """
                 SELECT id, TO_CHAR(cod_ibge) AS cod_natural, nome AS rotulo, cod_ibge AS municipio_cod_ibge,
                        SDO_UTIL.TO_WKTGEOMETRY(geometria) AS wkt, fonte_dado_id, lote_ingestao_id
-                  FROM silver.municipio WHERE geometria IS NOT NULL
-                 ORDER BY id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+                  FROM silver.municipio WHERE geometria IS NOT NULL AND id > ?
+                 ORDER BY id FETCH FIRST ? ROWS ONLY
                 """,
             // Agregado sem GROUP BY = 1 linha; o OFFSET/FETCH so existe pra seguir o
             // mesmo laco paginado (a 2a pagina vem vazia e encerra). Sem id de origem:
-            // nao e uma linha da Silver, e a uniao de todas.
+            // nao e uma linha da Silver, e a uniao de todas - paginacao por chave nao
+            // se aplica (nao ha "id" pra comparar), e o custo por chamada e o mesmo
+            // de qualquer forma (1 agregacao sobre todos os municipios). Unica entrada
+            // deste mapa que continua em OFFSET/FETCH - ver branch em
+            // publicarCamadaEmParalelo.
             CAMADA_LIMITE_PR, """
                 SELECT CAST(NULL AS NUMBER) AS id, 'PR' AS cod_natural, 'Paraná' AS rotulo,
                        CAST(NULL AS NUMBER) AS municipio_cod_ibge,
@@ -103,29 +119,29 @@ public class GoldPublicacaoService {
             "AREA_PROTEGIDA", """
                 SELECT id, codigo_origem AS cod_natural, nome AS rotulo, CAST(NULL AS NUMBER) AS municipio_cod_ibge,
                        SDO_UTIL.TO_WKTGEOMETRY(geometria) AS wkt, fonte_dado_id, lote_ingestao_id
-                  FROM silver.area_protegida WHERE geometria IS NOT NULL
-                 ORDER BY id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+                  FROM silver.area_protegida WHERE geometria IS NOT NULL AND id > ?
+                 ORDER BY id FETCH FIRST ? ROWS ONLY
                 """,
             "DESMATAMENTO", """
                 SELECT id, identificador_origem AS cod_natural, ('PRODES ' || TO_CHAR(ano)) AS rotulo,
                        CAST(NULL AS NUMBER) AS municipio_cod_ibge,
                        SDO_UTIL.TO_WKTGEOMETRY(geometria) AS wkt, fonte_dado_id, lote_ingestao_id
-                  FROM silver.desmatamento WHERE geometria IS NOT NULL
-                 ORDER BY id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+                  FROM silver.desmatamento WHERE geometria IS NOT NULL AND id > ?
+                 ORDER BY id FETCH FIRST ? ROWS ONLY
                 """,
             "EMBARGO", """
                 SELECT e.id, e.numero_termo AS cod_natural, e.nome_autuado AS rotulo, m.cod_ibge AS municipio_cod_ibge,
                        SDO_UTIL.TO_WKTGEOMETRY(e.geometria) AS wkt, e.fonte_dado_id, e.lote_ingestao_id
                   FROM silver.embargo_ambiental e LEFT JOIN silver.municipio m ON m.id = e.municipio_id
-                 WHERE e.geometria IS NOT NULL
-                 ORDER BY e.id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+                 WHERE e.geometria IS NOT NULL AND e.id > ?
+                 ORDER BY e.id FETCH FIRST ? ROWS ONLY
                 """,
             "IMOVEL_RURAL", """
                 SELECT ir.id, ir.cod_imovel AS cod_natural, ir.cod_imovel AS rotulo, m.cod_ibge AS municipio_cod_ibge,
                        SDO_UTIL.TO_WKTGEOMETRY(ir.geometria) AS wkt, ir.fonte_dado_id, ir.lote_ingestao_id
                   FROM silver.imovel_rural ir LEFT JOIN silver.municipio m ON m.id = ir.municipio_id
-                 WHERE ir.geometria IS NOT NULL
-                 ORDER BY ir.id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+                 WHERE ir.geometria IS NOT NULL AND ir.id > ?
+                 ORDER BY ir.id FETCH FIRST ? ROWS ONLY
                 """);
 
     private static final String INSERT_FEATURE_SQL = """
@@ -209,10 +225,10 @@ public class GoldPublicacaoService {
         // na V049/V081), por uma economia de tempo irrelevante nesse volume.
         jdbcTemplate.update("DELETE FROM gold.desmatamento_otimizado");
         String selectSql = SELECT_POR_CAMADA.get("DESMATAMENTO");
-        long offset = 0;
+        long ultimoId = 0;
         int total = 0;
         while (true) {
-            List<LinhaSilver> linhas = jdbcTemplate.query(selectSql, GoldPublicacaoService::mapearLinha, offset, TAMANHO_PAGINA);
+            List<LinhaSilver> linhas = jdbcTemplate.query(selectSql, GoldPublicacaoService::mapearLinha, ultimoId, TAMANHO_PAGINA);
             if (linhas.isEmpty()) {
                 break;
             }
@@ -227,7 +243,7 @@ public class GoldPublicacaoService {
                     log.warn("prepararDesmatamentoOtimizado: falhou o registro {}: {}", linha.id(), e.getMessage());
                 }
             }
-            offset += TAMANHO_PAGINA;
+            ultimoId = linhas.get(linhas.size() - 1).id();
         }
         log.info("prepararDesmatamentoOtimizado: {} geometrias simplificadas e cacheadas em gold.desmatamento_otimizado", total);
         return total;
@@ -490,19 +506,25 @@ public class GoldPublicacaoService {
      * {@link #paralelismo} threads — a simplificação JTS é CPU pura (sem a mesma
      * disputa de PGA do Oracle que dominava o cálculo de indicadores, §3.2 de
      * docs/publicacao-gold-paralela.md), então paraleliza bem. A leitura paginada
-     * em si continua sequencial (1 SELECT por página, OFFSET/FETCH); só o trabalho
-     * por linha dentro da página (simplificar + inserir) roda em paralelo. O item
-     * mais pesado isolado (1 polígono muito complexo) ainda limita o piso do tempo
+     * em si continua sequencial (1 SELECT por página); só o trabalho por linha
+     * dentro da página (simplificar + inserir) roda em paralelo. O item mais
+     * pesado isolado (1 polígono muito complexo) ainda limita o piso do tempo
      * da página em que ele cai — paraleliza o conjunto, não o pior caso.
+     *
+     * <p>Paginação por chave (maior {@code id} já visto), não OFFSET/FETCH - ver
+     * javadoc de {@link #SELECT_POR_CAMADA}. Única exceção é
+     * {@link #CAMADA_LIMITE_PR}, cuja query é um agregado de 1 linha sem {@code id}
+     * pra comparar - essa continua em OFFSET/FETCH (irrelevante em custo, só 2
+     * chamadas no total: 1 traz a linha, a 2ª vem vazia e encerra o laço).
      */
     private void publicarCamadaEmParalelo(
             String codigoCamada, String selectSql, Long mapaCamadaId, long novaVersao, long publicacaoId) {
         ExecutorService executor = Executors.newFixedThreadPool(
                 paralelismo, Thread.ofPlatform().name("gold-mapa-", 1).factory());
         try {
-            long offset = 0;
+            long chaveOuOffset = 0;
             while (true) {
-                List<LinhaSilver> linhas = jdbcTemplate.query(selectSql, GoldPublicacaoService::mapearLinha, offset, TAMANHO_PAGINA);
+                List<LinhaSilver> linhas = jdbcTemplate.query(selectSql, GoldPublicacaoService::mapearLinha, chaveOuOffset, TAMANHO_PAGINA);
                 if (linhas.isEmpty()) {
                     break;
                 }
@@ -543,7 +565,9 @@ public class GoldPublicacaoService {
                 }
 
                 atualizarProgresso(publicacaoId, linhas.size(), publicados.get(), pulados.get());
-                offset += TAMANHO_PAGINA;
+                chaveOuOffset = CAMADA_LIMITE_PR.equals(codigoCamada)
+                        ? chaveOuOffset + TAMANHO_PAGINA
+                        : linhas.get(linhas.size() - 1).id();
             }
         } finally {
             executor.shutdown();
