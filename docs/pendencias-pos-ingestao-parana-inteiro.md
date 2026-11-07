@@ -187,26 +187,38 @@
   aqui só pra não esquecer, caso algum desses vire gargalo real (log de auditoria
   crescendo sem limite é o mais provável de doer no futuro).
 
-### 3.3. `paralelismo` (6 threads) parece sub-utilizado também na publicação de camadas
+### 3.3. `paralelismo` (6 threads) parece sub-utilizado também na publicação de camadas — **[RESOLVIDO, não era bug separado, 2026-11-07]**
 - Amostrado `v$session` durante a publicação de `IMOVEL_RURAL`: só 1 sessão
   `CONTROLE` ativa por vez, nas poucas amostras tiradas (mesmo padrão que o achado já
-  registrado em `CLAUDE.md` §9.50 sobre `prepararDesmatamentoOtimizado`, que é
+  registrado em `CLAUDE.md` §9.54 sobre `prepararDesmatamentoOtimizado`, que é
   sequencial *de propósito*).
 - **Diferente do `prepararDesmatamentoOtimizado`**, a publicação de camada
   (`publicarCamadaEmParalelo`) **é desenhada pra ser paralela de verdade** (usa
   `Executors.newFixedThreadPool(paralelismo, ...)`, mesmo padrão do cálculo de
   indicadores) — então, se a amostragem realmente reflete baixa concorrência, pode
   ser um problema genuíno, não comportamento esperado.
-- **Hipótese mais provável agora, depois do achado do item 3.2:** o gargalo real é o
-  `TABLE ACCESS FULL` + `WINDOW SORT` do próprio `SELECT` da página (executado **uma
-  vez por página, sequencialmente**, antes de distribuir as linhas da página entre as
-  threads) — ou seja, mesmo com 6 threads prontas pra trabalhar em paralelo no que
-  cada uma recebe, a maior parte do tempo pode estar sendo gasta no SELECT sequencial
-  da página em si, que around o pool de threads nem chega a ser o gargalo.
-  **Não confirmado** — precisaria medir separadamente o tempo do SELECT da página vs.
-  o tempo do processamento paralelo por linha pra saber a proporção real. Like o item
-  3.2, resolver a paginação pode já destravar isso sozinho (não dá pra saber até
-  medir de novo depois do fix).
+- **Hipótese levantada então:** o gargalo real é o `TABLE ACCESS FULL` + `WINDOW SORT`
+  do próprio `SELECT` da página (executado uma vez por página, sequencialmente, antes
+  de distribuir as linhas entre as threads) - mesmo com threads prontas, a maior
+  parte do tempo seria gasta no SELECT sequencial, não no processamento paralelo.
+- **Confirmado ao vivo (2026-11-07), depois da correção de paginação do item 3.2:**
+  amostrado `v$session` (consulta corrigida - a primeira tentativa quebrou com
+  `ORA-00911` por escaping de `v\$session` num heredoc aninhado, 90 amostras
+  inválidas descartadas) durante as 2 fases, localmente com `paralelismo=4`
+  (temporário, só pro teste - valor padrão de dev é 2):
+  - **Indicadores** (`calcularIndicadoresEmParalelo`): **58 de 60 amostras (97%) com
+    as 4 sessões ativas ao mesmo tempo** - paralelismo pleno, nunca foi o problema
+    nessa fase.
+  - **`AREA_PROTEGIDA`** (camada de mapa, já com a correção de paginação aplicada):
+    **24/45 (53%) com 4 ativas, 34/45 (76%) com 3 ou mais** - concorrência real,
+    bem diferente do "só 1 sessão" observado em produção antes da correção.
+  - **Conclusão: a hipótese estava certa.** O "só 1 sessão ativa" original não era um
+    bug de paralelismo separado - era sintoma do próprio item 3.2 (o `SELECT`
+    sequencial de cada página, antes da correção, dominava tanto o tempo de parede
+    que qualquer amostra pegava quase sempre só essa 1 sessão rodando a busca lenta,
+    escondendo o paralelismo real do processamento por linha). Corrigir a paginação
+    já destravou isso de graça - não é preciso nenhuma mudança adicional de código
+    pra esse item.
 
 ### 3.4. Território: validador de recorte PR morto (não é tarefa desta sessão, só registro)
 - Já investigado e com plano desenhado antes desta sessão (ver
@@ -226,6 +238,30 @@
   pra não esquecer, caso o espaço vire assunto outra hora. Correção seria
   `ALTER TABLE ... SHRINK SPACE` nas 7 tabelas `q_*`, ou um `TRUNCATE` + reinserção
   (mais arriscado, evitar).
+
+### 3.6. Publicação Gold travada "em andamento" pra sempre se o backend reiniciar no meio
+- **Achado ao vivo** (2026-11-07), não é causado pelas correções de hoje — reiniciei o
+  backend local no meio de uma publicação de teste (pra voltar o `paralelismo` ao
+  padrão depois de um diagnóstico) e a publicação seguinte foi recusada:
+  `{"erro":"Já existe uma publicação para a camada Gold em andamento."}`.
+- **Causa:** `GoldPublicacaoController.publicar()` decide se "já tem publicação em
+  andamento" só olhando o status gravado no banco
+  (`service.obterStatusConsolidado().algumEmAndamento()`) — não existe nenhum
+  heartbeat/liveness checando se o processo que gravou aquele "EM_ANDAMENTO" ainda
+  está rodando de verdade. Se o backend cai/reinicia no meio (deploy, OOM, container
+  recriado - tudo coisa que já aconteceu nesta sessão, inclusive em produção), a
+  linha fica "EM_ANDAMENTO" pra sempre em `gold.publicacao_indicadores` ou
+  `gold.publicacao_camada_mapa`, e **nenhuma publicação nova consegue começar** até
+  alguém corrigir a mão no banco (`UPDATE ... SET status = 'FALHOU' WHERE status =
+  'EM_ANDAMENTO'`).
+- **Mesma classe de problema já resolvida em outro lugar do projeto:**
+  `IngestaoExecucaoService` tinha exatamente esse bug (fonte ficava "em andamento"
+  pra sempre até reiniciar o backend) - corrigido na `LIZARDS-54`/§9.47 do
+  `CLAUDE.md`. A publicação Gold nunca recebeu o mesmo tratamento.
+- **Não corrigido agora** (fora do escopo de hoje, achado de passagem) - desbloqueei
+  a mão pra continuar trabalhando. Correção futura: mesmo princípio do fix da
+  `LIZARDS-54` (registrar liveness, ou pelo menos limpar/marcar como falha qualquer
+  publicação "em andamento" há tempo demais na subida do backend).
 
 ---
 
