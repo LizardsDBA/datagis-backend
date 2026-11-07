@@ -164,10 +164,28 @@
   geometria complexa** (`IMOVEL_RURAL` é o pior caso do catálogo hoje;
   `AREA_PROTEGIDA` pode chegar nesse patamar se mais fontes nacionais forem
   ingeridas/limpas); camadas de ponto não são urgência, mesmo em volume alto.
-- **Não investigado ainda:** se o mesmo padrão de paginação `OFFSET/FETCH` existe em
-  algum outro lugar do código fora da publicação Gold (ex.: listagens paginadas de
-  tela) — vale um grep geral por `OFFSET ? ROWS FETCH NEXT` depois que a publicação
-  Gold atual terminar.
+- **Corrigido em `GoldPublicacaoService`** (2026-11-07, branch
+  `fix/paginacao-camadas-gold`, `LIZARDS-63`): as 5 queries de `SELECT_POR_CAMADA`
+  que sofriam do problema (`MUNICIPIO`, `AREA_PROTEGIDA`, `DESMATAMENTO`, `EMBARGO`,
+  `IMOVEL_RURAL`) trocadas de `ORDER BY id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY` pra
+  `WHERE ... AND id > ? ORDER BY id FETCH FIRST ? ROWS ONLY` (paginação por chave,
+  usa `INDEX RANGE SCAN` na PK). `CAMADA_LIMITE_PR` mantida em `OFFSET/FETCH` de
+  propósito (agregado de 1 linha, sem `id` pra comparar, custo irrelevante). Os 2
+  laços Java que consomem essas queries foram ajustados pra rastrear o maior `id` já
+  visto em vez de um offset: `publicarCamadaEmParalelo` (as 6 camadas de mapa) e
+  `prepararDesmatamentoOtimizado` (§9.54 do CLAUDE.md - usa a mesma query de
+  `DESMATAMENTO`, ganha o fix de graça mesmo sem a tarefa de rastreio de progresso
+  dela ter sido feita). Resultado da medição: ver seção 6.
+- **Mesmo padrão achado em outros 3 lugares do código, fora da publicação Gold** —
+  `QuarentenaService.java:157` (listagem da Quarentena, `UNION ALL` de várias
+  tabelas por `data_quarentena`), `ConjuntosDadosService.java:95` (dados de um lote)
+  e `LogAuditoriaRepositorio.java:95` (log de auditoria). **Decisão: não mexer
+  agora** — são paginação de **tela interativa** (usuário navega por "página N",
+  raramente vai muito fundo, e o `UNION ALL` do primeiro caso não tem uma chave
+  natural única pra paginação por chave funcionar direito), bem diferente do caso da
+  Gold (consumo sequencial de TODA a tabela, sempre bate no pior caso). Registrado
+  aqui só pra não esquecer, caso algum desses vire gargalo real (log de auditoria
+  crescendo sem limite é o mais provável de doer no futuro).
 
 ### 3.3. `paralelismo` (6 threads) parece sub-utilizado também na publicação de camadas
 - Amostrado `v$session` durante a publicação de `IMOVEL_RURAL`: só 1 sessão
@@ -296,10 +314,69 @@ pra 5,72 GB, backend pra 1,64 GB — nada alarmante, segue folgado.
   simplificação do contorno do Paraná inteiro (união dos 399 municípios), sempre o
   mesmo custo independente do circuito de ingestão. Não é alvo da correção.
 
-### 6.3. Resultado — DEPOIS da correção
+### 6.3. Resultado — DEPOIS da correção (`POST /api/gold/publicar`, 2026-11-07)
 
-*(a preencher depois de implementar a paginação por chave e repetir o mesmo
-procedimento: apagar a Gold local e publicar de novo)*
+Correção aplicada: `GoldPublicacaoService.SELECT_POR_CAMADA` (as 5 entradas que
+sofriam do problema) trocadas de `OFFSET/FETCH` pra paginação por chave (`WHERE id >
+? ORDER BY id FETCH FIRST ? ROWS ONLY`); os 2 laços que consomem essas queries
+(`publicarCamadaEmParalelo` e `prepararDesmatamentoOtimizado`) ajustados pra rastrear
+o maior `id` já visto em vez de um offset. `CAMADA_LIMITE_PR` mantida como estava
+(agregado de 1 linha, sem `id`). Suíte completa rodada antes de publicar: **803
+testes, 0 falhas** (só o `DatagisApplicationTests` de sempre).
+
+Antes de publicar, a Gold local inteira foi apagada (catálogo preservado:
+`mapa_camada`/`regra_calculo`/`tipo_indicador`) e os lotes voltaram de
+`PROMOVIDO_GOLD` pra `PROMOVIDO_SILVER`.
+
+Log bruto completo: `docs/gold_local_depois.log`.
+
+**Duração total: 10min38,7s** (11:58:36,656 → 12:09:15,360) — **contra 16min49s
+antes, uma redução de 37%** no circuito pequeno.
+
+| Fase | Antes | Depois | Variação |
+|---|---|---|---|
+| Indicadores | 9min57,6s | 7min54,2s | -20,6% |
+| MUNICIPIO | 4,6s | 2,3s | -50% |
+| LIMITE_PR | 29,5s | 28,4s | ~igual (não é alvo da correção, por design) |
+| **AREA_PROTEGIDA** | 5min14,5s | **1min18,2s** | **-75% (4x mais rápido)** |
+| DESMATAMENTO | 31,8s | 32,5s | ~igual (tabela pequena, 1.365 linhas) |
+| EMBARGO | 0,7s | 9,8s | +9,1s (ruído — volume irrisório, 124 linhas) |
+| **IMOVEL_RURAL** | 30,1s | **22,7s** | **-25%** |
+| FOCO_CALOR | 0,19s | 0,18s | ~igual (não paginada por chave, caminho próprio) |
+
+**Verificação de integridade (mesmo resultado antes/depois) — confirmada por
+contagem exata, nas 3 publicações já feitas nesta sessão (original antes de hoje,
+"antes" de hoje, "depois" de hoje):**
+
+| Tabela Gold | Linhas (idêntico nas 3 publicações) |
+|---|---|
+| `feature_publicada` | 16.266 |
+| `feature_publicada` (`AREA_PROTEGIDA`) | 8.375 publicadas + **2 puladas** (mesmo número de puladas antes/depois) |
+| `feature_publicada` (`IMOVEL_RURAL`) | 4.613, 0 puladas |
+| `feature_publicada` (`DESMATAMENTO`) | 1.365, 0 puladas |
+| `feature_publicada` (`EMBARGO`) | 124, 0 puladas |
+| `feature_publicada` (`MUNICIPIO`) | 399, 0 puladas |
+| `feature_publicada` (`LIMITE_PR`) | 1 |
+| `indicador_resultado` | 32.291 |
+| `sobreposicao_publicada` | 1.022 |
+| `imovel_publicado` | 4.613 |
+| `publicacao_indicadores_erro` | 0 |
+| `publicacao_camada_mapa_erro` | 2 (mesmas 2 geometrias inválidas de `AREA_PROTEGIDA`, consistente antes/depois) |
+
+Zero `WARN`/`ERROR` nos logs do backend durante toda a publicação "depois".
+
+**Conclusão: correção íntegra (mesmo resultado, zero erro novo) e otimizada
+(ganho real confirmado, maior exatamente na camada com mais volume e geometria mais
+pesada localmente). Fluxo de validação (apagar → corrigir → publicar → comparar)
+encerrado para este item — não são necessárias mais rodadas.**
+
+**Observação sobre a camada `AREA_PROTEGIDA` ter sido o maior ganho local:** é a
+camada mais parecida localmente com o cenário de produção que motivou a correção
+(muita linha, nunca filtrada pro circuito, inclui geometria nacional pesada das
+fontes 9/10 — item 2.2). Reforça a leitura de que o ganho real em produção
+(IMOVEL_RURAL, 558 mil linhas) deve ser proporcionalmente muito maior do que os 25%
+vistos aqui pra 4.613 linhas — mas isso só será confirmado quando/se a correção for
+aplicada em produção e a Gold de lá for republicada (fora do escopo de hoje).
 
 ## 7. Como usar este documento
 
