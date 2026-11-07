@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -41,6 +42,15 @@ import static org.mockito.Mockito.when;
  * construído na mão em cada teste, não via {@code @InjectMocks} (que zeraria o
  * parâmetro e quebraria {@code Executors.newFixedThreadPool(0)}).
  * docs/publicacao-gold-paralela.md §6.1.
+ *
+ * <p>{@code self} (campo privado {@code @Autowired @Lazy} usado pra auto-invocação
+ * passar pelo proxy AOP de {@code @Transactional}, ver javadoc do campo na classe
+ * real) nunca é injetado fora de um contexto Spring - sem setar na mão via
+ * {@link ReflectionTestUtils}, fica {@code null} e {@code self.recalcularImovel(...)}
+ * dentro de {@code calcularIndicadoresEmParalelo} lança {@code NullPointerException}.
+ * Setado como o próprio objeto (spy incluso) - equivalente ao comportamento de antes
+ * da auto-invocação existir, e os testes aqui não examinam comportamento
+ * transacional, só orquestração.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -57,6 +67,7 @@ class GoldPublicacaoServiceTest {
     @BeforeEach
     void init() {
         service = new GoldPublicacaoService(jdbcTemplate, simplificador, 1);
+        ReflectionTestUtils.setField(service, "self", service);
         when(jdbcTemplate.queryForObject(
                 eq("SELECT MAX(id) FROM gold.publicacao_indicadores"),
                 eq(Long.class))).thenReturn(1L);
@@ -112,6 +123,7 @@ class GoldPublicacaoServiceTest {
                 .thenReturn(codigos);
 
         var spyService = spy(new GoldPublicacaoService(jdbcTemplate, simplificador, 1));
+        ReflectionTestUtils.setField(spyService, "self", spyService);
         for (String cod : codigos) {
             doNothing().when(spyService).recalcularImovel(cod);
         }
@@ -133,6 +145,7 @@ class GoldPublicacaoServiceTest {
                 .thenReturn(codigos);
 
         var spyService = spy(new GoldPublicacaoService(jdbcTemplate, simplificador, 4));
+        ReflectionTestUtils.setField(spyService, "self", spyService);
         doNothing().when(spyService).recalcularImovel(anyString());
 
         var resultado = spyService.publicarTudo();
@@ -160,6 +173,7 @@ class GoldPublicacaoServiceTest {
                 .thenReturn(codigos);
 
         var spyService = spy(new GoldPublicacaoService(jdbcTemplate, simplificador, 4));
+        ReflectionTestUtils.setField(spyService, "self", spyService);
         for (String cod : codigos) {
             if (falhando.contains(cod)) {
                 doThrow(new RuntimeException("falha simulada em " + cod)).when(spyService).recalcularImovel(cod);
@@ -191,6 +205,7 @@ class GoldPublicacaoServiceTest {
                 .thenReturn(codigos);
 
         var spyService = spy(new GoldPublicacaoService(jdbcTemplate, simplificador, 4));
+        ReflectionTestUtils.setField(spyService, "self", spyService);
         doNothing().when(spyService).recalcularImovel(anyString());
 
         spyService.publicarTudo();

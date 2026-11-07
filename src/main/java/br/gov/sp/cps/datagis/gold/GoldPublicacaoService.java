@@ -14,9 +14,12 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Orquestra a transição Silver→Gold chamando as procedures PL/SQL (primeiro uso de
@@ -159,6 +162,23 @@ public class GoldPublicacaoService {
     private final SimplificadorGeometriaMapa simplificador;
     private final int paralelismo;
 
+    /**
+     * Referência ao próprio bean via proxy do Spring, injetada tardiamente (evita ciclo
+     * na construção) - mesmo padrão já usado em {@code TransicaoBronzeSilverService}.
+     * Necessária porque {@link #calcularIndicadoresEmParalelo} chama
+     * {@link #recalcularImovel} desta mesma classe dentro de cada thread do pool: uma
+     * chamada direta via {@code this} (auto-invocação) não passa pelo proxy AOP, então
+     * {@code @Transactional} não abre transação nenhuma - cada uma das 8 chamadas PL/SQL
+     * dentro de {@code recalcularImovel} ficava com commit (e connection do pool) próprio,
+     * em vez de 1 só pro imóvel inteiro. Achado otimizando a publicação Gold em volume
+     * real (docs/pendencias-pos-ingestao-parana-inteiro.md) - a chamada externa pelo
+     * controller (recalcular 1 imóvel avulso) já passava pelo proxy normalmente, então já
+     * era transacional; só a auto-invocação em massa não era.
+     */
+    @Autowired
+    @Lazy
+    private GoldPublicacaoService self;
+
     public GoldPublicacaoService(
             JdbcTemplate jdbcTemplate,
             SimplificadorGeometriaMapa simplificador,
@@ -171,8 +191,15 @@ public class GoldPublicacaoService {
     /**
      * Calcula os 7 indicadores (ISAP, IAE, IRL, IAPP, IDesmat, IFC, ICV — todos reais
      * desde {@code V072}/{@code V073}, LIZARDS-24) e publica o detalhe congelado para
-     * 1 imóvel.
+     * 1 imóvel. {@code @Transactional}: as 8 chamadas PL/SQL (7 cálculos + a publicação)
+     * viram 1 commit só, não 8 - além de reduzir round-trip/commit por imóvel (achado em
+     * volume real, docs/pendencias-pos-ingestao-parana-inteiro.md), fecha uma falha
+     * latente: se uma chamada no meio falhasse, as anteriores já tinham commitado
+     * (resultado parcial órfão em gold.indicador_resultado pro imóvel marcado como
+     * "falha"); agora falha no meio desfaz o imóvel inteiro, igual ao resto do projeto
+     * (nunca fica estado parcial pra trás).
      */
+    @Transactional
     public void recalcularImovel(String codImovel) {
         chamarCalculo("pkg_calculo_territorial", "calcular_isap", codImovel);
         chamarCalculo("pkg_calculo_territorial", "calcular_iae", codImovel);
@@ -365,7 +392,7 @@ public class GoldPublicacaoService {
             List<Future<?>> tarefas = codigosImovel.stream()
                     .<Future<?>>map(codImovel -> executor.submit(() -> {
                         try {
-                            recalcularImovel(codImovel);
+                            self.recalcularImovel(codImovel);
                             sucesso.incrementAndGet();
                         } catch (Exception e) {
                             log.warn("publicarTudo: falhou pro imóvel {}: {}", codImovel, e.getMessage());
