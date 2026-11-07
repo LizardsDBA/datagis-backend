@@ -49,6 +49,11 @@ services:
       # antes de religar o backend com paralelismo=6.
       APP_GOLD_PARALELISMO: "6"
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "16"
+      # Heap do backend (docker-compose.yml, base, fica em 8g de proposito - seguro pra
+      # maquina de dev no circuito pequeno de homologação). Subido pra 16g só aqui,
+      # mesmo raciocínio do paralelismo acima - achado ao vivo ingerindo o Paraná
+      # inteiro (OutOfMemoryError com 8g, CLAUDE.md §4.6/§9.47, 2026-10-31).
+      JAVA_TOOL_OPTIONS: "-Xmx16g"
     ports: !reset []
 
   frontend:
