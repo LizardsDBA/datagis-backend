@@ -378,6 +378,80 @@ fontes 9/10 — item 2.2). Reforça a leitura de que o ganho real em produção
 vistos aqui pra 4.613 linhas — mas isso só será confirmado quando/se a correção for
 aplicada em produção e a Gold de lá for republicada (fora do escopo de hoje).
 
+### 6.4. Segunda otimização: 1 commit por imóvel em vez de 8 (resultado inconclusivo localmente)
+
+**Achado:** `recalcularImovel` faz **8 chamadas PL/SQL sequenciais por imóvel**
+(`calcular_isap`, `calcular_iae`, `calcular_irl`, `calcular_iapp`, `calcular_idesmat`,
+`calcular_ifc`, `calcular_icv`, `publicar_imovel`), cada uma via `jdbcTemplate.
+execute(...)` **sem transação nenhuma** (`GoldPublicacaoService` não tinha nenhum
+`@Transactional`) — ou seja, 8 commits e 8 ciclos de pegar/devolver conexão do pool
+por imóvel, não 1. Em produção (558.692 imóveis), isso são ~4,47 milhões de chamadas/
+commits, contra os 558.692 que seriam necessários com 1 só por imóvel.
+
+**Correção aplicada** (mesmo commit `LIZARDS-63`): `recalcularImovel` ganhou
+`@Transactional`. Como o método é chamado por auto-invocação de dentro de
+`calcularIndicadoresEmParalelo` (mesma classe, roda em cada thread do pool), a
+chamada direta via `this` não passa pelo proxy AOP e a anotação não teria efeito —
+mesmo problema já resolvido antes em `TransicaoBronzeSilverService` (`CLAUDE.md`
+§10.11), mesma solução aqui: campo `self` (`@Autowired @Lazy`) injetado tardiamente,
+chamado como `self.recalcularImovel(...)` só nesse ponto de auto-invocação (a
+chamada externa, pelo controller, já passava pelo proxy normalmente).
+
+**Dois motivos pra essa correção, um de performance (hipótese) e um de
+integridade (confirmado):**
+- **Performance (hipótese, não confirmada aqui):** menos round-trip e menos commit
+  deveria custar menos em volume grande.
+- **Integridade (bug real, confirmado por leitura de código):** sem transação, se a
+  4ª chamada (por exemplo) falhasse, as 3 anteriores já tinham commitado - o imóvel
+  ficava com resultado **parcial órfão** em `gold.indicador_resultado` (ex.: só ISAP/
+  IAE/IRL calculados) e ainda assim marcado como "falha" em `gold.
+  publicacao_indicadores_erro`, sem nenhuma limpeza. Com `@Transactional`, falha no
+  meio desfaz o imóvel inteiro - nunca fica estado parcial pra trás, mesmo princípio
+  All-or-Nothing já usado no resto do projeto (Bronze→Silver).
+
+**Testes:** os 5 pontos onde `GoldPublicacaoServiceTest` constrói o serviço
+manualmente (fora de contexto Spring, `@Mock`/`spy`) precisaram de
+`ReflectionTestUtils.setField(service, "self", service)` - sem Spring, o campo
+`@Autowired` fica `null` e `self.recalcularImovel(...)` lançava `NullPointerException`
+(capturado pelo try/catch de "falha no imóvel", 4 testes quebraram com contagem de
+sucesso zerada até o fix). Suíte completa depois do fix: **803 testes, 0 falhas**
+(só o `DatagisApplicationTests` de sempre).
+
+**Resultado da medição local (mesmo fluxo: apagar Gold → publicar → comparar),
+3ª publicação da sessão:**
+
+| Fase | Só paginação (§6.3) | + fix transacional | Variação |
+|---|---|---|---|
+| Indicadores | 7min54,2s | 7min45,5s | -1,8% |
+| MUNICIPIO | 2,3s | 3,3s | ruído |
+| LIMITE_PR | 28,4s | 27,9s | ruído |
+| AREA_PROTEGIDA | 1min18,2s | 1min36,8s | **+23,8% (mais lento)** |
+| DESMATAMENTO | 32,5s | 26,8s | ruído |
+| EMBARGO | 9,8s | 0,76s | ruído (o 9,8s de antes já era ruído) |
+| IMOVEL_RURAL | 22,7s | 22,7s | igual (não é alvo deste fix) |
+| **TOTAL** | **10min38,7s** | **10min44,1s** | **+0,85%** |
+
+Log bruto: `docs/gold_local_v3_transacional.log`.
+
+**Integridade confirmada de novo** (4ª publicação idêntica em contagem às 3
+anteriores): `feature_publicada`=16.266, `indicador_resultado`=32.291,
+`sobreposicao_publicada`=1.022, `imovel_publicado`=4.613,
+`publicacao_indicadores_erro`=0, `publicacao_camada_mapa_erro`=2. Zero
+`WARN`/`ERROR` nos logs.
+
+**Conclusão honesta: sem ganho de performance mensurável localmente** - a variação
+entre fases (`AREA_PROTEGIDA` mais lenta, `indicadores` um pouco mais rápido) é
+ruído de máquina de dev (processos concorrentes, sem isolamento), não sinal real; o
+total ficou dentro de 1% do anterior, essencialmente empatado. Faz sentido em
+retrospecto: Oracle e backend rodam na mesma máquina via Docker (rede loopback,
+disco SSD local) - round-trip e commit já são baratíssimos nesse cenário, o efeito
+cumulativo de eliminar ~3,9 milhões de chamadas só deve aparecer em volume real
+(produção), o que está fora do escopo de hoje pra confirmar.
+
+**Decisão: manter a correção mesmo sem ganho de performance comprovado aqui**, pelo
+motivo de integridade (bug real e confirmado, independente de qualquer medição de
+tempo) - reverter a devolveria.
+
 ## 7. Como usar este documento
 
 Atualizar a cada novo achado, na seção 3 (se ainda não corrigido) ou movendo pra
