@@ -1036,3 +1036,95 @@ que precisa ser repetido só se o volume do Oracle de produção for recriado do
 
 Com isso, não há mais pré-requisito pendente pro deploy do paralelismo (indicadores +
 camadas de mapa) em produção.
+
+## 16. Investigação: calcular ISAP/IAE em lote (set-based) em vez de 1 imóvel por vez — 2026-11-08
+
+Pergunta do usuário: dá pra acelerar calculando vários imóveis numa única consulta SQL
+(JOIN espacial de uma vez, agrupado por `cod_imovel`) em vez de uma `SDO_RELATE`
+correlacionada por imóvel? Investigado via um agente de planejamento (achados do §11
+acima + código PL/SQL atual lido por completo) e testado ao vivo no circuito local.
+
+**Premissa de entrada, já desconfiada**: `calcular_isap` 9ms/imóvel, `calcular_iae`
+1,3ms/imóvel (§11.4) — ganho teórico máximo de eliminar os dois por completo é só
+~93 minutos de CPU no total pra escala do Paraná inteiro (558.692 × ~10,3ms), pequeno
+frente às 11h52min observadas na publicação real completada em 2026-11-08 (ver nota
+abaixo). Expectativa de entrada: provavelmente não vale.
+
+### 16.1. Passo 1 — Geometria "monstro" em `area_protegida`/`embargo_ambiental`?
+Mesma classe de bug já achada e corrigida no IDesmat (1 polígono do PRODES com 317 mil
+vértices dominando 94% do tempo) — nunca tinha sido checada nessas duas tabelas.
+`SDO_UTIL.GETNUMVERTICES` no banco local: `area_protegida` máx. 146.700 vértices (id
+7826), `embargo_ambiental` máx. 1.363 vértices. **Nada parecido com o outlier do
+PRODES — descartado como causa.**
+
+### 16.2. Passo 2 — Baseline local do método atual (ISAP+IAE, circuito de homologação)
+Loop PL/SQL chamando `calcular_isap`+`calcular_iae` pra todo `silver.imovel_rural`
+local (4.611 imóveis), `SET TIMING ON`:
+- 1ª rodada (dado novo): **32,51s**.
+- 2ª rodada (hash já existe em `registrar_resultado`, idempotência): **30,00s** —
+  quase igual à 1ª, confirma que o custo de idempotência é desprezível (bate com os
+  0,7ms/imóvel já medidos pra `publicar_imovel`/`registrar_resultado` no §11.4); o
+  custo real está na busca de candidatos + validação + dissolve, não na escrita.
+
+### 16.3. Passo 3 — Protótipo set-based (SEM mudar código)
+```sql
+SELECT COUNT(*), COUNT(DISTINCT i.cod_imovel)
+  FROM silver.imovel_rural i, silver.area_protegida a
+ WHERE SDO_RELATE(a.geometria, i.geometria, 'mask=ANYINTERACT') = 'TRUE';
+-- 808 candidatos, 395 imóveis com overlap — 20,73s
+```
+**20,73s só pra achar candidatos do ISAP** (sem validação de geometria, sem dissolve,
+sem IAE) — já mais da metade do tempo do método atual **completo** (ISAP+IAE+
+validação+dissolve+clamp+escrita, 30-32s). `EXPLAIN PLAN` confirma o motivo, exatamente
+como o risco já antecipado na investigação: `NESTED LOOPS` com `TABLE ACCESS FULL` em
+`IMOVEL_RURAL` (linha externa) + `DOMAIN INDEX` por sondagem em `IDX_AREA_PROTEGIDA_GEOM`
+— **estruturalmente idêntico** ao plano de execução que a procedure por-imóvel já usa
+hoje (mesmo índice espacial, mesmo número de sondagens), só embrulhado numa única
+consulta SQL em vez de N chamadas PL/SQL. Confirma ao vivo o que o §11 já tinha achado
+indiretamente (consolidar round-trips só deu 2,5%): **o gargalo nunca esteve no número
+de idas-e-voltas por imóvel, está no custo do próprio plano de execução (nested loop +
+sondagem de índice), que o SQL set-based não muda.**
+
+**Volume local confirmado representativo** (não é undersizing do circuito pequeno):
+`area_protegida` 8.377 linhas, `embargo_ambiental` 124 — mesma ordem de grandeza
+estadual completa já citada no §11.4 (8.361), não um subconjunto filtrado por
+município (essas tabelas nunca são filtradas por circuito).
+
+### 16.4. Decisão
+**Critério do plano** (só prosseguir pro redesenho em lote se o ganho medido fosse
+≥3-5x): não atingido — o resultado sugere **sem ganho, possivelmente pior** (20,73s de
+uma fração do trabalho já supera os 30-32s do método completo). **Não implementado o
+passo 4 (procedure em lote)** — confirma, com medição real, que esse caminho não vale o
+investimento de reescrever `pkg_calculo_territorial` + a orquestração Java.
+
+### 16.5. Gap em aberto, não resolvido por esta investigação
+A publicação real em escala (Paraná inteiro, finalizada 2026-11-08 04:45, 11h52min
+total pra indicadores) processou a ~13,1 imóveis/s com paralelismo=6 (~2,18
+imóveis/s/thread, ~459ms/imóvel-equivalente serial). O circuito local mede ISAP+IAE
+sozinhos em ~6,5-7ms/imóvel (serial, sem paralelismo) — mesmo somando os outros 6
+indicadores+publicação (baratos pelo §11.4), a extrapolação não chega nem perto dos
+~459ms/imóvel observados em produção. **Essa discrepância não foi explicada por esta
+investigação** — não é geometria monstro (§16.1), não é o SQL set-based vs. por-imóvel
+(§16.3), e PGA não ajudou ao vivo no servidor (testado 2026-11-07, `pga_aggregate_target`
+3,2G→8G sem efeito mensurável no ritmo real). Hipóteses não testadas: contenção real
+sob paralelismo=6 (só testado localmente em serial, nunca em paralelo local pra
+comparar), hardware/IO do servidor mais lento que a máquina de dev, ou um indicador
+mais caro em volume real do que no circuito pequeno (ex.: `calcular_iapp`, cujo nested
+loop intra-imóvel pode ter mais fragmentos reais de `app_declarada`/
+`vegetacao_nativa_declarada` por imóvel na escala estadual do que no circuito de 3
+cidades). Não investigado nesta sessão — registrado aqui pra não resolver de novo sem
+necessidade.
+
+**Comparação direta feita** (não deixada só como hipótese): o log local mais recente
+pós-correções (`docs/gold_local_v3_transacional.log`, paralelismo=2 local, todos os 7
+indicadores, não só ISAP/IAE) deu `INDICADORES: CONCLUIDA` em 7min45,5s pra 4.613
+imóveis (12:35:19→12:43:05) → **~202ms/imóvel/thread** (serial-equivalente). Produção
+(paralelismo=6, 11h52min pra 558.692 imóveis) → **~459ms/imóvel/thread**. **Produção é
+~2,3x mais lenta por thread que local**, mesmo com `area_protegida`/`embargo_ambiental`
+do mesmo tamanho estadual nos dois ambientes — desloca a suspeita de "SQL/algoritmo"
+(já descartado pelo §16.3-16.4) pra "ambiente" (servidor com 6 outros containers
+dividindo os mesmos 8 núcleos — GeoServer, Keycloak, Caddy, Oracle — e/ou I/O mais
+lento que a máquina de dev, só observável sob carga real prolongada, não replicável
+num teste local rápido). Próximo passo, se valer a pena: profiling de CPU/IO do
+servidor **durante** uma publicação real (`top`/`iostat` ao vivo), não mais mudança de
+código.

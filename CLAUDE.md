@@ -3054,6 +3054,31 @@ Repositório `datagis-frontend`, entregue na `feat/homepage-dashboard` (PR #35).
   próxima entrega. Quando chegar, o interruptor da Minha conta vira o lugar de gerar o token
   (só para quem o admin liberou).
 
+### 9.54. Roadmap: `prepararDesmatamentoOtimizado` (Gold) sem rastreio de progresso — **[EM ABERTO, achado 2026-10-31]**
+Durante a 1ª publicação Gold contra o Paraná inteiro (todas as 17 fontes na Silver,
+~558 mil imóveis), `GoldPublicacaoService.publicarTudo()` ficou "parado" aos olhos de
+quem acompanhava: `gold.publicacao_indicadores.total_processado` ficou em `0` por vários
+minutos, e o `htop` do servidor mostrava só 1 núcleo ocupado (parecia que o
+`APP_GOLD_PARALELISMO=6` não tinha pegado — não era isso, a env var confere certa via
+`docker compose exec backend env`).
+
+**Causa real**: `prepararDesmatamentoOtimizado()` (chamada 1x, **antes** do loop
+paralelo por imóvel, §9.36/`docs/publicacao-gold-paralela.md`) simplifica e cacheia a
+geometria de cada linha de `silver.desmatamento` em `gold.desmatamento_otimizado` — de
+propósito **sequencial, 1 núcleo só**, sem usar o pool de `paralelismo` threads. O
+comentário no código estima "~1.400 linhas"; com o PRODES ingerido pra Paraná inteiro
+nesta sessão (§9.36 vira só um subconjunto histórico), `silver.desmatamento` real tem
+**38.167 linhas** — a etapa levou vários minutos, 100% invisível em qualquer
+endpoint/tela (só dava pra inferir rodando `SELECT COUNT(*) FROM
+gold.desmatamento_otimizado` direto no banco e comparando com o total de
+`silver.desmatamento`).
+
+**Não implementado agora** (decisão explícita: "não hoje, mas vamos deixar mapeado").
+Quando entrar: mesmo padrão já usado 2x nesta sessão pra ingestão/Bronze→Silver (§9.38)
+— não mexer na lógica interna, só envolver por fora com uma linha de progresso
+consultável (fase própria, tipo `PREPARANDO_DESMATAMENTO`, antes de `CALCULANDO_
+INDICADORES`, com contador `processado/total` sobre as linhas de `silver.desmatamento`).
+
 ### 9.42. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
 Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
 todas as telas do sistema. A tela de login não entra: ela é do Keycloak, outro container,

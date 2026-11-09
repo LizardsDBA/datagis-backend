@@ -49,13 +49,21 @@ final class PaginadorUrlGeoJson {
     static final int TAMANHO_MINIMO_PAGINA = 50;
 
     /**
-     * Trava de segurança: nenhuma fonte real do catálogo hoje chega perto disso (a
-     * maior é o CAR estadual inteiro, ~556 mil registros = ~556 páginas). Existe só
-     * pra nunca entrar num loop infinito silencioso se algum servidor se comportar de
-     * um jeito inesperado (ex.: sempre devolver exatamente TAMANHO_PAGINA registros e
-     * nunca uma página menor pra sinalizar o fim).
+     * Trava de segurança contra loop infinito silencioso (ex.: servidor sempre devolve
+     * exatamente TAMANHO_PAGINA registros e nunca uma página menor pra sinalizar o
+     * fim). Não é um teto de volume de dados - é só um número de chamadas HTTP
+     * improvável de acontecer de verdade.
+     *
+     * [2026-10-31] Era 1000, calibrado só contra o CAR (~556 mil registros, ~556
+     * páginas a TAMANHO_PAGINA cheio). Estourou ao vivo na ingestao real da Vegetacao
+     * Nativa (IAT/PR, ~393 mil registros): geometria muito mais densa que o perímetro
+     * do CAR fez o motor de retentativa (ver javadoc da classe) reduzir bastante o
+     * tamanho de pagina em boa parte do percurso, consumindo 1000 chamadas pra so
+     * 371.250 registros (media de ~371/pagina, bem abaixo de TAMANHO_PAGINA) -
+     * faltavam ~22 mil registros quando a trava disparou. Subido pra 4000 pra dar
+     * margem real (cobre até ~200 mil registros mesmo presa no piso de 50/pagina).
      */
-    static final int MAX_PAGINAS = 1000;
+    static final int MAX_PAGINAS = 4000;
 
     private static final Pattern PARAMS_PAGINACAO = Pattern.compile(
             "&(startIndex|count|maxFeatures|resultOffset|resultRecordCount)=[^&]*",

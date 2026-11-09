@@ -12,6 +12,12 @@ services:
     # pra esta digest em 2026-10-10, Oracle Database 26ai (Oracle Linux 8.10).
     image: container-registry.oracle.com/database/enterprise@sha256:224c51ce1555ff7b75882a84b621c52b6d5ece00c96b0c5cd84e667333ad5cd7
     environment:
+      # Container nasce em UTC por padrao - SYSTIMESTAMP/SYSDATE refletem o relogio
+      # do SO, nao um config do Oracle (DBTIMEZONE so afeta TIMESTAMP WITH LOCAL
+      # TIME ZONE, que este projeto nao usa - tudo e TIMESTAMP puro). Sem isso, toda
+      # data_add/ultima_execucao_em etc. grava 3h a frente de Brasilia (CLAUDE.md
+      # §9.47, achado nunca corrigido ate agora).
+      TZ: America/Sao_Paulo
       ORACLE_PWD: ${ORACLE_PASSWORD}
       # Mesmo nome de sempre (FREEPDB1) de proposito - evita precisar trocar
       # SPRING_DATASOURCE_URL e todo o resto do codigo/testes que ja referencia esse
@@ -118,6 +124,10 @@ services:
       keycloak:
         condition: service_started
     environment:
+      # Mesmo motivo do oracle acima (CLAUDE.md §9.47) - sem isso, qualquer
+      # LocalDateTime.now()/new Date() do backend tambem fica 3h a frente de
+      # Brasilia (a JVM pega o fuso padrao do SO do container na subida).
+      TZ: America/Sao_Paulo
       SPRING_PROFILES_ACTIVE: docker
       SPRING_DATASOURCE_URL: jdbc:oracle:thin:@oracle:1521/FREEPDB1
       SPRING_DATASOURCE_USERNAME: ${APP_USER}
@@ -128,7 +138,15 @@ services:
       GEOSERVER_URL: http://geoserver:8080/geoserver
       APP_KEYCLOAK_PROVISIONAR: "true"
       APP_KEYCLOAK_USUARIOS_DEV: "true"
-      JAVA_TOOL_OPTIONS: "-Xmx8g"
+      # [2026-10-31] Era -Xmx8g fixo: OutOfMemoryError ingerindo fontes do CAR (APP/RL/
+      # Vegetacao Nativa, IAT/PR) pra todo o Paraná - a ingestao GeoJSON busca todas as
+      # paginas antes de gravar (PaginadorUrlGeoJson), e geometria densa em ~380 mil
+      # features estourava 8g no meio do caminho. Testado contra os ~393 mil registros
+      # da Vegetacao Nativa com 16g, sem erro - mas isso foi medido contra o servidor
+      # (8 vCPU, 31 GB). Parametrizado como APP_GOLD_PARALELISMO (CLAUDE.md §4.6/§9.47):
+      # default 8g aqui (seguro pra maquina de dev, que ingere só o circuito pequeno de
+      # homologação); só o override de produção (docker-compose.prod.yml) sobe pra 16g.
+      JAVA_TOOL_OPTIONS: "-Xmx${APP_BACKEND_XMX:-8g}"
       # Otimizacao da publicacao Gold (docs/publicacao-gold-paralela.md, secao 5.2).
       # A decisao original da equipe era deixar o ambiente local em 1 (sequencial,
       # igual sempre foi). Default ajustado pra 2 a pedido do time - ganho pequeno,

@@ -55,3 +55,8 @@ docker-compose.override.yml
 
 # Segredos do ambiente publicado (docker-compose.prod.yml) - so no servidor
 .env.prod
+
+### Scripts locais de ingestao/quarentena (guia.md) ###
+# So pra rodar localmente - nunca pra commitar. Inclui ingestao.csv/transicao.csv
+# gerados a cada execucao.
+/scripts/
