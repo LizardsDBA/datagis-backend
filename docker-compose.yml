@@ -88,11 +88,15 @@ services:
       SKIP_DEMO_DATA: "true"
       GEOSERVER_ADMIN_USER: admin
       GEOSERVER_ADMIN_PASSWORD: ${GEOSERVER_ADMIN_PASSWORD}
-      EXTRA_JAVA_OPTS: "-Xms256m -Xmx1g"
+      EXTRA_JAVA_OPTS: "-Xms256m -Xmx1g -XX:+UseG1GC -XX:G1PeriodicGCInterval=60000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30"
     ports:
       - "127.0.0.1:${GEOSERVER_PORT:-8085}:8080"
     volumes:
       - geoserver-data:/opt/geoserver_data
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Configura o GeoServer pela API REST (workspace, conexao com o Oracle, camadas e

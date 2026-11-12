@@ -4,6 +4,7 @@
 # geoserver-config) e pode rodar de novo quantas vezes quiser: o que ja existe e
 # atualizado, nao duplicado.
 #
+#   desempenho         -> log so de aviso/erro e teto de memoria/tempo por imagem
 #   workspace "datagis"
 #   datastore "gold"   -> Oracle, schema GOLD, usuario do backend (APP_USER)
 #   7 camadas          -> as views gold.vw_mapa_* (V080), cada uma com o estilo
@@ -46,6 +47,28 @@ xml_escape() {
     printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
+# Troca o valor de uma tag simples (<tag>valor</tag>) no XML que chega pela entrada.
+trocar_tag() {
+    sed -e "s#<$1>[^<]*</$1>#<$1>$2</$1>#"
+}
+
+# Muda campos de uma configuracao do GeoServer sem mexer no resto: le o XML inteiro,
+# troca so as tags pedidas e devolve inteiro. Um PUT so com os campos novos zeraria os
+# outros (inclusive o <enabled> do servico).
+#   ajustar_config <descricao> <caminho REST> <tag> <valor> [<tag> <valor> ...]
+ajustar_config() {
+    descricao="$1"; caminho="$2"; shift 2
+    xml=$(curl -s -u "$AUTH" "$GS/rest/$caminho.xml")
+    while [ "$#" -ge 2 ]; do
+        case "$xml" in
+            *"<$1>"*) xml=$(printf '%s' "$xml" | trocar_tag "$1" "$2") ;;
+            *) echo "  ERRO $descricao: <$1> nao veio em $caminho"; exit 1 ;;
+        esac
+        shift 2
+    done
+    exigir "$descricao" -X PUT -H 'Content-Type: text/xml' "$GS/rest/$caminho" --data-binary "$xml"
+}
+
 echo "[geoserver-config] aguardando o GeoServer em $GS (a 1a subida baixa as extensoes, leva uns minutos)..."
 tentativas=0
 until [ "$(http "$GS/rest/about/version.json")" = "200" ]; do
@@ -55,6 +78,17 @@ until [ "$(http "$GS/rest/about/version.json")" = "200" ]; do
     fi
     sleep 5
 done
+
+echo "[geoserver-config] desempenho (sem aumentar a memoria do container)"
+# Log so de aviso e erro. No DEFAULT_LOGGING cada pedido de mapa gravava ~20 linhas no
+# stdout do Docker e em logs/geoserver.log no volume: ~10 MB em uma hora de uso do mapa,
+# so crescendo, e escrita em disco a cada imagem.
+ajustar_config "log so de aviso e erro (PRODUCTION_LOGGING)" logging level PRODUCTION_LOGGING
+# Teto por imagem: um WIDTH/HEIGHT exagerado (o proxy repassa o que a tela pedir) nao
+# derruba o GeoServer, que tem 1 GB de heap. A tela pede o tamanho do mapa com folga
+# (~1650x1000 px, uns 7 MB de memoria de desenho); 64 MB e 60 s sobram.
+ajustar_config "WMS: ate 64 MB e 60 s por imagem" services/wms/settings \
+    maxRequestMemory 65536 maxRenderingTime 60
 
 echo "[geoserver-config] workspace"
 if [ "$(http "$GS/rest/workspaces/$WS")" != "200" ]; then
@@ -126,6 +160,25 @@ done
 for estilo in $ESTILOS_EXTRAS; do
     publicar_estilo "$estilo"
 done
+
+# Area protegida so com o que toca o Parana. Duas fontes dela sao do Brasil inteiro (MMA
+# CNUC e SFB CNFP, arquivos nacionais, sem filtro na URL) e a Silver/Gold guardam tudo como
+# a fonte entregou - em 2026-11-11, 8.000 das 8.375 feicoes ficavam totalmente fora do
+# estado. O filtro fixo na camada vale pra imagem do mapa, pras consultas (cruzamento,
+# clique) e pra contagem da legenda; o dado nao muda e os indicadores nunca dependeram
+# disso (o ISAP so cruza com imoveis do PR). Contorno: a camada LIMITE_PR publicada.
+FILTRO_AREA_PROTEGIDA="INTERSECTS(GEOMETRIA, querySingle('$WS:vw_mapa_limite_pr','GEOMETRIA','INCLUDE'))"
+exigir "camada vw_mapa_area_protegida so com o que toca o Parana" -X PUT -H 'Content-Type: text/xml' \
+    "$GS/rest/workspaces/$WS/datastores/$DS/featuretypes/vw_mapa_area_protegida" \
+    --data-binary "<featureType><cqlFilter>$(xml_escape "$FILTRO_AREA_PROTEGIDA")</cqlFilter></featureType>"
+
+# Cache das camadas limpo antes da conferencia, que monta uma camada de cada vez. Logo
+# depois de o GeoServer subir, a tela pede varias camadas ao mesmo tempo, e numa delas o
+# tipo da view ja saiu sem a coluna ID ("Could not find mapping for 'ID'" no log): a
+# camada passa a falhar em toda consulta ("Attribute 'ID' not found", e na tela "Nao foi
+# possivel consultar a camada") ate o cache ser limpo. Aconteceu com vw_mapa_area_protegida
+# em 2026-11-11, depois de recriar so o container do GeoServer.
+exigir "cache de camadas limpo (as camadas sao montadas de novo, uma a uma)" -X POST "$GS/rest/reset"
 
 echo "[geoserver-config] conferencia (feicoes por camada, via WFS):"
 for camada in $CAMADAS; do

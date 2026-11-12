@@ -3079,6 +3079,73 @@ Quando entrar: mesmo padrão já usado 2x nesta sessão pra ingestão/Bronze→S
 consultável (fase própria, tipo `PREPARANDO_DESMATAMENTO`, antes de `CALCULANDO_
 INDICADORES`, com contador `processado/total` sobre as linhas de `silver.desmatamento`).
 
+### 9.55. Mapa mais leve, GeoServer mais enxuto e tela reorganizada — **[FEITO e validado no navegador, 2026-11-11]**
+Atualiza a §9.45/§9.46. Medido antes de mexer: o GeoServer sozinho atende 140 tiles em ~1 s
+e o proxy do backend também é rápido. A lentidão vinha da **quantidade** de pedidos (110–122
+WMS só para abrir a tela, todas as camadas ligadas, ~20 tiles de 256 px por camada
+disputando ~6 conexões do navegador) e do GeoJSON grande dos cruzamentos (desmatamento em
+Ponta Grossa = 1,7 MB, desenhado em SVG).
+- **WMS em imagem única (`camadaWmsAutenticada.js`):** uma imagem por camada, do tamanho do
+  mapa + 25% de folga, pedida no `moveend` (não mais `L.TileLayer.WMS`). Painel próprio
+  `camadasWms` (z 250, entre fundo/tiles e a máscara). A imagem anterior só sai quando a nova
+  carregou; pedido de vista velha é abortado/descartado; cache em memória de 40 imagens (ligar
+  e desligar camada não pede de novo). Formato `image/png8` (~2,5x menor). Sem emendas entre
+  tiles nas camadas do GeoServer. **Abrir a tela: 2 WMS + 5 WFS, ~280 KB** (antes ~120 WMS,
+  ~1 MB).
+- **Camadas abrem desligadas**, só "Limites municipais" ligado. Na visão Imóveis a camada de
+  imóveis liga sozinha. Cruzamentos da seleção (WFS `INTERSECTS`) só das camadas **ligadas**;
+  ligar uma com algo selecionado busca na hora. Camada desligada com seleção mostra "Ligue a
+  camada para destacar o que cruza a seleção".
+- **Seleção por cima:** município/imóvel selecionado (amarelo) no painel `selecao` (z 450,
+  acima do `overlayPane` dos cruzamentos; `pointer-events: none` pra não roubar a etiqueta
+  das feições de baixo). `preferCanvas: true` no mapa.
+- **Sem a faixa cinza:** a máscara fora do Paraná deixou de ser opaca (`--cor-slate-100`) e
+  virou um véu de 60% na cor do cartão (`--cor-branco`): entorno visível, esmaecido.
+  **Mapa preso à moldura da visão geral:** `maxBounds` = a área visível depois do
+  `fitBounds` do estado (antes `limitesParana.pad(0.05)`) + `minZoom`; na visão geral não há
+  o que arrastar, aproximando só anda dentro dela. Emendas do OpenStreetMap no zoom
+  fracionado cobertas com tile de 256,5 px no painel `fundo` (sem o `plus-lighter`).
+- **Tela reorganizada (mesmas ideias):** quantidades dos KPIs em cartão; notas à direita do
+  título; painel lateral em dois cartões ("Aviso de interseção" e "Camadas do mapa", com
+  grupos Base / Camadas de alerta / Indicadores sem camada no mapa) da altura do mapa — quem
+  rola é a lista de camadas; dica do clique virou etiqueta dentro do mapa.
+- **GeoServer (`configurar.sh`, aplicado sem reiniciar):** `PRODUCTION_LOGGING` — no
+  `DEFAULT_LOGGING` cada GetMap gravava ~20 linhas (10,5 MB / 270 mil linhas de `docker logs`
+  e 9 MB em `logs/geoserver.log` no volume); agora 0 por pedido normal. WMS com teto de
+  64 MB e 60 s por imagem (um 20000x20000 pelo proxy é recusado em vez de estourar o heap de
+  1 GB). Função nova `ajustar_config`: lê o XML inteiro, troca só as tags e devolve — PUT
+  parcial zeraria os outros campos (inclusive `<enabled>`).
+- **Compose (vale no próximo `docker compose up -d geoserver`):** mesmo `-Xmx1g`, mais G1
+  com GC periódico (`G1PeriodicGCInterval=60000`, `Min/MaxHeapFreeRatio=10/30`) pra devolver
+  heap ocioso ao sistema; log do Docker do GeoServer limitado a 3 x 10 MB.
+- **Pegadinha achada ao recriar o GeoServer:** logo após subir, a tela pediu várias camadas
+  ao mesmo tempo e o tipo de `vw_mapa_area_protegida` foi montado sem a coluna `ID` (log:
+  `Could not find mapping for 'ID'`, uma vez só). Ficou em cache: toda consulta da camada
+  dava `Attribute 'ID' not found` (HTTP 500) e a tela mostrava "Não foi possível consultar a
+  camada", com a caixa desabilitada. As outras views (mesma definição) estavam ok.
+  `configurar.sh` agora faz `POST /rest/reset` antes da conferência, que monta as camadas
+  uma a uma. Se reaparecer (GeoServer reiniciado sozinho, ex.: reboot):
+  `docker compose run --rm geoserver-config`.
+- **Área protegida só do Paraná no mapa (decisão do usuário, 2026-11-11):** nada recortava
+  pelo estado — o recorte da validação foi desligado na LIZARDS-49 (`ENVELOPE_PARANA` ficou
+  sem uso) e MMA CNUC e SFB CNFP são arquivos nacionais. Na Gold, 8.000 das 8.375 feições
+  ficavam totalmente fora do PR (assentamentos no Pará, UCs no Amazonas...). Escolhido
+  filtrar **só na camada do GeoServer** (`cqlFilter` da `vw_mapa_area_protegida`, posto pelo
+  `configurar.sh`: `INTERSECTS` com `querySingle` da `vw_mapa_limite_pr`); Silver e Gold
+  continuam com tudo. Vale pra imagem, cruzamentos, clique e contagem (agora 375). UC que
+  atravessa a divisa fica inteira. Custo: visão geral até mais rápida (desenha menos), zoom
+  num município ~+0,15 s. Indicadores não mudam (ISAP só cruza com imóveis do PR).
+  Descartados: filtrar na publicação da Gold ou religar o recorte na Bronze→Silver.
+  **[EM ABERTO]** 23 das 375 áreas protegidas do PR estão na Gold como **ponto**, não
+  polígono (ex.: Parque Estadual de Vila Velha, `0000.41.0550`) — dado de origem ou da
+  publicação, não do filtro; não desenham no estilo de polígono. Investigar.
+- **Testes:** `camadaWmsAutenticada.test.js` reescrito (8, mapa Leaflet real no jsdom:
+  tamanho com folga, painel, cache, troca sem piscar, `setParams`, camada removida no meio,
+  erro XML e 403); `ConjuntosView.test.js` 52 (novos: abre só com limites, cruzamentos só
+  das ligadas, imóveis ligam na visão Imóveis, seleção no painel de cima; ajustados: máscara
+  semitransparente, moldura como limite). Suíte do frontend 475: 474 ok + 1 timeout
+  intermitente na `AuditoriaView` (passa sozinha, 14/14); build ok.
+
 ### 9.42. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
 Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
 todas as telas do sistema. A tela de login não entra: ela é do Keycloak, outro container,
