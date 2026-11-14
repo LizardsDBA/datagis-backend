@@ -2500,11 +2500,7 @@ Branch `feat/mapa-cobertura`, a partir da `sprint-2`. A tela está na §9.46.
     ingestão dos embargos. `POST /api/gold/publicar` faz os dois juntos; publicar só uma
     camada pela tela da Gold deixa o descompasso. A tela mostra a data da publicação dos
     indicadores para o usuário perceber.
-  - **Camadas de IRL, IAPP e ICV no mapa** dependem da entrega de outro integrante (camadas
-    de Reserva Legal, APP e Vegetação Nativa na Gold). Quando chegar: view nova
-    `vw_mapa_*` + metadado, nome na lista `CAMADAS` do `GeoServerProxyService` e do
-    `configurar.sh`, um `.sld`, e preencher `camada` em `CAMADAS_INDICADOR` da tela. O aviso
-    desses 3 indicadores já funciona sem a camada, porque vem do valor.
+  - **[RESOLVIDO na §9.57]** Camadas de IRL, IAPP e ICV no mapa.
 
 ### 9.46. Mapa de cobertura — frontend — **[FEITO e validado no navegador, 2026-10-20, `LIZARDS-35`]**
 Repositório `datagis-frontend`, branch `feat/mapa-cobertura`, a partir da `sprint-2`.
@@ -3205,6 +3201,74 @@ ficou nela por já estar aberta, não por ser a mesma entrega):**
 (deduplicar pedido WMS em andamento pra mesma URL — bug separado achado no mesmo Jam,
 a camada de imóveis sendo pedida 2x pro mesmo bbox por causa de 2 watchers do Vue
 reagindo quase juntos; esse sim resolvido, com teste).
+
+### 9.57. Camadas de mapa que faltavam para IRL, IAPP e ICV — **[FEITO e validado contra o Oracle/GeoServer local, 2026-11-14, `LIZARDS-35`]**
+Branch `feat/camadas-mapa-irl-iapp-icv` (backend e frontend), a partir da `sprint-3`.
+Fecha o `[EM ABERTO]` da §9.45/§9.46 (que já previa exatamente esta receita) — IRL,
+IAPP e ICV sempre calcularam de verdade (`V072`/`V073`, §9.37) e já apareciam nos KPIs
+e no aviso da tela; só faltava a camada de MAPA (a tela mostrava "Camada ainda não
+publicada no mapa" pros 3, igual ao print que motivou a investigação). Confirmado que
+não era regressão de nenhuma PR recente: gap documentado desde a entrega original do
+mapa (§9.45, 2026-10-20) — não existia task nova pra isso, por decisão do usuário
+("não quero criar uma nova"); encaixa na própria LIZARDS-35 (mapa de cobertura), cujo
+`[EM ABERTO]` é literalmente este item.
+
+- **Migration `V091`** (mesmo padrão exato da `V080`, §9.45): 3 linhas novas em
+  `gold.mapa_camada` (`RESERVA_LEGAL` cor `#0d9488` ordem_z 42, `APP_DECLARADA`
+  `#0891b2` 44, `VEGETACAO_NATIVA` `#65a30d` 46 — ordem_z entre `IMOVEL_RURAL` (40) e
+  `FOCO_CALOR` (50), pra desenhar por cima do perímetro do imóvel e abaixo dos pontos);
+  3 views finas (`vw_mapa_reserva_legal`/`vw_mapa_app_declarada`/
+  `vw_mapa_vegetacao_nativa`) sobre `vw_mapa_feature_vigente`; registro em
+  `MDSYS.SDO_GEOM_METADATA_TABLE`. **Sem `municipio_cod_ibge`** (como `AREA_PROTEGIDA`):
+  `silver.reserva_legal`/`app_declarada`/`vegetacao_nativa_declarada` (`V054`, §9.34)
+  não têm FK pra município nem pra `imovel_rural` — um imóvel pode ter vários
+  fragmentos não contíguos de RL/APP/vegetação nativa, só o atributo `cod_imovel` em
+  texto.
+- **`GoldPublicacaoService`**: 3 entradas novas em `CODIGOS_MAPA_CAMADA`,
+  `TABELA_SILVER_POR_CAMADA` e `SELECT_POR_CAMADA` (`identificador_origem AS
+  cod_natural`, `cod_imovel AS rotulo`, `CAST(NULL AS NUMBER) AS municipio_cod_ibge`,
+  mesma paginação por chave (`id > ?`) das demais camadas — nenhum código novo de
+  publicação, só configuração nos 3 mapas que já orientam o laço genérico.
+- **`GeoServerProxyService.CAMADAS`** e **`configurar.sh` (`CAMADAS=`)**: 3 nomes de
+  view novos na lista fechada; 3 `.sld` novos (mesmo `PolygonSymbolizer` simples das
+  camadas existentes, cor igual à do frontend).
+- **Frontend (`ConjuntosView.vue`)**: só trocar `camada: null` por
+  `datagis:vw_mapa_reserva_legal`/`app_declarada`/`vegetacao_nativa` nas 3 entradas de
+  `CAMADAS_INDICADOR` — toda a lógica de legenda, checkbox, aviso (`avisoDaCamada`,
+  `textoDoMapa`), destaque no clique e contagem já era genérica e já tratava
+  `leitura: CONFORMIDADE`/`INFORMATIVO` corretamente (construída na §9.46 já em
+  antecipação a este fechamento), sem nenhum código condicionado a "RESTRICAO" só.
+  Único ajuste: `GRUPOS_INDICADOR` ganhou `.filter((g) => g.camadas.length)` — com os 7
+  indicadores tendo `camada` agora, o grupo "Indicadores sem camada no mapa" ficaria
+  com o título solto e a lista vazia embaixo.
+- **Testes:** `MapaCoberturaViewsOracleIT.todasAsViewsTemMetadadoEspacial` ampliado pra
+  10 views (era 7). `ConjuntosView.test.js`: o teste que fixava IRL em "Camada ainda
+  não publicada no mapa" foi reescrito pra refletir a nova realidade (IRL sem feição
+  no mock mostra "Sem feições publicadas na Gold", igual ISAP) + 1 teste novo cobrindo
+  camada nova com dado publicado e checkbox liberado. Backend 803 testes (0 falhas, só
+  o `DatagisApplicationTests` de sempre, §9.3); frontend 477 testes, 0 falhas; build ok.
+- **Validado local, ponta a ponta, contra o Oracle/GeoServer reais** (não só teste
+  unitário): `V091` aplicada limpa (restart do backend, Flyway confirmado via
+  `flyway_schema_history`); `docker compose run --rm geoserver-config` publicou as 3
+  camadas no GeoServer sem erro; publicação disparada direto no `GoldPublicacaoService`
+  (sem precisar de token do Keycloak — ver nota abaixo) preencheu as 3 camadas:
+  **reserva_legal 2.774, app_declarada 3.180, vegetacao_nativa 3.182** feições
+  publicadas (confirmado via WFS `resultType=hits` no GeoServer), batendo com os
+  números de Silver já conhecidos desde a §9.34/§9.37 (2.777/3.180/3.182 — a pequena
+  diferença em reserva_legal é geometria inválida pulada, mesmo comportamento já
+  documentado pras outras camadas, §9.33).
+- **Nota de processo**: a verificação ao vivo da publicação (que normalmente seria via
+  `POST /api/gold/mapa-camadas/{codigo}/publicar`, autenticado) foi feita chamando
+  `GoldPublicacaoService.publicarCamadaMapaEmLotes` direto de um teste `@SpringBootTest`
+  descartável (`DATAGIS_ORACLE_IT=true`, apagado depois de confirmar) — mesma
+  infraestrutura dos `*OracleIT` já existentes, sem precisar renovar token do Keycloak
+  (lição já registrada em sessões anteriores: tokens expiram em 5 min e não vale a
+  pena perseguir self-auth do backend).
+- **[PENDENTE]** Replicar a mesma publicação em produção depois do merge (`docker
+  compose run --rm geoserver-config` + disparar `publicar` ou `publicar-camada` das 3
+  camadas novas pela tela) — a migration e as views valem em qualquer ambiente desde
+  que `silver.reserva_legal`/`app_declarada`/`vegetacao_nativa_declarada` já tenham
+  dado ingerido (confirmado que sim, tanto local quanto no servidor de testes, §9.34).
 
 ### 9.42. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
 Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
