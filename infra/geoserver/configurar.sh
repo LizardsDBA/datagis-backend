@@ -7,7 +7,7 @@
 #   desempenho         -> log so de aviso/erro e teto de memoria/tempo por imagem
 #   workspace "datagis"
 #   datastore "gold"   -> Oracle, schema GOLD, usuario do backend (APP_USER)
-#   7 camadas          -> as views gold.vw_mapa_* (V080), cada uma com o estilo
+#   10 camadas         -> as views gold.vw_mapa_* (V080/V091), cada uma com o estilo
 #                         estilos/<camada>.sld
 #
 # Camada nova no mapa = view nova na Gold + nome na lista CAMADAS + um .sld.
@@ -23,7 +23,7 @@ AUTH="admin:${GEOSERVER_ADMIN_PASSWORD:?defina GEOSERVER_ADMIN_PASSWORD no .env}
 DIR="$(dirname "$0")"
 WS=datagis
 DS=gold
-CAMADAS="vw_mapa_limite_pr vw_mapa_municipio vw_mapa_imovel vw_mapa_area_protegida vw_mapa_embargo vw_mapa_desmatamento vw_mapa_foco_calor"
+CAMADAS="vw_mapa_limite_pr vw_mapa_municipio vw_mapa_imovel vw_mapa_area_protegida vw_mapa_embargo vw_mapa_desmatamento vw_mapa_foco_calor vw_mapa_reserva_legal vw_mapa_app_declarada vw_mapa_vegetacao_nativa"
 # Estilos que nao sao o padrao de nenhuma camada: a tela pede pelo parametro STYLES.
 ESTILOS_EXTRAS="vw_mapa_municipio_com_dados vw_mapa_municipio_com_dados_contorno"
 

@@ -56,9 +56,10 @@ public class GoldPublicacaoService {
 
     public static final String STATUS_PROMOVIDO_GOLD = "PROMOVIDO_GOLD";
 
-    /** Camadas semeadas em gold.mapa_camada (V018) — publicadas na mesma ordem fixa. */
+    /** Camadas semeadas em gold.mapa_camada (V018/V091) — publicadas na mesma ordem fixa. */
     private static final List<String> CODIGOS_MAPA_CAMADA = List.of(
-            "MUNICIPIO", "LIMITE_PR", "AREA_PROTEGIDA", "DESMATAMENTO", "EMBARGO", "IMOVEL_RURAL", "FOCO_CALOR");
+            "MUNICIPIO", "LIMITE_PR", "AREA_PROTEGIDA", "DESMATAMENTO", "EMBARGO", "IMOVEL_RURAL", "FOCO_CALOR",
+            "RESERVA_LEGAL", "APP_DECLARADA", "VEGETACAO_NATIVA");
 
     /** Contorno do Paraná (V080): 1 feature só, a união dos 399 municípios. */
     private static final String CAMADA_LIMITE_PR = "LIMITE_PR";
@@ -75,7 +76,10 @@ public class GoldPublicacaoService {
             "DESMATAMENTO", "silver.desmatamento",
             "EMBARGO", "silver.embargo_ambiental",
             "IMOVEL_RURAL", "silver.imovel_rural",
-            "FOCO_CALOR", "silver.foco_calor");
+            "FOCO_CALOR", "silver.foco_calor",
+            "RESERVA_LEGAL", "silver.reserva_legal",
+            "APP_DECLARADA", "silver.app_declarada",
+            "VEGETACAO_NATIVA", "silver.vegetacao_nativa_declarada");
 
     /**
      * SELECT por camada (as 5 que passam por SIMPLIFY) - id (origem_silver_id),
@@ -145,6 +149,28 @@ public class GoldPublicacaoService {
                   FROM silver.imovel_rural ir LEFT JOIN silver.municipio m ON m.id = ir.municipio_id
                  WHERE ir.geometria IS NOT NULL AND ir.id > ?
                  ORDER BY ir.id FETCH FIRST ? ROWS ONLY
+                """,
+            // Sem municipio_cod_ibge (CAST NULL, mesmo padrao de AREA_PROTEGIDA): as 3
+            // tabelas Silver de origem (V054) nao tem FK pra municipio nem pra
+            // imovel_rural - um imovel pode ter varios fragmentos nao contiguos de
+            // RL/APP/vegetacao nativa, so o atributo cod_imovel em texto.
+            "RESERVA_LEGAL", """
+                SELECT id, identificador_origem AS cod_natural, cod_imovel AS rotulo, CAST(NULL AS NUMBER) AS municipio_cod_ibge,
+                       SDO_UTIL.TO_WKTGEOMETRY(geometria) AS wkt, fonte_dado_id, lote_ingestao_id
+                  FROM silver.reserva_legal WHERE geometria IS NOT NULL AND id > ?
+                 ORDER BY id FETCH FIRST ? ROWS ONLY
+                """,
+            "APP_DECLARADA", """
+                SELECT id, identificador_origem AS cod_natural, cod_imovel AS rotulo, CAST(NULL AS NUMBER) AS municipio_cod_ibge,
+                       SDO_UTIL.TO_WKTGEOMETRY(geometria) AS wkt, fonte_dado_id, lote_ingestao_id
+                  FROM silver.app_declarada WHERE geometria IS NOT NULL AND id > ?
+                 ORDER BY id FETCH FIRST ? ROWS ONLY
+                """,
+            "VEGETACAO_NATIVA", """
+                SELECT id, identificador_origem AS cod_natural, cod_imovel AS rotulo, CAST(NULL AS NUMBER) AS municipio_cod_ibge,
+                       SDO_UTIL.TO_WKTGEOMETRY(geometria) AS wkt, fonte_dado_id, lote_ingestao_id
+                  FROM silver.vegetacao_nativa_declarada WHERE geometria IS NOT NULL AND id > ?
+                 ORDER BY id FETCH FIRST ? ROWS ONLY
                 """);
 
     private static final String INSERT_FEATURE_SQL = """
