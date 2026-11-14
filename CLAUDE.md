@@ -3146,6 +3146,66 @@ Ponta Grossa = 1,7 MB, desenhado em SVG).
   semitransparente, moldura como limite). Suíte do frontend 475: 474 ok + 1 timeout
   intermitente na `AuditoriaView` (passa sozinha, 14/14); build ok.
 
+### 9.56. `GET /api/indicadores/imoveis` em volume real — 212MB, 2 correções aplicadas, gargalo de fundo não resolvido — **[LIZARDS-59/60, 2026-11-14, backend + frontend, achado testando a §9.55 em escala real]**
+Testando a PR da §9.55 (`fix/correcao-geoserver`) contra o Paraná inteiro no servidor de
+testes (não produção), achado via Jam gravado pelo usuário: a tela de mapa/indicadores
+abre lenta não por causa do GeoServer (as imagens WMS respondem em 3-6s, rápido pro
+volume), mas por causa de `GET /api/indicadores/imoveis` — **12,4s na 1ª medição**, e o
+payload **mede ~212MB** (558.692 imóveis × ~14 campos, nome de campo repetido em cada
+objeto JSON).
+
+**Duas correções aplicadas, ambas de baixo risco (sem mudar SQL nem contrato de API),
+ambas insuficientes sozinhas:**
+1. `spring.jdbc.template.fetch-size=500` — nunca tinha sido configurado; o driver thin
+   do Oracle usa o padrão de 10 linhas por round-trip (~55 mil idas-e-voltas pra 558 mil
+   linhas). Ganho real, mas pequeno: 12,4s → 10,19s (medido sem gzip, request repetido
+   no servidor via `curl -o /dev/null`, não inclui rede até o navegador).
+2. `server.compression.enabled=true` — compressão HTTP nunca tinha sido ligada
+   (desligada por padrão no Spring Boot). Confirmado funcionando (`content-encoding:
+   gzip` no cabeçalho real, payload 212MB → 37,5MB, -82%) — mas **não melhorou o tempo
+   real no navegador**: 2º Jam gravado pelo usuário, mesma rota, **14,2s** (igual ou
+   pior que antes). A hipótese de que a rede fosse o gargalo dominante estava errada —
+   a conexão real do usuário é rápida o suficiente pra isso não importar; comprimir só
+   soma custo de CPU no servidor (comprimir 212MB) sem ganho compensador no caso real.
+
+**Causa de fundo, não resolvida:** o tempo é dominado por **gerar** os 212MB (fetch
+JDBC + mapeamento de linha + serialização Jackson de 558 mil objetos), não por buscar
+do Oracle (a query pura, só com `COUNT(*)`, leva 1,08s — o `ROW_NUMBER() OVER PARTITION
+BY cod_imovel` não é o problema, são 558.688 linhas = 558.688 `cod_imovel` distintos,
+sem bloat de histórico) nem pela rede. Só se resolve de verdade **reduzindo quanto dado
+é gerado/mandado por vez**, não ajustando como ele é buscado ou comprimido.
+
+**Por que isso não foi corrigido nesta sessão:** `ConjuntosView.vue` (mapa) e
+`IndicadoresView.vue` (tabela) dependem hoje de ter a lista inteira de imóveis
+carregada no navegador pra funcionar: busca por código digitado (`sugestoesImovel`,
+filtro client-side até 200 sugestões), restauração de seleção pela URL
+(`?imovel=CODE`), filtro por município, e o cálculo do KPI geral (média ponderada
+client-side em `imoveis.value`). Mudar isso pra paginação/busca no servidor é a
+correção certa, mas é uma mudança de arquitetura (toca várias funções interligadas),
+arriscada de fazer sem conseguir testar num navegador de verdade (sessão sem acesso a
+browser). Decisão do usuário: não arriscar essa mudança maior dentro desta branch —
+fica pra uma **branch própria, planejada com mais cuidado**, não misturada com o fix
+do GeoServer (§9.55).
+
+**Caminhos já considerados pra essa correção futura, nenhum implementado:**
+- Endpoint `/api/indicadores/geral` (agregado estadual, 1 linha, sem `GROUP BY` —
+  mesmo padrão de `mediaPonderada` já usado em `listarPorMunicipio`) pra tirar do
+  `ConjuntosView` a necessidade de somar os 558 mil só pro KPI geral.
+- Busca por prefixo no servidor (`/api/indicadores/imoveis/busca?termo=...&limit=200`)
+  pra mover o autocomplete do client-side pro banco.
+- Filtro por `municipioCodIbge` no mesmo endpoint, pra carregar só o município
+  selecionado em vez do estado inteiro.
+- O código do imóvel (`PR-4104907-...`) já embute o código IBGE do município no 2º
+  segmento — dá pra resolver a maioria dos casos de "restaurar seleção da URL" sem
+  precisar de um endpoint novo de busca por código exato.
+
+**Commits desta investigação (branch `fix/correcao-geoserver`, junto com a §9.55 —
+ficou nela por já estar aberta, não por ser a mesma entrega):**
+`fix<LIZARDS-59>` (fetchSize), `fix<LIZARDS-59>` (compressão), `fix<LIZARDS-60>`
+(deduplicar pedido WMS em andamento pra mesma URL — bug separado achado no mesmo Jam,
+a camada de imóveis sendo pedida 2x pro mesmo bbox por causa de 2 watchers do Vue
+reagindo quase juntos; esse sim resolvido, com teste).
+
 ### 9.42. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
 Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
 todas as telas do sistema. A tela de login não entra: ela é do Keycloak, outro container,
