@@ -40,10 +40,11 @@ public class GeoServerProxyService {
 
     static final String WORKSPACE = "datagis";
 
-    /** As views da V080. Camada nova no mapa entra aqui tambem. */
+    /** As views da V080/V091. Camada nova no mapa entra aqui tambem. */
     static final Set<String> CAMADAS = Set.of(
             "vw_mapa_limite_pr", "vw_mapa_municipio", "vw_mapa_imovel", "vw_mapa_area_protegida",
-            "vw_mapa_embargo", "vw_mapa_desmatamento", "vw_mapa_foco_calor");
+            "vw_mapa_embargo", "vw_mapa_desmatamento", "vw_mapa_foco_calor",
+            "vw_mapa_reserva_legal", "vw_mapa_app_declarada", "vw_mapa_vegetacao_nativa");
 
     /** So leitura. Nada de Transaction (WFS-T), GetCapabilities ou GetFeatureInfo. */
     private static final Map<String, Set<String>> OPERACOES_POR_SERVICO = Map.of(
