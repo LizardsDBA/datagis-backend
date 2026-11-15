@@ -11,8 +11,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Views do mapa de cobertura (V080) e índice espacial da Gold (V081), contra o Oracle
- * local real. Cada teste faz rollback - a camada de teste nunca fica gravada.
+ * Views do mapa de cobertura (V080/V091) e índice espacial da Gold (V081), contra o
+ * Oracle local real. Cada teste faz rollback - a camada de teste nunca fica gravada.
  */
 @SpringBootTest(properties = {
         "spring.flyway.enabled=false",
@@ -82,7 +82,8 @@ class MapaCoberturaViewsOracleIT {
 
         assertThat(registradas).containsExactlyInAnyOrder(
                 "VW_MAPA_LIMITE_PR", "VW_MAPA_MUNICIPIO", "VW_MAPA_IMOVEL", "VW_MAPA_AREA_PROTEGIDA",
-                "VW_MAPA_EMBARGO", "VW_MAPA_DESMATAMENTO", "VW_MAPA_FOCO_CALOR");
+                "VW_MAPA_EMBARGO", "VW_MAPA_DESMATAMENTO", "VW_MAPA_FOCO_CALOR",
+                "VW_MAPA_RESERVA_LEGAL", "VW_MAPA_APP_DECLARADA", "VW_MAPA_VEGETACAO_NATIVA");
     }
 
     private long criarCamada() {
