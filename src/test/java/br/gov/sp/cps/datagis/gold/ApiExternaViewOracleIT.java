@@ -13,7 +13,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * View da API externa (V091, LIZARDS-57), contra o Oracle local real. Cada teste grava
+ * View da API externa (V092, LIZARDS-57), contra o Oracle local real. Cada teste grava
  * os proprios imoveis de teste e faz rollback - nada fica no banco.
  */
 @SpringBootTest(properties = {
