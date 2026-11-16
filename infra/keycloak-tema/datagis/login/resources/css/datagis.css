@@ -1,0 +1,476 @@
+/*
+ * Tela de login do DataGIS (LIZARDS-61) - carregado depois do styles.css do keycloak.v2.
+ *
+ * Imagem de fundo na tela inteira e o login num painel flutuante de vidro verde
+ * ("liquid glass") a esquerda, deixando o satelite livre. So o que fica atras do painel
+ * e desfocado (backdrop-filter); o resto da imagem continua nitido. Cores e icone da
+ * marca iguais aos do frontend (datagis-frontend/src/style.css e Sidebar.vue).
+ *
+ * O painel e sempre escuro com texto claro, nos dois temas: a tela de login nao sabe o
+ * tema escolhido dentro do app (outro endereco). No escuro do sistema operacional
+ * (classe pf-v5-theme-dark que o keycloak.v2 poe no <html>) o vidro so fica mais fechado.
+ */
+
+:root {
+    --datagis-verde: #15803d;
+    --datagis-verde-claro: #16a34a;
+    --datagis-verde-foco: #4ade80;
+
+    --datagis-vidro-fundo: rgba(10, 48, 32, 0.36);
+    --datagis-vidro-brilho: rgba(255, 255, 255, 0.22);
+    --datagis-vidro-borda: rgba(255, 255, 255, 0.24);
+    --datagis-vidro-desfoque: blur(18px) saturate(165%) brightness(0.82);
+
+    --datagis-texto: #ffffff;
+    --datagis-texto-secundario: rgba(255, 255, 255, 0.74);
+    --datagis-campo-fundo: rgba(255, 255, 255, 0.1);
+    --datagis-campo-borda: rgba(255, 255, 255, 0.28);
+    --datagis-erro: #fca5a5;
+    --datagis-raio: 12px;
+}
+
+:root.pf-v5-theme-dark {
+    --datagis-vidro-fundo: rgba(6, 30, 20, 0.5);
+    --datagis-vidro-brilho: rgba(255, 255, 255, 0.14);
+    --datagis-vidro-borda: rgba(255, 255, 255, 0.16);
+}
+
+/* Navegador sem desfoque de fundo: vidro quase solido, para o texto continuar legivel */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    :root,
+    :root.pf-v5-theme-dark {
+        --datagis-vidro-fundo: rgba(8, 38, 26, 0.94);
+    }
+}
+
+/* ---------- Fundo: imagem inteira, sem faixa nenhuma ---------- */
+
+/*
+ * Imagem no <html>, nao no <body>: o body tem a altura da janela, e o que passasse dela
+ * aparecia com a cor de fundo do html (faixa escura embaixo da imagem ao rolar).
+ */
+html.login-pf {
+    background: #04110b url("../img/fundo-login.jpg") center center / cover no-repeat fixed;
+}
+
+.login-pf body {
+    background: transparent;
+}
+
+/*
+ * A pagina nunca rola: quem rola e o .pf-v5-c-login (abaixo), que tem exatamente a altura
+ * da janela. Painel que cabe = nada rola. Painel mais alto que a janela (troca de senha
+ * temporaria, janela baixa, celular) = rola so essa area, e a imagem fica parada atras.
+ */
+html.login-pf,
+.login-pf body {
+    height: 100%;
+    overflow: hidden;
+}
+
+.pf-v5-c-login {
+    /* border-box: o padding fica DENTRO dos 100vh - sem isso a pagina passava da altura
+       da janela e rolava, mostrando o fundo escuro embaixo da imagem */
+    box-sizing: border-box;
+    height: 100vh;
+    height: 100dvh;
+    overflow-y: auto;
+    padding: clamp(1rem, 4vh, 2.5rem) clamp(1rem, 6vw, 7rem);
+    justify-content: flex-start;
+    /* Centraliza na altura com margin auto no painel (abaixo), e nao com align-items:
+       center - este cortaria o topo do painel quando ele passa da altura da janela */
+    align-items: flex-start;
+    background: transparent;
+}
+
+/*
+ * Barra de rolagem de vidro (so aparece quando o painel passa da altura da janela).
+ * Chrome/Edge: ::-webkit-scrollbar. Firefox nao tem esses seletores e usa scrollbar-color,
+ * que fica so para ele: no Chrome, scrollbar-color faz o ::-webkit-scrollbar ser ignorado.
+ */
+.pf-v5-c-login::-webkit-scrollbar {
+    width: 12px;
+}
+
+.pf-v5-c-login::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.pf-v5-c-login::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.28) padding-box;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.pf-v5-c-login::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.45);
+}
+
+.pf-v5-c-login::-webkit-scrollbar-button {
+    display: none;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+    .pf-v5-c-login {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
+    }
+}
+
+/* ---------- Painel de vidro ---------- */
+
+.pf-v5-c-login__container {
+    /* Cores do PatternFly dentro do painel: texto claro, campos e bordas translucidos */
+    --pf-v5-global--Color--100: var(--datagis-texto);
+    --pf-v5-global--Color--200: var(--datagis-texto-secundario);
+    --pf-v5-global--BackgroundColor--100: var(--datagis-campo-fundo);
+    --pf-v5-global--BorderColor--100: var(--datagis-campo-borda);
+    --pf-v5-global--BorderColor--200: var(--datagis-campo-borda);
+    --pf-v5-global--BorderColor--300: var(--datagis-campo-borda);
+    --pf-v5-global--primary-color--100: var(--datagis-verde-foco);
+    /* Cor de "ativo" (contorno de foco): era o azul #06c do PatternFly */
+    --pf-v5-global--active-color--100: var(--datagis-verde-foco);
+    --pf-v5-global--danger-color--100: var(--datagis-erro);
+    /* A mensagem de erro abaixo do campo usa a --200: #a30000 no claro (ilegivel no vidro) */
+    --pf-v5-global--danger-color--200: var(--datagis-erro);
+    --pf-v5-global--link--Color: var(--datagis-verde-foco);
+    --pf-v5-global--link--Color--hover: #86efac;
+
+    position: relative;
+    width: min(25rem, 100%);
+    max-width: none;
+    margin: auto 0;
+    flex-shrink: 0;
+    padding: 2.25rem 2rem 1.75rem;
+    grid-template-columns: 1fr;
+    grid-template-areas: "header"
+                         "main";
+    row-gap: 1.75rem;
+    border: 1px solid var(--datagis-vidro-borda);
+    border-radius: 28px;
+    background-color: var(--datagis-vidro-fundo);
+    background-image: linear-gradient(150deg, var(--datagis-vidro-brilho) 0%, rgba(255, 255, 255, 0) 42%);
+    -webkit-backdrop-filter: var(--datagis-vidro-desfoque);
+    backdrop-filter: var(--datagis-vidro-desfoque);
+    box-shadow:
+        0 30px 80px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.35),
+        inset 0 -1px 0 rgba(255, 255, 255, 0.08),
+        inset 0 0 24px rgba(255, 255, 255, 0.06);
+    color: var(--datagis-texto);
+}
+
+/* ---------- Marca ---------- */
+
+.pf-v5-c-login__header {
+    margin: 0;
+    padding: 0;
+}
+
+#kc-header-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.2rem;
+    padding: 0;
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    text-align: left;
+    /* O keycloak.v2 pinta este texto com !important */
+    color: var(--datagis-texto) !important;
+}
+
+#kc-header-wrapper::before {
+    content: "";
+    width: 2.75rem;
+    height: 2.75rem;
+    margin-bottom: 0.75rem;
+    border-radius: 12px;
+    background: url("../img/logo-datagis.svg") center / contain no-repeat;
+    box-shadow: 0 8px 22px rgba(22, 163, 74, 0.45);
+}
+
+#kc-header-wrapper::after {
+    content: "Plataforma Geoespacial";
+    font-size: 0.92rem;
+    font-weight: 500;
+    letter-spacing: 0;
+    color: var(--datagis-texto-secundario);
+}
+
+/* ---------- Formulario (sem cartao: fica direto no vidro) ---------- */
+
+/*
+ * O cabecalho do formulario (titulo + idioma) vira "display: contents": titulo e idioma
+ * passam a ser itens diretos da coluna do formulario, e o "order" leva o idioma para
+ * depois do botao Entrar, sem reescrever o template do Keycloak.
+ */
+.pf-v5-c-login__main {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.pf-v5-c-login__main-header,
+div.pf-v5-c-login__main-header:has(.pf-v5-c-login__main-header-utilities) {
+    display: contents;
+}
+
+#kc-page-title {
+    order: 0;
+    margin-bottom: 1rem;
+}
+
+.pf-v5-c-login__main-body {
+    order: 1;
+}
+
+.pf-v5-c-login__main-footer {
+    order: 3;
+}
+
+.pf-v5-c-login__main-body,
+.pf-v5-c-login__main-footer,
+.pf-v5-c-login__main-footer-band {
+    padding-inline: 0;
+}
+
+.pf-v5-c-login__main-body {
+    padding-bottom: 0;
+}
+
+#kc-page-title {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--datagis-texto);
+}
+
+.pf-v5-c-login__main .pf-v5-c-form-control,
+.pf-v5-c-login__main .pf-v5-c-form-control::before,
+.pf-v5-c-login__main .pf-v5-c-form-control::after {
+    border-radius: var(--datagis-raio);
+}
+
+/*
+ * Campos do formulario: brancos com texto escuro e foco verde nos DOIS modos. Sem isto,
+ * no escuro o PatternFly os pinta de cinza (BackgroundColor--400) com foco azul, e a cor
+ * do texto digitado viria da Color--100 que o painel deixa branca (texto invisivel).
+ * So os campos do corpo: a pilula de idioma (no cabecalho) tem estilo proprio.
+ */
+.pf-v5-c-login__main-body .pf-v5-c-form-control {
+    --pf-v5-c-form-control--BackgroundColor: rgba(255, 255, 255, 0.94);
+    --pf-v5-c-form-control--Color: #0f172a;
+    --pf-v5-c-form-control--before--BorderTopColor: transparent;
+    --pf-v5-c-form-control--before--BorderRightColor: transparent;
+    --pf-v5-c-form-control--before--BorderLeftColor: transparent;
+    --pf-v5-c-form-control--after--BorderBottomColor: transparent;
+    --pf-v5-c-form-control--hover--after--BorderBottomColor: var(--datagis-verde);
+    --pf-v5-c-form-control--focus--after--BorderBottomColor: var(--datagis-verde);
+    color: #0f172a;
+}
+
+.pf-v5-c-login__main-body .pf-v5-c-form-control input::placeholder {
+    color: #64748b;
+}
+
+/* O Edge poe um olho proprio dentro de todo campo de senha; o do Keycloak ja existe ao lado */
+.pf-v5-c-login__main-body input::-ms-reveal,
+.pf-v5-c-login__main-body input::-ms-clear {
+    display: none;
+}
+
+/* Foco: anel verde em volta do campo inteiro, no lugar do contorno fino do navegador */
+.pf-v5-c-login__main-body .pf-v5-c-form-control > input:focus {
+    outline: none;
+}
+
+.pf-v5-c-login__main-body .pf-v5-c-form-control:focus-within {
+    box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.7);
+}
+
+/* Senha + olho sao um campo so: o anel envolve os dois, e nao so o texto */
+.pf-v5-c-login__main-body .pf-v5-c-input-group {
+    border-radius: var(--datagis-raio);
+}
+
+.pf-v5-c-login__main-body .pf-v5-c-input-group .pf-v5-c-form-control:focus-within,
+.pf-v5-c-login__main-body .pf-v5-c-input-group .pf-v5-c-form-control.pf-m-error:focus-within {
+    box-shadow: none;
+}
+
+.pf-v5-c-login__main-body .pf-v5-c-input-group:focus-within {
+    box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.7);
+}
+
+.pf-v5-c-login__main-body .pf-v5-c-input-group:has(.pf-m-error):focus-within {
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.7);
+}
+
+/* Campo com erro (ex.: senha errada): borda e icone em vermelho forte, legivel no branco.
+   A mensagem abaixo do campo fica no vidro e continua no vermelho claro do painel. */
+.pf-v5-c-login__main-body .pf-v5-c-form-control.pf-m-error {
+    --pf-v5-global--danger-color--100: #dc2626;
+    --pf-v5-c-form-control--after--BorderBottomColor: #dc2626;
+    --pf-v5-c-form-control--hover--after--BorderBottomColor: #dc2626;
+    --pf-v5-c-form-control--focus--after--BorderBottomColor: #dc2626;
+}
+
+.pf-v5-c-login__main-body .pf-v5-c-form-control.pf-m-error:focus-within {
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.7);
+}
+
+/* Senha + botao do olho: cantos arredondados so nas pontas de fora */
+.pf-v5-c-login__main .pf-v5-c-input-group > :first-child .pf-v5-c-form-control,
+.pf-v5-c-login__main .pf-v5-c-input-group > :first-child .pf-v5-c-form-control::before,
+.pf-v5-c-login__main .pf-v5-c-input-group > :first-child .pf-v5-c-form-control::after {
+    border-start-end-radius: 0;
+    border-end-end-radius: 0;
+}
+
+.pf-v5-c-login__main .pf-v5-c-input-group > :last-child .pf-v5-c-button,
+.pf-v5-c-login__main .pf-v5-c-input-group > :last-child .pf-v5-c-button::after {
+    border-start-end-radius: var(--datagis-raio);
+    border-end-end-radius: var(--datagis-raio);
+}
+
+.pf-v5-c-login__main .pf-v5-c-button.pf-m-control {
+    color: var(--datagis-texto);
+}
+
+.pf-v5-c-login__main .pf-v5-c-button.pf-m-primary {
+    --pf-v5-c-button--BorderRadius: var(--datagis-raio);
+    --pf-v5-c-button--m-primary--Color: #ffffff;
+    --pf-v5-c-button--m-primary--hover--Color: #ffffff;
+    --pf-v5-c-button--m-primary--focus--Color: #ffffff;
+    --pf-v5-c-button--m-primary--BackgroundColor: var(--datagis-verde);
+    --pf-v5-c-button--m-primary--hover--BackgroundColor: var(--datagis-verde-claro);
+    --pf-v5-c-button--m-primary--focus--BackgroundColor: var(--datagis-verde-claro);
+    padding-block: 0.7rem;
+    font-weight: 600;
+    background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 60%);
+    box-shadow: 0 10px 24px rgba(22, 163, 74, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+/* Avisos do Keycloak (ex.: senha expirada): fundo claro proprio, entao texto escuro */
+.pf-v5-c-login__main .pf-v5-c-alert {
+    --pf-v5-global--Color--100: #0f172a;
+    --pf-v5-global--Color--200: #334155;
+    border-radius: var(--datagis-raio);
+}
+
+/* ---------- Idioma: pilula centralizada abaixo do Entrar ---------- */
+
+.pf-v5-c-login__main-header-utilities {
+    order: 2;
+    align-self: center;
+    margin-top: 1.25rem;
+}
+
+/* Largura do texto escolhido: "Portugues (Brasil)" inteiro numa linha, "English" menor */
+.pf-v5-c-login__main-header-utilities .pf-v5-c-form-control {
+    width: max-content;
+    border-radius: 999px;
+    --pf-v5-c-form-control--BackgroundColor: rgba(255, 255, 255, 0.08);
+}
+
+.pf-v5-c-login__main-header-utilities .pf-v5-c-form-control::before,
+.pf-v5-c-login__main-header-utilities .pf-v5-c-form-control::after {
+    border-radius: 999px;
+}
+
+/* O PatternFly marca o foco com um traco grosso so embaixo; na pilula vira um anel verde */
+.pf-v5-c-login__main-header-utilities .pf-v5-c-form-control::after {
+    border-block-end: 0;
+}
+
+.pf-v5-c-login__main-header-utilities .pf-v5-c-form-control:focus-within {
+    box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.55);
+}
+
+.pf-v5-c-login__main-header-utilities .pf-v5-c-form-control__toggle-icon {
+    color: var(--datagis-texto-secundario);
+}
+
+#login-select-toggle {
+    /* Chrome/Edge: a largura acompanha o idioma escolhido; nos demais, a do mais longo */
+    field-sizing: content;
+    white-space: nowrap;
+    padding-inline-start: 2rem;
+    font-size: 0.85rem;
+    color: var(--datagis-texto-secundario);
+    cursor: pointer;
+    /* Globo (contorno), branco translucido */
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.75)' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18'/%3E%3C/svg%3E") 0.7rem center / 1rem no-repeat;
+}
+
+#login-select-toggle:hover {
+    color: var(--datagis-texto);
+}
+
+/*
+ * Lista aberta do idioma: no Chrome/Edge 135+ (appearance: base-select) vira um menu
+ * de vidro com cantos arredondados e o check no item escolhido. Nos demais navegadores
+ * o @supports pula o bloco e fica a lista do sistema.
+ */
+@supports (appearance: base-select) {
+    #login-select-toggle,
+    #login-select-toggle::picker(select) {
+        appearance: base-select;
+    }
+
+    #login-select-toggle {
+        border: 0;
+        padding-block: 0.35rem;
+        padding-inline-end: 2rem;
+    }
+
+    #login-select-toggle::picker-icon {
+        display: none;
+    }
+
+    #login-select-toggle::picker(select) {
+        margin-block: 0.5rem;
+        padding: 0.35rem;
+        border: 1px solid var(--datagis-vidro-borda);
+        border-radius: 14px;
+        background: rgba(8, 38, 26, 0.88);
+        -webkit-backdrop-filter: blur(14px);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+    }
+
+    #login-select-toggle option {
+        padding: 0.5rem 0.75rem;
+        border-radius: 9px;
+        font-size: 0.85rem;
+        color: var(--datagis-texto);
+    }
+
+    #login-select-toggle option:hover,
+    #login-select-toggle option:focus-visible {
+        background: rgba(255, 255, 255, 0.12);
+    }
+
+    #login-select-toggle option:checked {
+        background: rgba(22, 163, 74, 0.35);
+        font-weight: 600;
+    }
+}
+
+/* ---------- Celular: painel centralizado, quase da largura da tela ---------- */
+
+@media (max-width: 640px) {
+    .pf-v5-c-login {
+        justify-content: center;
+    }
+
+    .pf-v5-c-login__container {
+        padding-inline: 1.5rem;
+    }
+}
