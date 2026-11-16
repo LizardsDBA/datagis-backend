@@ -68,6 +68,9 @@ services:
     volumes:
       - keycloak-data:/opt/keycloak/data
       - ./infra/keycloak:/opt/keycloak/data/import:ro
+      # Tema da tela de login (LIZARDS-61). O start-dev nao guarda tema em cache:
+      # mudanca no CSS aparece com F5, sem reiniciar o container.
+      - ./infra/keycloak-tema/datagis:/opt/keycloak/themes/datagis:ro
     restart: unless-stopped
 
   # Mapa de cobertura (LIZARDS-35): desenha as camadas da Gold (WMS) e responde as
