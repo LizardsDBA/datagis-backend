@@ -94,9 +94,46 @@ class KeycloakProvisionadorTest {
         verify(keycloak, never()).adicionarRoles(eq("id-admin"), any());
     }
 
+    @Test
+    void aplicaOTemaDeLoginQuandoORealmEstaComOutro() {
+        when(keycloak.listarRoles()).thenReturn(todasAsRolesDoCatalogo());
+        when(keycloak.compostasDaRole(anyString())).thenReturn(List.of());
+        when(keycloak.temaLogin()).thenReturn(null);
+
+        provisionador(false, "datagis").sincronizar();
+
+        verify(keycloak).definirTemaLogin("datagis");
+    }
+
+    @Test
+    void naoMexeNoTemaDeLoginQueJaEstaCerto() {
+        when(keycloak.listarRoles()).thenReturn(todasAsRolesDoCatalogo());
+        when(keycloak.compostasDaRole(anyString())).thenReturn(List.of());
+        when(keycloak.temaLogin()).thenReturn("datagis");
+
+        provisionador(false, "datagis").sincronizar();
+
+        verify(keycloak, never()).definirTemaLogin(anyString());
+    }
+
+    @Test
+    void temaDeLoginVazioDeixaORealmComoEsta() {
+        when(keycloak.listarRoles()).thenReturn(todasAsRolesDoCatalogo());
+        when(keycloak.compostasDaRole(anyString())).thenReturn(List.of());
+
+        provisionador(false, " ").sincronizar();
+
+        verify(keycloak, never()).temaLogin();
+        verify(keycloak, never()).definirTemaLogin(anyString());
+    }
+
     private KeycloakProvisionador provisionador(boolean usuariosDev) {
+        return provisionador(usuariosDev, null);
+    }
+
+    private KeycloakProvisionador provisionador(boolean usuariosDev, String temaLogin) {
         KeycloakProperties props = new KeycloakProperties("http://pub", "http://int", "datagis", "datagis-backend",
-                "segredo", true, usuariosDev);
+                "segredo", true, usuariosDev, temaLogin);
         return new KeycloakProvisionador(keycloak, props);
     }
 
