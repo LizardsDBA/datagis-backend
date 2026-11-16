@@ -1,15 +1,45 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" fill="none">
+  <!-- Logo da tela de login (LIZARDS-61): tres camadas de mapa (dado bruto, tratado e
+       publicado) sob uma mira, com um rio na camada de cima. Sem fundo, para ficar sobre o
+       vidro do painel. -->
   <defs>
-    <linearGradient id="fundo" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#16a34a"/>
+    <linearGradient id="topo" x1="20" y1="22" x2="100" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#86efac"/>
+      <stop offset="0.55" stop-color="#22c55e"/>
       <stop offset="1" stop-color="#15803d"/>
     </linearGradient>
+    <linearGradient id="meio" x1="20" y1="48" x2="100" y2="88" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#0d9488"/>
+    </linearGradient>
+    <linearGradient id="base" x1="20" y1="66" x2="100" y2="106" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+    <clipPath id="recorte-topo">
+      <polygon points="60 22 100 42 60 62 20 42"/>
+    </clipPath>
   </defs>
-  <rect width="48" height="48" rx="12" fill="url(#fundo)"/>
-  <!-- Mesmo icone de camadas da marca no menu lateral do frontend (Sidebar.vue) -->
-  <g transform="translate(12 12)" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-    <polygon points="12 2 2 7 12 12 22 7 12 2"/>
-    <polyline points="2 17 12 22 22 17"/>
-    <polyline points="2 12 12 17 22 12"/>
+
+  <!-- Mira: tracos so do lado de fora do circulo, para o simbolo continuar limpo pequeno -->
+  <g stroke="#ffffff" stroke-opacity="0.6" stroke-width="2" stroke-linecap="round">
+    <circle cx="60" cy="60" r="47"/>
+    <path d="M60 3v8M60 109v8M3 60h8M109 60h8"/>
+  </g>
+
+  <!-- Camada de baixo -->
+  <polygon points="20 84 60 104 100 84 100 89 60 109 20 89" fill="#0b5563"/>
+  <polygon points="60 64 100 84 60 104 20 84" fill="url(#base)"/>
+
+  <!-- Camada do meio -->
+  <polygon points="20 66 60 86 100 66 100 71 60 91 20 71" fill="#0b6b62"/>
+  <polygon points="60 46 100 66 60 86 20 66" fill="url(#meio)"/>
+
+  <!-- Camada de cima, com o rio -->
+  <polygon points="20 42 60 62 100 42 100 47 60 67 20 47" fill="#14532d"/>
+  <polygon points="60 22 100 42 60 62 20 42" fill="url(#topo)"/>
+  <!-- Rio num traco so: dois tracos sobrepostos viravam ruido em tamanho pequeno -->
+  <g clip-path="url(#recorte-topo)">
+    <path d="M36 26c8 6 4 12 14 15s16-2 20 5 2 11 12 14" stroke="#0e7490" stroke-width="5" stroke-linecap="round"/>
   </g>
 </svg>

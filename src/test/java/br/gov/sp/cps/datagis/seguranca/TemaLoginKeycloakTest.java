@@ -31,6 +31,25 @@ class TemaLoginKeycloakTest {
     }
 
     @Test
+    void faviconDoTemaSubstituiODoKeycloak() throws IOException {
+        // O template.ftl do keycloak.v2 procura img/favicon.ico no tema; sem ele, vale o do pai
+        byte[] icone = Files.readAllBytes(TEMA.resolve("resources/img/favicon.ico"));
+
+        // cabecalho ICO: reservado = 0, tipo = 1 (icone)
+        assertThat(icone).startsWith(0, 0, 1, 0);
+    }
+
+    @Test
+    void scriptDoTemaExisteEPreparaOsCamposDoRotuloFlutuante() throws IOException {
+        Properties tema = carregar(TEMA.resolve("theme.properties"));
+        Path script = TEMA.resolve("resources").resolve(tema.getProperty("scripts"));
+
+        assertThat(script).isRegularFile();
+        // ids dos campos montados pelo field.ftl do Keycloak 26 (login e troca de senha)
+        assertThat(Files.readString(script)).contains("'username'", "'password'", "'password-new'", "'password-confirm'");
+    }
+
+    @Test
     void todaImagemCitadaNoCssExiste() throws IOException {
         String css = Files.readString(TEMA.resolve("resources/css/datagis.css"));
         Matcher url = Pattern.compile("url\\(\"\\.\\./(img/[^\"]+)\"\\)").matcher(css);
