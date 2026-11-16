@@ -3305,10 +3305,16 @@ frontend: é do Keycloak, outro container. Resolve o [EM ABERTO] "Tela de login"
     topo, com o texto digitado embaixo. É o `<label>` do próprio Keycloak (leitor de tela
     anuncia normal). Nas demais telas do Keycloak o rótulo fica acima do campo, como no
     padrão;
-  - botão Entrar verde com ícone de entrar;
+  - botão Entrar verde com ícone de entrar, com a **palavra** no centro do botão;
   - idioma abaixo do Entrar, entre duas linhas finas, com a largura do nome; no Chrome/Edge
     135+ a lista abre como menu de vidro (`appearance: base-select`), nos demais fica a do
     sistema;
+  - subtítulo traduz com a tela ("Plataforma Geoespacial" / "Geospatial Platform", pelo
+    `html[lang]` que o Keycloak preenche); o nome DataGIS não traduz;
+  - rodapé **"© 2026 LizardsDBA"** abaixo do idioma, com o nome levando ao repositório da
+    equipe (`https://github.com/LizardsDBA/API-2026-4`) em nova aba. Formato de mercado
+    (© + ano + nome); "Todos os direitos reservados" ficou de fora porque contradiz a
+    licença GPLv3 dos repositórios. Criado pelo `js/datagis.js` (CSS não cria link);
   - sem "Esqueci a senha": `resetPasswordAllowed` segue `false` no realm, porque recuperar
     a senha exige e-mail e o projeto não tem servidor de e-mail. Quem redefine é o admin;
   - painel sempre escuro com texto claro, nos dois modos do sistema operacional: a tela de
@@ -3345,8 +3351,20 @@ frontend: é do Keycloak, outro container. Resolve o [EM ABERTO] "Tela de login"
   - marca: o keycloak.v2 põe `letter-spacing: 3px` no nome — com fonte zero, as letras
     escondidas ainda somavam esse espaço e abriam um vão entre "Data" e "GIS". E a
     `.pf-v5-c-brand` tem margem embaixo de até 48px, que afastava o subtítulo;
-  - botão: espaço invisível do tamanho do ícone do outro lado (`#kc-login::after`), para
-    a **palavra** ficar no centro, e não o conjunto ícone + palavra;
+  - botão: para a **palavra** ficar no centro (e não o conjunto ícone + palavra, que a
+    empurrava 15,6px), o lado direito tem padding a mais do tamanho do ícone + espaçamento.
+    **Não usar `::after` invisível como contrapeso**: no PatternFly o `::after` do botão é
+    uma camada posicionada por cima (desenha a borda) e não ocupa lugar na linha;
+  - o PatternFly só monta o painel em grade a partir de **1200px**; abaixo disso o
+    `row-gap` não vale e o título do formulário colava no subtítulo da marca (notebook,
+    tablet, celular). O painel tem `display: grid` em qualquer largura;
+  - espaço sobrando embaixo do painel: o Keycloak sempre põe dois
+    `.pf-v5-c-login__main-footer` vazios, e o PatternFly dá 64px embaixo do **último item**
+    do formulário (`.pf-v5-c-login__main > :last-child:not(.pf-v5-c-login__main-footer)`, 3
+    seletores). Rodapé vazio some (`:not(:has(*))`); o rodapé de direitos, que vira o
+    último, tem regra com 3 seletores declarada depois, zerando `padding-block-end`;
+  - o editor e o `sed` (GNU: `\u` = maiúscula) trocam o escape `©` do script pelo
+    símbolo ou o apagam; o script fica só com ASCII e o teste confere o escape;
   - o Edge põe um olho próprio dentro de todo campo de senha (`::-ms-reveal`): escondido,
     fica só o do Keycloak;
   - no Chrome, `scrollbar-color` faz o `::-webkit-scrollbar` ser ignorado: o primeiro fica
@@ -3365,15 +3383,20 @@ frontend: é do Keycloak, outro container. Resolve o [EM ABERTO] "Tela de login"
 - **Não afeta:** as telas do frontend e o painel de administração do Keycloak (realm
   `master`, sem tema próprio).
 - **Testes:** `KeycloakProvisionadorTest` +3 (aplica o tema quando o realm está com outro,
-  não mexe se já está certo, valor vazio não mexe); `TemaLoginKeycloakTest` (6, sem subir o
+  não mexe se já está certo, valor vazio não mexe); `TemaLoginKeycloakTest` (8, sem subir o
   Keycloak: herança do `keycloak.v2` com os dois CSS, favicon é um `.ico` de verdade,
-  script existe e cobre os 4 campos, toda imagem citada no CSS existe, realm e
-  `application.properties` apontam para o mesmo tema, compose monta a pasta).
-  Suíte completa: **812 testes, 0 falhas**.
+  script existe e cobre os 4 campos, rodapé com link certo em nova aba, subtítulo nos 2
+  idiomas, toda imagem citada no CSS existe, realm e `application.properties` apontam para
+  o mesmo tema, compose monta a pasta). Suíte completa: **814 testes, 0 falhas**.
 - **Validado ao vivo:** login certo (volta ao app com o código), senha errada, troca para
   inglês, tela de "Atualizar senha" (senha temporária) com rolagem e rótulo flutuante,
   realm intacto além do `loginTheme`, modos claro e escuro do Windows, tela larga,
   estreita e de celular, favicon na aba (Edge).
+- **Medir o layout sem olhar a tela:** Edge headless com porta de depuração (perfil
+  temporário próprio) + `Runtime.evaluate` via WebSocket, devolvendo posições e estilos
+  computados (`getBoundingClientRect`, `getComputedStyle`, `Range` para o texto do botão).
+  `--blink-settings=preferredColorScheme=0` simula o modo escuro. O headless não abre
+  janela com menos de ~500px de largura: celular de verdade só no F12 → modo celular.
 - **Duas telas que não são esta:** `localhost:8180` direto abre o painel de administração do
   Keycloak (realm `master`) — visual padrão, de propósito (§ "Não afeta" acima). E o
   favicon do **app** (`localhost:5173`) ainda é o raio padrão do Vite
