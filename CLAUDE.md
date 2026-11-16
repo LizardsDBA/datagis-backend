@@ -3275,22 +3275,42 @@ Branch `feat/tela-login` (backend), a partir da `sprint-3`. A tela de login não
 frontend: é do Keycloak, outro container. Resolve o [EM ABERTO] "Tela de login" da §9.44.
 
 - **Tema `datagis` em `infra/keycloak-tema/datagis/login/`**, herdando o `keycloak.v2`
-  (PatternFly 5): só `theme.properties` + `resources/css/datagis.css` + 2 imagens. Nenhum
-  `.ftl` reescrito, então login, troca de senha obrigatória e mensagens continuam os do
-  Keycloak, e atualizar o Keycloak não quebra o tema. O `styles=` lista o `css/styles.css`
-  do pai **e** o nosso: sem o do pai, o layout do keycloak.v2 se perde.
-- **Visual:**
-  - imagem de fundo (`fundo-login.jpg`, 1983×793, 364 KB) cobrindo a tela inteira, criada
+  (PatternFly 5): `theme.properties` + `resources/css/datagis.css` + `resources/js/datagis.js`
+  + 3 imagens (`fundo-login.jpg`, `logo-datagis.svg`, `favicon.ico`). Nenhum `.ftl`
+  reescrito, então login, troca de senha obrigatória e mensagens continuam os do Keycloak,
+  e atualizar o Keycloak não quebra o tema. O `styles=` lista o `css/styles.css` do pai
+  **e** o nosso: sem o do pai, o layout do keycloak.v2 se perde.
+- **Visual ("liquid glass"):**
+  - imagem de fundo (`fundo-login.jpg`, 2560×1200, 533 KB) cobrindo a tela inteira, criada
     com assistência de IA, com estilo e composição definidos pelo autor da task, que deu
     os direcionamentos e escolheu a versão final (satélite à direita, imóveis rurais com os
-    limites marcados, área livre à esquerda para o painel);
-  - painel flutuante de vidro verde à esquerda, que desfoca só o que está atrás dele
-    (`backdrop-filter`); navegador sem desfoque recebe vidro quase sólido;
-  - logo (ícone de camadas) e verde iguais aos do frontend (`Sidebar.vue`, `style.css`);
-  - campos brancos com texto escuro e anel de foco verde (senha + olho num anel só);
-    erro com anel e ícone vermelhos no campo e mensagem em vermelho claro no vidro;
-  - idioma numa pílula abaixo do Entrar, com a largura do nome; no Chrome/Edge 135+ a lista
-    abre como menu de vidro (`appearance: base-select`), nos demais fica a do sistema;
+    limites marcados, área livre à esquerda para o painel). Proporção ~2,1:1 de propósito:
+    perto da janela do navegador, aparece praticamente sem ampliação (a 1ª versão, 2,5:1,
+    era ampliada ~13% pelo `cover` para cobrir a altura);
+  - painel flutuante de vidro verde-azulado à esquerda, que desfoca só o que está atrás
+    dele (`backdrop-filter`), com borda e brilho; navegador sem desfoque recebe vidro quase
+    sólido;
+  - marca: logo ilustrado (`logo-datagis.svg`: três camadas de mapa sob uma mira, rio na de
+    cima, sem fundo) + "Data" branco e "GIS" verde + "Plataforma Geoespacial". O nome do
+    realm continua no HTML (leitor de tela) com fonte zero; o que aparece são dois
+    pseudo-elementos, para pintar "GIS" de verde;
+  - favicon próprio (`img/favicon.ico`, 16/32/48 px, o mesmo desenho sem a mira),
+    desenhado com `System.Drawing` (.NET) — não há ferramenta de imagem na máquina. O
+    template do keycloak.v2 procura `img/favicon.ico` no tema; sem ele vale o do Keycloak;
+  - campos de vidro (fundo escuro translúcido, borda clara, texto branco) com ícone de
+    pessoa/cadeado, olho dentro do campo de senha e anel de foco verde (senha + olho num
+    anel só); erro com borda vermelha e mensagem em vermelho claro;
+  - **rótulo flutuante** (login e troca de senha): vazio, o rótulo fica dentro do campo,
+    alinhado ao ícone; com foco, valor ou preenchimento automático, sobe e fica pequeno no
+    topo, com o texto digitado embaixo. É o `<label>` do próprio Keycloak (leitor de tela
+    anuncia normal). Nas demais telas do Keycloak o rótulo fica acima do campo, como no
+    padrão;
+  - botão Entrar verde com ícone de entrar;
+  - idioma abaixo do Entrar, entre duas linhas finas, com a largura do nome; no Chrome/Edge
+    135+ a lista abre como menu de vidro (`appearance: base-select`), nos demais fica a do
+    sistema;
+  - sem "Esqueci a senha": `resetPasswordAllowed` segue `false` no realm, porque recuperar
+    a senha exige e-mail e o projeto não tem servidor de e-mail. Quem redefine é o admin;
   - painel sempre escuro com texto claro, nos dois modos do sistema operacional: a tela de
     login não sabe o tema escolhido dentro do app (outro endereço). No escuro o vidro só
     fica um pouco mais fechado;
@@ -3308,8 +3328,25 @@ frontend: é do Keycloak, outro container. Resolve o [EM ABERTO] "Tela de login"
     `primary-color--100` **e** `active-color--100`; mensagem de erro em
     `danger-color--200` (`#a30000` no claro, ilegível no vidro); campos no escuro em
     `BackgroundColor--400`. Por isso os campos têm as cores fixadas direto nas variáveis
-    do `.pf-v5-c-form-control`, iguais nos dois modos — senão o texto digitado herdaria o
-    branco do painel e ficaria invisível no campo branco;
+    do `.pf-v5-c-form-control`, iguais nos dois modos;
+  - rótulo flutuante sem template: `:placeholder-shown` só funciona em campo COM
+    placeholder, e o `field.ftl` do Keycloak não tem. O `js/datagis.js` (`scripts=` no
+    `theme.properties`) põe um placeholder de **um espaço** nos 4 campos (`username`,
+    `password`, `password-new`, `password-confirm`): nada aparece e o leitor de tela não
+    repete o rótulo. Sem JS, o rótulo fica sempre no alto (legível). `:autofill` e
+    `:-webkit-autofill` em regras **separadas** — seletor desconhecido invalida a regra
+    inteira. Preenchimento automático com transição longa para o Chrome/Edge não pintar o
+    campo de amarelo/azul;
+  - campo com altura **fixa** igual à do rótulo em repouso (3.5rem, `border-box`): com só
+    `min-height`, o padding reservado ao rótulo deixava o campo mais alto e o rótulo
+    subia. E centro **ótico**: mesmo centralizado na caixa, o texto fica acima do ícone
+    (a linha reserva espaço para g, p...), por isso o `padding-top: 0.38rem` no rótulo
+    em repouso;
+  - marca: o keycloak.v2 põe `letter-spacing: 3px` no nome — com fonte zero, as letras
+    escondidas ainda somavam esse espaço e abriam um vão entre "Data" e "GIS". E a
+    `.pf-v5-c-brand` tem margem embaixo de até 48px, que afastava o subtítulo;
+  - botão: espaço invisível do tamanho do ícone do outro lado (`#kc-login::after`), para
+    a **palavra** ficar no centro, e não o conjunto ícone + palavra;
   - o Edge põe um olho próprio dentro de todo campo de senha (`::-ms-reveal`): escondido,
     fica só o do Keycloak;
   - no Chrome, `scrollbar-color` faz o `::-webkit-scrollbar` ser ignorado: o primeiro fica
@@ -3328,15 +3365,23 @@ frontend: é do Keycloak, outro container. Resolve o [EM ABERTO] "Tela de login"
 - **Não afeta:** as telas do frontend e o painel de administração do Keycloak (realm
   `master`, sem tema próprio).
 - **Testes:** `KeycloakProvisionadorTest` +3 (aplica o tema quando o realm está com outro,
-  não mexe se já está certo, valor vazio não mexe); `TemaLoginKeycloakTest` (4, sem subir o
-  Keycloak: herança do `keycloak.v2` com os dois CSS, toda imagem citada no CSS existe,
-  realm e `application.properties` apontam para o mesmo tema, compose monta a pasta).
-  Suíte completa: **810 testes, 0 falhas**.
+  não mexe se já está certo, valor vazio não mexe); `TemaLoginKeycloakTest` (6, sem subir o
+  Keycloak: herança do `keycloak.v2` com os dois CSS, favicon é um `.ico` de verdade,
+  script existe e cobre os 4 campos, toda imagem citada no CSS existe, realm e
+  `application.properties` apontam para o mesmo tema, compose monta a pasta).
+  Suíte completa: **812 testes, 0 falhas**.
 - **Validado ao vivo:** login certo (volta ao app com o código), senha errada, troca para
-  inglês, tela de "Atualizar senha" (senha temporária) com rolagem, realm intacto além do
-  `loginTheme`, modos claro e escuro do Windows, tela larga, estreita e de celular (Edge).
+  inglês, tela de "Atualizar senha" (senha temporária) com rolagem e rótulo flutuante,
+  realm intacto além do `loginTheme`, modos claro e escuro do Windows, tela larga,
+  estreita e de celular, favicon na aba (Edge).
+- **Duas telas que não são esta:** `localhost:8180` direto abre o painel de administração do
+  Keycloak (realm `master`) — visual padrão, de propósito (§ "Não afeta" acima). E o
+  favicon do **app** (`localhost:5173`) ainda é o raio padrão do Vite
+  (`datagis-frontend/public/favicon.svg`, do commit inicial do repositório) — trocar seria
+  task do frontend; o desenho já existe aqui no tema.
 - **[EM ABERTO]** Firefox não testado: o desfoque funciona, mas a lista de idioma aberta e
-  a barra de rolagem ficam no estilo dele.
+  a barra de rolagem ficam no estilo dele. Preenchimento automático com senha salva não foi
+  conferido (o teste foi em janela anônima, onde o Edge não oferece senhas salvas).
 
 ### 9.42. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
 Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
