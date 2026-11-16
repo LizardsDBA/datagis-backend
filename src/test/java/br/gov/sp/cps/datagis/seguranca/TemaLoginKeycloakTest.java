@@ -50,6 +50,27 @@ class TemaLoginKeycloakTest {
     }
 
     @Test
+    void subtituloTraduzComOsIdiomasDoRealm() throws IOException {
+        String css = Files.readString(TEMA.resolve("resources/css/datagis.css"));
+
+        // realm-datagis.json: supportedLocales = pt-BR e en
+        assertThat(css).contains("content: \"Plataforma Geoespacial\"");
+        assertThat(css).contains("html[lang|=\"en\"] .pf-v5-c-login__header::after", "content: \"Geospatial Platform\"");
+    }
+
+    @Test
+    void rodapeComDireitoAutoralLevaAoGithubDaEquipeEmNovaAba() throws IOException {
+        Properties tema = carregar(TEMA.resolve("theme.properties"));
+        String script = Files.readString(TEMA.resolve("resources").resolve(tema.getProperty("scripts")));
+        String css = Files.readString(TEMA.resolve("resources/css/datagis.css"));
+
+        assertThat(script).contains("'https://github.com/LizardsDBA/API-2026-4'", "'\\u00a9 2026 '", "'LizardsDBA'",
+                "'_blank'", "'noopener noreferrer'", "'datagis-direitos'");
+        // classe criada pelo script precisa ter estilo, senao o rodape sai no padrao do PatternFly
+        assertThat(css).contains(".datagis-direitos {");
+    }
+
+    @Test
     void todaImagemCitadaNoCssExiste() throws IOException {
         String css = Files.readString(TEMA.resolve("resources/css/datagis.css"));
         Matcher url = Pattern.compile("url\\(\"\\.\\./(img/[^\"]+)\"\\)").matcher(css);

@@ -145,6 +145,9 @@ html.login-pf,
     margin: auto 0;
     flex-shrink: 0;
     padding: 2.25rem 2.25rem 1.75rem;
+    /* Grade em qualquer largura: o PatternFly so liga a grade a partir de 1200px, e abaixo
+       disso o row-gap nao vale - o titulo do formulario colava no subtitulo da marca */
+    display: grid;
     grid-template-columns: 1fr;
     grid-template-areas: "header"
                          "main";
@@ -250,6 +253,12 @@ html.login-pf,
     color: var(--datagis-texto-secundario);
 }
 
+/* O subtitulo traduz com a tela (o nome DataGIS nao): o Keycloak poe o idioma escolhido
+   no <html lang>. Idioma novo no realm = mais uma regra destas. */
+html[lang|="en"] .pf-v5-c-login__header::after {
+    content: "Geospatial Platform";
+}
+
 /* ---------- Formulario (sem cartao: fica direto no vidro) ---------- */
 
 /*
@@ -291,6 +300,16 @@ div.pf-v5-c-login__main-header:has(.pf-v5-c-login__main-header-utilities) {
 .pf-v5-c-login__main-footer,
 .pf-v5-c-login__main-footer-band {
     padding-inline: 0;
+}
+
+/*
+ * O Keycloak sempre poe dois rodapes no formulario (links de cadastro e de login com
+ * Google etc., que o projeto nao usa) e o PatternFly da 64px embaixo de cada um, mesmo
+ * vazio: sobrava um espaco grande embaixo do painel. Vazio (sem elemento dentro) = some;
+ * se um dia esses recursos forem ligados, o rodape volta a aparecer sozinho.
+ */
+.pf-v5-c-login__main-footer:not(:has(*)) {
+    display: none;
 }
 
 .pf-v5-c-login__main .pf-v5-c-form__label-text {
@@ -589,12 +608,14 @@ div.pf-v5-c-login__main-header:has(.pf-v5-c-login__main-header-utilities) {
     background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4'/%3E%3Cpath d='M10 16l4-4-4-4'/%3E%3Cpath d='M14 12H4'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
-/* Espaco invisivel do tamanho do icone do outro lado: a PALAVRA fica no centro do botao,
-   e nao o conjunto icone + palavra (que empurrava o texto para a direita) */
-#kc-login::after {
-    content: "";
-    width: 1.35rem;
-    flex-shrink: 0;
+/*
+ * A PALAVRA no centro do botao, e nao o conjunto icone + palavra (que a empurrava meio
+ * icone para a direita): espaco interno a direita maior, do tamanho do icone + espacamento.
+ * Nao da para usar um ::after invisivel como contrapeso: no PatternFly o ::after do botao e
+ * uma camada posicionada por cima (desenha a borda) e nao ocupa lugar na linha.
+ */
+.pf-v5-c-login__main .pf-v5-c-button.pf-m-primary#kc-login {
+    padding-inline-end: calc(var(--pf-v5-c-button--PaddingRight, 1rem) + 1.35rem + 0.6rem);
 }
 
 /* Avisos do Keycloak (ex.: senha expirada): fundo claro proprio, entao texto escuro */
@@ -712,6 +733,33 @@ div.pf-v5-c-login__main-header:has(.pf-v5-c-login__main-header-utilities) {
         background: rgba(34, 197, 94, 0.35);
         font-weight: 600;
     }
+}
+
+/* ---------- Direito autoral (criado pelo js/datagis.js), abaixo do idioma ---------- */
+
+/* O PatternFly da 64px embaixo de quem for o ULTIMO item do formulario
+   (.pf-v5-c-login__main > :last-child:not(.pf-v5-c-login__main-footer), 3 seletores) - e o
+   rodape de direitos e o ultimo. Este seletor tambem tem 3 e vem depois, entao ganha. */
+.pf-v5-c-login__container .pf-v5-c-login__main > .datagis-direitos {
+    order: 4;
+    margin: 0.85rem 0 0;
+    padding: 0;
+    padding-block-end: 0;
+    font-size: 0.75rem;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+/* Mesmo tom do texto, sublinhado so ao passar o mouse: nao compete com o botao Entrar */
+.datagis-direitos a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.datagis-direitos a:hover,
+.datagis-direitos a:focus-visible {
+    color: rgba(255, 255, 255, 0.85);
+    text-decoration: underline;
 }
 
 /* ---------- Celular: painel centralizado, quase da largura da tela ---------- */
