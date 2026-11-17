@@ -2386,7 +2386,7 @@ e o CSS do front não a alcança (ver o último item).
     herdando o tema padrão, montado no container e ativado no realm `datagis`), tudo no
     repositório do backend. O Keycloak não sabe qual tema o usuário escolheu no app, por
     ser outro endereço: só pode seguir a preferência do sistema ou ter visual fixo.
-    Sugerida como task própria.
+    Sugerida como task própria. **[RESOLVIDO na §9.58]** (LIZARDS-61).
   - **Paleta do gráfico de diagnóstico.** As cores do `DiagnosticoChart` vêm de um array
     no JavaScript (linha 37) e o CSS não as alcança; o cinza `#475569` fica apagado no
     escuro.
@@ -3270,6 +3270,142 @@ mapa (§9.45, 2026-10-20) — não existia task nova pra isso, por decisão do u
   que `silver.reserva_legal`/`app_declarada`/`vegetacao_nativa_declarada` já tenham
   dado ingerido (confirmado que sim, tanto local quanto no servidor de testes, §9.34).
 
+### 9.58. Tela de login com o visual do DataGIS (tema do Keycloak) — **[FEITO e validado no navegador, 2026-11-15, `LIZARDS-61`]**
+Branch `feat/tela-login` (backend), a partir da `sprint-3`. A tela de login não é do
+frontend: é do Keycloak, outro container. Resolve o [EM ABERTO] "Tela de login" da §9.44.
+
+- **Tema `datagis` em `infra/keycloak-tema/datagis/login/`**, herdando o `keycloak.v2`
+  (PatternFly 5): `theme.properties` + `resources/css/datagis.css` + `resources/js/datagis.js`
+  + 3 imagens (`fundo-login.jpg`, `logo-datagis.svg`, `favicon.ico`). Nenhum `.ftl`
+  reescrito, então login, troca de senha obrigatória e mensagens continuam os do Keycloak,
+  e atualizar o Keycloak não quebra o tema. O `styles=` lista o `css/styles.css` do pai
+  **e** o nosso: sem o do pai, o layout do keycloak.v2 se perde.
+- **Visual ("liquid glass"):**
+  - imagem de fundo (`fundo-login.jpg`, 2560×1200, 533 KB) cobrindo a tela inteira, criada
+    com assistência de IA, com estilo e composição definidos pelo autor da task, que deu
+    os direcionamentos e escolheu a versão final (satélite à direita, imóveis rurais com os
+    limites marcados, área livre à esquerda para o painel). Proporção ~2,1:1 de propósito:
+    perto da janela do navegador, aparece praticamente sem ampliação (a 1ª versão, 2,5:1,
+    era ampliada ~13% pelo `cover` para cobrir a altura);
+  - painel flutuante de vidro verde-azulado à esquerda, que desfoca só o que está atrás
+    dele (`backdrop-filter`), com borda e brilho; navegador sem desfoque recebe vidro quase
+    sólido;
+  - marca: logo ilustrado (`logo-datagis.svg`: três camadas de mapa sob uma mira, rio na de
+    cima, sem fundo) + "Data" branco e "GIS" verde + "Plataforma Geoespacial". O nome do
+    realm continua no HTML (leitor de tela) com fonte zero; o que aparece são dois
+    pseudo-elementos, para pintar "GIS" de verde;
+  - favicon próprio (`img/favicon.ico`, 16/32/48 px, o mesmo desenho sem a mira),
+    desenhado com `System.Drawing` (.NET) — não há ferramenta de imagem na máquina. O
+    template do keycloak.v2 procura `img/favicon.ico` no tema; sem ele vale o do Keycloak;
+  - campos de vidro (fundo escuro translúcido, borda clara, texto branco) com ícone de
+    pessoa/cadeado, olho dentro do campo de senha e anel de foco verde (senha + olho num
+    anel só); erro com borda vermelha e mensagem em vermelho claro;
+  - **rótulo flutuante** (login e troca de senha): vazio, o rótulo fica dentro do campo,
+    alinhado ao ícone; com foco, valor ou preenchimento automático, sobe e fica pequeno no
+    topo, com o texto digitado embaixo. É o `<label>` do próprio Keycloak (leitor de tela
+    anuncia normal). Nas demais telas do Keycloak o rótulo fica acima do campo, como no
+    padrão;
+  - botão Entrar verde com ícone de entrar, com a **palavra** no centro do botão;
+  - idioma abaixo do Entrar, entre duas linhas finas, com a largura do nome; no Chrome/Edge
+    135+ a lista abre como menu de vidro (`appearance: base-select`), nos demais fica a do
+    sistema;
+  - subtítulo traduz com a tela ("Plataforma Geoespacial" / "Geospatial Platform", pelo
+    `html[lang]` que o Keycloak preenche); o nome DataGIS não traduz;
+  - rodapé **"© 2026 LizardsDBA"** abaixo do idioma, com o nome levando ao repositório da
+    equipe (`https://github.com/LizardsDBA/API-2026-4`) em nova aba. Formato de mercado
+    (© + ano + nome); "Todos os direitos reservados" ficou de fora porque contradiz a
+    licença GPLv3 dos repositórios. Criado pelo `js/datagis.js` (CSS não cria link);
+  - sem "Esqueci a senha": `resetPasswordAllowed` segue `false` no realm, porque recuperar
+    a senha exige e-mail e o projeto não tem servidor de e-mail. Quem redefine é o admin;
+  - painel sempre escuro com texto claro, nos dois modos do sistema operacional: a tela de
+    login não sabe o tema escolhido dentro do app (outro endereço). No escuro o vidro só
+    fica um pouco mais fechado;
+  - a página nunca rola; quem rola é a área do painel, só quando ele passa da altura da
+    janela (troca de senha temporária, janela baixa, celular), com barra de vidro.
+- **Pegadinhas do CSS (achadas testando na tela):**
+  - imagem no `html`, não no `body`: o que passava da altura do body aparecia como faixa
+    escura ao rolar;
+  - `.pf-v5-c-login` com `height: 100dvh` + `box-sizing: border-box` + `overflow-y: auto`,
+    e o painel centralizado com `margin: auto 0` — `align-items: center` cortaria o topo do
+    painel quando ele passa da altura da janela;
+  - cabeçalho do formulário com `display: contents` + `order` leva o idioma para baixo do
+    botão sem reescrever template;
+  - o PatternFly usa cores diferentes em cada modo e em cada parte: foco em
+    `primary-color--100` **e** `active-color--100`; mensagem de erro em
+    `danger-color--200` (`#a30000` no claro, ilegível no vidro); campos no escuro em
+    `BackgroundColor--400`. Por isso os campos têm as cores fixadas direto nas variáveis
+    do `.pf-v5-c-form-control`, iguais nos dois modos;
+  - rótulo flutuante sem template: `:placeholder-shown` só funciona em campo COM
+    placeholder, e o `field.ftl` do Keycloak não tem. O `js/datagis.js` (`scripts=` no
+    `theme.properties`) põe um placeholder de **um espaço** nos 4 campos (`username`,
+    `password`, `password-new`, `password-confirm`): nada aparece e o leitor de tela não
+    repete o rótulo. Sem JS, o rótulo fica sempre no alto (legível). `:autofill` e
+    `:-webkit-autofill` em regras **separadas** — seletor desconhecido invalida a regra
+    inteira. Preenchimento automático com transição longa para o Chrome/Edge não pintar o
+    campo de amarelo/azul;
+  - campo com altura **fixa** igual à do rótulo em repouso (3.5rem, `border-box`): com só
+    `min-height`, o padding reservado ao rótulo deixava o campo mais alto e o rótulo
+    subia. E centro **ótico**: mesmo centralizado na caixa, o texto fica acima do ícone
+    (a linha reserva espaço para g, p...), por isso o `padding-top: 0.38rem` no rótulo
+    em repouso;
+  - marca: o keycloak.v2 põe `letter-spacing: 3px` no nome — com fonte zero, as letras
+    escondidas ainda somavam esse espaço e abriam um vão entre "Data" e "GIS". E a
+    `.pf-v5-c-brand` tem margem embaixo de até 48px, que afastava o subtítulo;
+  - botão: para a **palavra** ficar no centro (e não o conjunto ícone + palavra, que a
+    empurrava 15,6px), o lado direito tem padding a mais do tamanho do ícone + espaçamento.
+    **Não usar `::after` invisível como contrapeso**: no PatternFly o `::after` do botão é
+    uma camada posicionada por cima (desenha a borda) e não ocupa lugar na linha;
+  - o PatternFly só monta o painel em grade a partir de **1200px**; abaixo disso o
+    `row-gap` não vale e o título do formulário colava no subtítulo da marca (notebook,
+    tablet, celular). O painel tem `display: grid` em qualquer largura;
+  - espaço sobrando embaixo do painel: o Keycloak sempre põe dois
+    `.pf-v5-c-login__main-footer` vazios, e o PatternFly dá 64px embaixo do **último item**
+    do formulário (`.pf-v5-c-login__main > :last-child:not(.pf-v5-c-login__main-footer)`, 3
+    seletores). Rodapé vazio some (`:not(:has(*))`); o rodapé de direitos, que vira o
+    último, tem regra com 3 seletores declarada depois, zerando `padding-block-end`;
+  - o editor e o `sed` (GNU: `\u` = maiúscula) trocam o escape `©` do script pelo
+    símbolo ou o apagam; o script fica só com ASCII e o teste confere o escape;
+  - o Edge põe um olho próprio dentro de todo campo de senha (`::-ms-reveal`): escondido,
+    fica só o do Keycloak;
+  - no Chrome, `scrollbar-color` faz o `::-webkit-scrollbar` ser ignorado: o primeiro fica
+    só para o Firefox (`@supports not selector(::-webkit-scrollbar)`).
+- **Ativação sem passo manual:**
+  - `KeycloakProvisionador` aplica `app.keycloak.tema-login=datagis` no realm na subida
+    (`KeycloakAdminClient.definirTemaLogin`: `PUT` parcial do realm, só o `loginTheme` — a
+    conta de serviço já tinha `manage-realm`). Valor vazio = não mexe no tema;
+  - `realm-datagis.json` também traz `"loginTheme": "datagis"` (ambiente novo);
+  - `docker-compose.yml` monta a pasta em `/opt/keycloak/themes/datagis` (`:ro`);
+  - **ambiente que já existia:** `docker compose up -d keycloak` (recria o container com a
+    pasta montada) e reiniciar o backend. O log mostra "Tema de login do realm ajustado no
+    Keycloak: datagis";
+  - o `start-dev` não guarda tema em cache: mudança no CSS aparece com Ctrl+F5 (o F5
+    simples pode mostrar CSS e imagem antigos guardados pelo navegador).
+- **Não afeta:** as telas do frontend e o painel de administração do Keycloak (realm
+  `master`, sem tema próprio).
+- **Testes:** `KeycloakProvisionadorTest` +3 (aplica o tema quando o realm está com outro,
+  não mexe se já está certo, valor vazio não mexe); `TemaLoginKeycloakTest` (8, sem subir o
+  Keycloak: herança do `keycloak.v2` com os dois CSS, favicon é um `.ico` de verdade,
+  script existe e cobre os 4 campos, rodapé com link certo em nova aba, subtítulo nos 2
+  idiomas, toda imagem citada no CSS existe, realm e `application.properties` apontam para
+  o mesmo tema, compose monta a pasta). Suíte completa: **814 testes, 0 falhas**.
+- **Validado ao vivo:** login certo (volta ao app com o código), senha errada, troca para
+  inglês, tela de "Atualizar senha" (senha temporária) com rolagem e rótulo flutuante,
+  realm intacto além do `loginTheme`, modos claro e escuro do Windows, tela larga,
+  estreita e de celular, favicon na aba (Edge).
+- **Medir o layout sem olhar a tela:** Edge headless com porta de depuração (perfil
+  temporário próprio) + `Runtime.evaluate` via WebSocket, devolvendo posições e estilos
+  computados (`getBoundingClientRect`, `getComputedStyle`, `Range` para o texto do botão).
+  `--blink-settings=preferredColorScheme=0` simula o modo escuro. O headless não abre
+  janela com menos de ~500px de largura: celular de verdade só no F12 → modo celular.
+- **Duas telas que não são esta:** `localhost:8180` direto abre o painel de administração do
+  Keycloak (realm `master`) — visual padrão, de propósito (§ "Não afeta" acima). E o
+  favicon do **app** (`localhost:5173`) ainda é o raio padrão do Vite
+  (`datagis-frontend/public/favicon.svg`, do commit inicial do repositório) — trocar seria
+  task do frontend; o desenho já existe aqui no tema.
+- **[EM ABERTO]** Firefox não testado: o desfoque funciona, mas a lista de idioma aberta e
+  a barra de rolagem ficam no estilo dele. Preenchimento automático com senha salva não foi
+  conferido (o teste foi em janela anônima, onde o Edge não oferece senhas salvas).
+
 ### 9.42. Tema escuro com opção de claro ou escuro (Frontend) — **[FEITO e validado na tela, 2026-10-21, `LIZARDS-38`]**
 Repositório `datagis-frontend`, branch `feat/tema-escuro`, a partir da `sprint-2`. Cobre
 todas as telas do sistema. A tela de login não entra: ela é do Keycloak, outro container,
@@ -3350,7 +3486,7 @@ e o CSS do front não a alcança (ver o último item).
     herdando o tema padrão, montado no container e ativado no realm `datagis`), tudo no
     repositório do backend. O Keycloak não sabe qual tema o usuário escolheu no app, por
     ser outro endereço: só pode seguir a preferência do sistema ou ter visual fixo.
-    Sugerida como task própria.
+    Sugerida como task própria. **[RESOLVIDO na §9.58]** (LIZARDS-61).
   - **Paleta do gráfico de diagnóstico.** As cores do `DiagnosticoChart` vêm de um array
     no JavaScript (linha 37) e o CSS não as alcança; o cinza `#475569` fica apagado no
     escuro.

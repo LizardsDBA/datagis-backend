@@ -1,6 +1,7 @@
 {
   "realm": "datagis",
   "displayName": "DataGIS",
+  "loginTheme": "datagis",
   "enabled": true,
   "sslRequired": "none",
   "registrationAllowed": false,
