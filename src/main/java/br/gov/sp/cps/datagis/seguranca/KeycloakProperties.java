@@ -12,6 +12,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param clientSecret segredo desse client
  * @param provisionar  sincronizar roles/perfis do codigo com o Keycloak na subida
  * @param usuariosDev  criar um usuario de teste por perfil (so desenvolvimento)
+ * @param temaLogin    tema da tela de login que o realm deve usar; vazio = nao mexe
  */
 @ConfigurationProperties("app.keycloak")
 public record KeycloakProperties(
@@ -21,5 +22,6 @@ public record KeycloakProperties(
         String clientId,
         String clientSecret,
         boolean provisionar,
-        boolean usuariosDev) {
+        boolean usuariosDev,
+        String temaLogin) {
 }

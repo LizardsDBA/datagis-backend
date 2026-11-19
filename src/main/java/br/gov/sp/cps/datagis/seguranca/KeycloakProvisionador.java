@@ -24,6 +24,8 @@ import org.springframework.stereotype.Component;
  *   <li>se {@code app.keycloak.usuarios-dev=true}, cria um usuario de teste por perfil
  *       (login = senha = {@link Perfil#usuarioDev()}). So cria: usuario ja existente nao e
  *       tocado, pra nao desfazer o que alguem mudou pela tela.</li>
+ *   <li>se {@code app.keycloak.tema-login} estiver preenchido, aplica esse tema na tela de
+ *       login do realm (LIZARDS-61).</li>
  * </ol>
  *
  * <p>Por que no codigo e nao no JSON do realm: o {@code --import-realm} do Keycloak so
@@ -97,6 +99,7 @@ public class KeycloakProvisionador implements ApplicationRunner {
                 garantirUsuarioDev(perfil, existentes);
             }
         }
+        garantirTemaLogin();
         log.info("Catalogo de acesso sincronizado com o Keycloak: {} permissoes, {} perfis",
                 Permissao.values().length, Perfil.values().length);
     }
@@ -143,6 +146,19 @@ public class KeycloakProvisionador implements ApplicationRunner {
         keycloak.definirSenha(id, login, false);
         keycloak.adicionarRoles(id, List.of(existentes.get(perfil.codigo())));
         log.info("Usuario de teste criado no Keycloak: {} (perfil {})", login, perfil.codigo());
+    }
+
+    /**
+     * O realm-datagis.json ja traz o tema, mas so vale na primeira subida do Keycloak
+     * (mesmo motivo do catalogo, ver acima): aqui ele chega no Keycloak que ja existia.
+     */
+    private void garantirTemaLogin() {
+        String tema = props.temaLogin();
+        if (tema == null || tema.isBlank() || tema.equals(keycloak.temaLogin())) {
+            return;
+        }
+        keycloak.definirTemaLogin(tema);
+        log.info("Tema de login do realm ajustado no Keycloak: {}", tema);
     }
 
     private static Map<String, KcRole> porNome(List<KcRole> roles) {

@@ -22,7 +22,7 @@ import org.springframework.web.client.RestClientException;
 /**
  * Cliente fino da Admin REST API do Keycloak, autenticado como a conta de servico do
  * client {@code datagis-backend} (grant {@code client_credentials}). Cobre so o que o
- * sistema usa: roles do realm (catalogo de permissoes/perfis) e usuarios.
+ * sistema usa: roles do realm (catalogo de permissoes/perfis), usuarios e o tema de login.
  *
  * <p>Escrito com {@link RestClient} em vez da lib {@code keycloak-admin-client}: aquela
  * traz RESTEasy + Jackson 2 e briga com o Boot 4/Jackson 3 do projeto (mesma classe de
@@ -83,6 +83,19 @@ public class KeycloakAdminClient {
             return;
         }
         executar(() -> admin(HttpMethod.DELETE, "/roles/{nome}/composites", nome).body(roles).retrieve().toBodilessEntity());
+    }
+
+    // ---------- Realm ----------
+
+    /** Tema da tela de login configurado no realm (null = tema padrao do Keycloak). */
+    public String temaLogin() {
+        KcRealm realm = executar(() -> admin(HttpMethod.GET, "").retrieve().body(KcRealm.class));
+        return realm == null ? null : realm.loginTheme();
+    }
+
+    /** O PUT do realm so altera os campos enviados: os demais ficam como estao. */
+    public void definirTemaLogin(String tema) {
+        executar(() -> admin(HttpMethod.PUT, "").body(Map.of("loginTheme", tema)).retrieve().toBodilessEntity());
     }
 
     // ---------- Usuarios ----------
@@ -259,6 +272,10 @@ public class KeycloakAdminClient {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record KcUsuario(String id, String username, String firstName, String lastName, String email,
                             boolean enabled, Long createdTimestamp) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record KcRealm(String loginTheme) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
